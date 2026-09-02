@@ -54,13 +54,17 @@ pub fn validate(path: &Path) -> Result<Report, ValidateError> {
         .arg(path)
         .output()
         .map_err(|source| ValidateError::Launch { source })?;
-    Ok(parse(&String::from_utf8_lossy(&output.stderr)))
+    Ok(parse(
+        &String::from_utf8_lossy(&output.stderr),
+        output.status.success(),
+    ))
 }
 
 // Turn `error: ` / `warning: ` stderr lines into diagnostics; other lines
-// are noise and dropped.
-fn parse(stderr: &str) -> Report {
-    let diagnostics = stderr
+// are noise and dropped. A failing run that reported no errors is treated
+// as an error so crashes cannot read as "config ok".
+fn parse(stderr: &str, exited_cleanly: bool) -> Report {
+    let mut diagnostics: Vec<_> = stderr
         .lines()
         .filter_map(|line| {
             if let Some(message) = line.strip_prefix("error: ") {
@@ -71,6 +75,11 @@ fn parse(stderr: &str) -> Report {
             }
         })
         .collect();
+    if !exited_cleanly && !diagnostics.iter().any(Diagnostic::is_error) {
+        diagnostics.push(Diagnostic::Error(
+            "umbriel validate exited unsuccessfully without reporting diagnostics".to_owned(),
+        ));
+    }
     Report { diagnostics }
 }
 
@@ -84,6 +93,7 @@ mod tests {
             "some unrelated line\n\
              error: config.toml:12:3: unknown key 'nope'\n\
              warning: config.toml:40:1: value out of range\n",
+            true,
         );
         assert_eq!(
             report.diagnostics,
@@ -97,15 +107,22 @@ mod tests {
 
     #[test]
     fn empty_stderr_is_clean() {
-        let report = parse("");
+        let report = parse("", true);
         assert!(report.diagnostics.is_empty());
         assert!(report.is_ok());
     }
 
     #[test]
     fn warnings_only_is_ok() {
-        let report = parse("warning: something mild\n");
+        let report = parse("warning: something mild\n", true);
         assert!(report.is_ok());
+        assert_eq!(report.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn failed_run_without_diagnostics_is_an_error() {
+        let report = parse("", false);
+        assert!(!report.is_ok());
         assert_eq!(report.diagnostics.len(), 1);
     }
 }
