@@ -20,9 +20,10 @@ Two layers, strictly separated:
   round-trip via serde. Comments and layout must survive every save.
 - Saving is atomic (write a temp file, rename over the target) and leaves a
   one-time `.bak` next to the config before the first modification.
-- Mirror umbriel's config lookup exactly: `UMBRIEL_CONFIG` pin, then
-  `$XDG_CONFIG_HOME/umbriel/config.toml`, then `$XDG_CONFIG_DIRS`, then the
-  packaged `share/umbriel/config.toml`.
+- Mirror umbriel's config lookup exactly: `$XDG_CONFIG_HOME/umbriel/config.toml`,
+  then `$XDG_CONFIG_DIRS` (default `/etc/xdg`), then the packaged
+  `share/umbriel/config.toml`. `UMBRIEL_CONFIG` is harness-only; a user-pinned
+  path (like `umbriel -c`) is a GUI feature, not part of env lookup.
 - Config key names, action names, and file paths must match umbriel's canonical
   naming (see its `examples/config.toml`) — never invent variants.
 
@@ -84,4 +85,4 @@ Two layers, strictly separated:
    seeded from `umbriel outputs`.
 6. Integration and polish — IPC events, profiles/undo, packaging, CI, and an
    optional UI-framework upgrade for polish.
-   
+
