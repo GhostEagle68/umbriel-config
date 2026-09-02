@@ -83,7 +83,7 @@ impl ConfigDocument {
 
     /// Atomically write the document to `path`, leaving a one-time backup at
     /// `<path>.bak` holding the pre-GUI content from the first-ever save.
-    pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
+    pub fn save(&mut self, path: &Path) -> Result<(), ConfigError> {
         let backup = backup_path(path);
         if !backup.exists() && path.exists() {
             fs::copy(path, &backup).map_err(|source| ConfigError::Save {
@@ -106,6 +106,7 @@ impl ConfigDocument {
             path: path.to_path_buf(),
             source,
         })?;
+        self.original = self.doc.to_string();
         Ok(())
     }
 
@@ -285,6 +286,7 @@ curve = \"easeout\"
         let mut doc = ConfigDocument::load(&config).unwrap();
         doc.set_integer(&["animation", "windows_in", "duration_ms"], 400);
         doc.save(&config).unwrap();
+        assert!(!doc.is_modified());
         assert_eq!(
             doc.get_integer(&["animation", "windows_in", "duration_ms"]),
             Some(400)
