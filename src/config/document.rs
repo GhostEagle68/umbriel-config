@@ -4,7 +4,7 @@
 //! whitespace. Paths address regular tables only
 //! (`["animation", "windows_in", "duration_ms"]`); inline-table keys such as
 //! window-rule `default_position` arrive with the rules editor in a later
-//! phase.'
+//! phase.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,8 +32,8 @@ pub enum ConfigError {
     },
 }
 
-// A loaded Umbriel config file, editable without losing comments or formatting.
-#[derive(Debug, Clone)]
+/// A loaded Umbriel config file, editable without losing comments or formatting.
+#[derive(Debug)]
 pub struct ConfigDocument {
     doc: DocumentMut,
     original: String,
@@ -55,7 +55,6 @@ impl std::str::FromStr for ConfigDocument {
 }
 
 impl ConfigDocument {
-    /// Parse config text.
     /// Load from `path`.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let text = fs::read_to_string(path).map_err(|source| ConfigError::Read {

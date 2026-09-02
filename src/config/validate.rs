@@ -13,7 +13,7 @@ pub enum ValidateError {
     Launch { source: std::io::Error },
 }
 
-// One entry from `umbriel validate -c <path>`'s stderr, e.g. `error: ...` or `warning: ...`.
+/// One entry from `umbriel validate -c <path>`'s stderr, e.g. `error: ...` or `warning: ...`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Diagnostic {
     Error(String),
@@ -33,20 +33,20 @@ impl Diagnostic {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Report {
     pub diagnostics: Vec<Diagnostic>,
 }
 
 impl Report {
-    // Accepted by umbriel: no errors (warnings allowed), mirroring its
-    // warnings-only exit-success behavior.
+    /// Accepted by umbriel: no errors (warnings allowed), mirroring its
+    /// warnings-only exit-success behavior.
     pub fn is_ok(&self) -> bool {
         !self.diagnostics.iter().any(Diagnostic::is_error)
     }
 }
 
-// Run `umbriel validate -c <path>` and capture its output.
+/// Run `umbriel validate -c <path>` and capture its output.
 pub fn validate(path: &Path) -> Result<Report, ValidateError> {
     let output = Command::new("umbriel")
         .arg("validate")

@@ -7,12 +7,12 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-// Config location relative to a config dir, e.g. `umbriel/config.toml`.
+/// Config location relative to a config dir, e.g. `umbriel/config.toml`.
 const CONFIG_RELATIVE_PATH: &str = "umbriel/config.toml";
 
 /// Environment inputs to the lookup, captured explicitly so tests never
 /// mutate process environment variables.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Env {
     pub xdg_config_home: Option<OsString>,
     pub xdg_config_dirs: Option<OsString>,
@@ -21,7 +21,7 @@ pub struct Env {
 }
 
 impl Env {
-    // Capture the current process environment.
+    /// Capture the current process environment.
     pub fn from_process() -> Self {
         fn get(key: &str) -> Option<OsString> {
             std::env::var_os(key).filter(|value| !value.is_empty())
