@@ -22,6 +22,13 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     .map_err(|err| anyhow::anyhow!("GUI failed: {err}"))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Page {
+    General,
+    Appearance,
+    Animation,
+}
+
 struct App {
     path: PathBuf,
     doc: ConfigDocument,
@@ -32,6 +39,7 @@ struct App {
     last_validation: Option<validate::Report>,
     /// Why saving or validation failed after the last save attempt.
     validation_note: Option<String>,
+    page: Page,
 }
 
 impl App {
@@ -53,6 +61,7 @@ impl App {
             load_error,
             last_validation: None,
             validation_note: None,
+            page: Page::General,
         }
     }
 
@@ -67,6 +76,38 @@ impl App {
             Ok(report) => self.last_validation = Some(report),
             Err(err) => self.validation_note = Some(err.to_string()),
         }
+    }
+
+    fn general_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("General");
+        checkbox(
+            ui,
+            &mut self.doc,
+            &["general", "xwayland"],
+            true,
+            "Xwayland (restart to apply)",
+        );
+        checkbox(
+            ui,
+            &mut self.doc,
+            &["general", "show_cheatsheet"],
+            true,
+            "Show cheatsheet on startup",
+        );
+        checkbox(
+            ui,
+            &mut self.doc,
+            &["general", "focus_on_activate"],
+            false,
+            "Focus on activate requests",
+        );
+        checkbox(
+            ui,
+            &mut self.doc,
+            &["general", "honor_restored_maximize"],
+            false,
+            "Honor restored maximize",
+        );
     }
 }
 
@@ -102,6 +143,11 @@ impl eframe::App for App {
                 ui.colored_label(egui::Color32::from_rgb(240, 100, 100), note);
             });
         }
+        egui::Panel::left("sidebar").show(ui, |ui| {
+            ui.selectable_value(&mut self.page, Page::General, "General");
+            ui.selectable_value(&mut self.page, Page::Appearance, "Appearance");
+            ui.selectable_value(&mut self.page, Page::Animation, "Animation");
+        });
         egui::CentralPanel::default().show(ui, |ui| match &self.load_error {
             Some(error) => {
                 ui.colored_label(
@@ -110,17 +156,30 @@ impl eframe::App for App {
                 );
                 ui.label("Fix the file (see `umbriel validate`) and reopen the app.");
             }
-            None => {
-                ui.heading("Ready");
-                ui.label(
-                    "Pages arrive in the next steps: General, Appearance, Animation.\n\
-                              The loaded document is live:",
-                );
-                ui.label(format!(
-                    "general.xwayland = {:?}",
-                    self.doc.get_bool(&["general", "xwayland"])
-                ));
-            }
+            None => match self.page {
+                Page::General => self.general_page(ui),
+                Page::Appearance => {
+                    ui.label("Appearance page arrives in the next step.");
+                }
+                Page::Animation => {
+                    ui.label("Animation page arrives in the next step.");
+                }
+            },
         });
+    }
+}
+
+/// Checkbox bound to a config key, falling back to `default` when unset.
+/// Changes write through immediately so `is_modified` stays truthful.
+fn checkbox(
+    ui: &mut egui::Ui,
+    doc: &mut ConfigDocument,
+    path: &[&str],
+    default: bool,
+    label: &str,
+) {
+    let mut value = doc.get_bool(path).unwrap_or(default);
+    if ui.checkbox(&mut value, label).changed() {
+        doc.set_bool(path, value);
     }
 }
