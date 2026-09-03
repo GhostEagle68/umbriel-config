@@ -8,6 +8,7 @@ use std::str::FromStr;
 use umbriel_config::config::{
     discovery, document::ConfigDocument, outputs, schema, state, validate,
 };
+use umbriel_config::live;
 
 /// Launch the GUI for `path`.
 pub fn run(path: PathBuf) -> anyhow::Result<()> {
@@ -49,6 +50,12 @@ struct App {
     page: Option<Page>,
     /// Text buffer for the Outputs page's add-by-name row.
     add_output: String,
+    /// Connected monitors, scanned on first visit to the Outputs page.
+    live_outputs: Vec<live::LiveOutput>,
+    /// Whether a live scan was attempted (avoids rescanning every frame).
+    live_scanned: bool,
+    /// Why live enumeration is unavailable, when it failed.
+    live_note: Option<String>,
     /// Active settings-search query; empty means browse normally.
     search: String,
     /// Notice from schema sync or the startup drift check; dismissable.
@@ -80,6 +87,9 @@ impl App {
             schema,
             page: None,
             add_output: String::new(),
+            live_outputs: Vec::new(),
+            live_scanned: false,
+            live_note: None,
             schema_note,
             search: String::new(),
         }
@@ -106,6 +116,121 @@ impl App {
         {
             self.page = None;
         }
+    }
+
+    /// Enumerate connected monitors; the Refresh button re-runs it.
+    fn scan_outputs(&mut self) {
+        self.live_scanned = true;
+        match live::outputs() {
+            Ok(list) => {
+                self.live_outputs = list;
+                self.live_note = None;
+            }
+            Err(err) => {
+                self.live_outputs = Vec::new();
+                self.live_note = Some(err.to_string());
+            }
+        }
+    }
+
+    /// Outputs page: live monitors first (Configure creates their config),
+    /// then configured-but-disconnected tables, plus add-by-name. Renders
+    /// the possibility space, never just what is set — an empty list invites.
+    fn outputs_page(&mut self, ui: &mut egui::Ui) {
+        if !self.live_scanned {
+            self.scan_outputs();
+        }
+        let configured = outputs::configured(&self.doc);
+        ui.horizontal(|ui| {
+            if ui.button("Refresh").clicked() {
+                self.scan_outputs();
+            }
+            if let Some(note) = &self.live_note {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 180, 80),
+                    format!("live state unavailable: {note}"),
+                );
+            }
+        });
+        ui.add_space(4.0);
+
+        // Connected monitors first, then configured ones that are away.
+        let mut names: Vec<String> = Vec::new();
+        for output in &self.live_outputs {
+            if !names.contains(&output.name) {
+                names.push(output.name.clone());
+            }
+        }
+        for name in &configured {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        if names.is_empty() {
+            ui.label(
+                "No outputs connected or configured. Add one below to set its\n\
+                 mode, scale, or workspace names — umbriel's defaults apply until then.",
+            );
+            ui.add_space(8.0);
+        }
+        for name in &names {
+            let live = self.live_outputs.iter().find(|output| output.name == *name);
+            let is_configured = configured.contains(name);
+            let title = if is_configured && live.is_none() {
+                format!("{name} (not connected)")
+            } else {
+                name.clone()
+            };
+            egui::CollapsingHeader::new(title)
+                .default_open(names.len() == 1)
+                .show(ui, |ui| {
+                    if let Some(live) = live {
+                        if !live.description.is_empty() {
+                            ui.label(&live.description);
+                        }
+                        if let Some(mode) = live.current.and_then(|index| live.modes.get(index)) {
+                            ui.label(format!("Currently: {}", mode.label()));
+                        }
+                        if !is_configured && ui.button("Configure").clicked() {
+                            self.doc.set_bool(&["output", name, "enabled"], true);
+                        }
+                    } else {
+                        ui.label("Not connected — settings apply when it is plugged in.");
+                    }
+                    if is_configured {
+                        for field in outputs::FIELDS {
+                            output_field_row(ui, &mut self.doc, name, field, live);
+                        }
+                        ui.add_space(4.0);
+                        if ui
+                            .small_button(
+                                egui::RichText::new("Remove output")
+                                    .color(egui::Color32::from_rgb(240, 100, 100)),
+                            )
+                            .on_hover_text(
+                                "Deletes this output's block from the config; umbriel's\n\
+                                 defaults apply after saving. Nothing is written until Save.",
+                            )
+                            .clicked()
+                        {
+                            self.doc.remove_table(&["output", name]);
+                        }
+                    }
+                });
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Add output");
+            ui.text_edit_singleline(&mut self.add_output)
+                .on_hover_text("Connector name, e.g. DP-3 or eDP-1");
+            if ui.button("Add").clicked() {
+                let name = self.add_output.trim().to_owned();
+                if !name.is_empty() && !names.contains(&name) {
+                    self.doc.set_bool(&["output", &name, "enabled"], true);
+                    self.add_output.clear();
+                }
+            }
+        });
     }
 
     fn save(&mut self) {
@@ -317,7 +442,7 @@ impl eframe::App for App {
                     ui.heading("Outputs");
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        outputs_page(ui, &mut self.doc, &mut self.add_output);
+                        self.outputs_page(ui);
                     });
                 }
             }
@@ -325,49 +450,19 @@ impl eframe::App for App {
     }
 }
 
-/// Outputs page: one group per configured output plus add-by-name. Renders
-/// the possibility space, never just what is set — an empty list invites.
-fn outputs_page(ui: &mut egui::Ui, doc: &mut ConfigDocument, add_output: &mut String) {
-    let names = outputs::configured(doc);
-    if names.is_empty() {
-        ui.label(
-            "No outputs configured yet. Add one below to set its mode, scale,\n\
-             or workspace names — umbriel's defaults apply until then.",
-        );
-        ui.add_space(8.0);
-    }
-    for name in &names {
-        egui::CollapsingHeader::new(name)
-            .default_open(names.len() == 1)
-            .show(ui, |ui| {
-                for field in outputs::FIELDS {
-                    output_field_row(ui, doc, name, field);
-                }
-            });
-    }
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.label("Add output");
-        ui.text_edit_singleline(add_output)
-            .on_hover_text("Connector name, e.g. DP-3 or eDP-1");
-        if ui.button("Add").clicked() {
-            let name = add_output.trim().to_owned();
-            if !name.is_empty() && !names.contains(&name) {
-                doc.set_bool(&["output", &name, "enabled"], true);
-                *add_output = String::new();
-            }
-        }
-    });
-}
-
 /// One field of one output, writing through on change like `entry_row`.
+/// Live state upgrades the mode field to a dropdown of the monitor's modes.
 fn output_field_row(
     ui: &mut egui::Ui,
     doc: &mut ConfigDocument,
     name: &str,
     field: &outputs::Field,
+    live_output: Option<&live::LiveOutput>,
 ) {
     let path = ["output", name, field.key];
+    let live_modes = live_output
+        .map(|output| output.modes.as_slice())
+        .unwrap_or_default();
     match &field.kind {
         outputs::FieldKind::Toggle => {
             let mut value = doc.get_bool(&path).unwrap_or(matches!(
@@ -396,16 +491,35 @@ fn output_field_row(
             }
         }
         outputs::FieldKind::Text => {
-            let mut value = doc.get_string(&path).unwrap_or_default();
-            let changed = ui
-                .horizontal(|ui| {
+            if field.key == "mode" && !live_modes.is_empty() {
+                let mut value = doc.get_string(&path).unwrap_or_default();
+                let original = value.clone();
+                ui.horizontal(|ui| {
                     ui.label(field.label);
-                    ui.text_edit_singleline(&mut value)
-                })
-                .inner
-                .changed();
-            if changed {
-                doc.set_string(&path, &value);
+                    egui::ComboBox::from_id_salt(format!("output-mode-{name}"))
+                        .selected_text(&value)
+                        .show_ui(ui, |ui| {
+                            for mode in live_modes {
+                                let label = mode.label();
+                                ui.selectable_value(&mut value, label.clone(), label);
+                            }
+                        });
+                });
+                if value != original {
+                    doc.set_string(&path, &value);
+                }
+            } else {
+                let mut value = doc.get_string(&path).unwrap_or_default();
+                let changed = ui
+                    .horizontal(|ui| {
+                        ui.label(field.label);
+                        ui.text_edit_singleline(&mut value)
+                    })
+                    .inner
+                    .changed();
+                if changed {
+                    doc.set_string(&path, &value);
+                }
             }
         }
         outputs::FieldKind::Position => {
