@@ -667,6 +667,43 @@ pub const COMMON_KEYS: &[(&str, &str)] = &[
     ("Menu", "Menu key"),
 ];
 
+/// One-click starter binds for the common media/laptop cases, matching the
+/// packaged default's suggestions: (chord, action, label).
+pub const COMMON_BINDS: &[(&str, &str, &str)] = &[
+    (
+        "XF86AudioRaiseVolume",
+        "spawn:wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+",
+        "Volume up",
+    ),
+    (
+        "XF86AudioLowerVolume",
+        "spawn:wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-",
+        "Volume down",
+    ),
+    (
+        "XF86AudioMute",
+        "spawn:wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+        "Mute audio",
+    ),
+    (
+        "XF86AudioPlay",
+        "spawn:playerctl play-pause",
+        "Play / pause",
+    ),
+    ("XF86AudioNext", "spawn:playerctl next", "Next track"),
+    ("XF86AudioPrev", "spawn:playerctl prev", "Previous track"),
+    (
+        "XF86MonBrightnessUp",
+        "spawn:noctalia msg brightness-up 10",
+        "Brightness up",
+    ),
+    (
+        "XF86MonBrightnessDown",
+        "spawn:noctalia msg brightness-down 10",
+        "Brightness down",
+    ),
+];
+
 /// A runtime action parsed from the installed umbriel (owned strings).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiveAction {

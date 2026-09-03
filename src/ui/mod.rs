@@ -390,10 +390,41 @@ impl App {
         if mod_changed && !mod_key.trim().is_empty() {
             self.doc.set_string(&["general", "mod_key"], mod_key.trim());
         }
+        ui.add_space(4.0);
+        egui::ComboBox::from_id_salt("keybind-common")
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .selected_text("Add a common bind (volume, media, brightness)…")
+            .show_ui(ui, |ui| {
+                let search_id = egui::Id::new("keybind-common-search");
+                let mut filter = combo_filter(ui, search_id);
+                ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search binds…"));
+                ui.memory_mut(|mem| mem.data.insert_temp(search_id, filter.clone()));
+                let needle = filter.to_lowercase();
+                egui::ScrollArea::vertical()
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        for (chord, action, label) in keybinds::COMMON_BINDS {
+                            if !needle.is_empty()
+                                && !format!("{chord} {action} {label}")
+                                    .to_lowercase()
+                                    .contains(&needle)
+                            {
+                                continue;
+                            }
+                            if ui
+                                .selectable_label(false, egui::RichText::new(*label))
+                                .on_hover_text(format!("{chord} = {action}"))
+                                .clicked()
+                            {
+                                self.doc.set_keybind(chord, action, None, None, None);
+                            }
+                        }
+                    });
+            });
         ui.add_space(8.0);
         let binds = self.doc.keybinds();
         for (index, bind) in binds.iter().enumerate() {
-            keybind_row(ui, &mut self.doc, index, bind, &self.actions);
+            keybind_row(ui, &mut self.doc, index, bind);
         }
         ui.add_space(8.0);
         if self.recording_chord {
@@ -1117,16 +1148,11 @@ fn rule_field_row(
     }
 }
 
-/// One keybind row: chord, action with a suggestion dropdown, extras, and
+/// One keybind row: chord and action on the first line (the action field
+/// fills the row so long spawn commands stay editable), extras below, and
 /// remove. Any edit rewrites the whole bind via `set_keybind`; renaming a
 /// chord removes the old entry after writing the new one.
-fn keybind_row(
-    ui: &mut egui::Ui,
-    doc: &mut ConfigDocument,
-    index: usize,
-    bind: &KeybindEntry,
-    actions: &[keybinds::LiveAction],
-) {
+fn keybind_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, index: usize, bind: &KeybindEntry) {
     let mut chord = bind.chord.clone();
     let mut action = bind.action.clone();
     let mut repeat = bind.repeat.unwrap_or(true);
@@ -1137,63 +1163,28 @@ fn keybind_row(
     ui.horizontal(|ui| {
         ui.add(egui::TextEdit::singleline(&mut chord).desired_width(140.0))
             .on_hover_text(keybinds::CHORD_HINT);
-        ui.add(egui::TextEdit::singleline(&mut action).desired_width(180.0));
-        egui::ComboBox::from_id_salt(format!("keybind-action-{index}"))
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .selected_text("pick action")
-            .show_ui(ui, |ui| {
-                let search_id = egui::Id::new(format!("keybind-row-search-{index}"));
-                let mut filter = combo_filter(ui, search_id);
-                ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search actions…"));
-                ui.memory_mut(|mem| mem.data.insert_temp(search_id, filter.clone()));
-                let needle = filter.to_lowercase();
-                egui::ScrollArea::vertical()
-                    .max_height(300.0)
-                    .show(ui, |ui| {
-                        for live in actions {
-                            if !needle.is_empty()
-                                && !format!("{} {} {}", live.name, live.param, live.summary)
-                                    .to_lowercase()
-                                    .contains(&needle)
-                            {
-                                continue;
-                            }
-                            let value = if live.param.is_empty() {
-                                live.name.clone()
-                            } else {
-                                format!("{}:", live.name)
-                            };
-                            let label = if live.param.is_empty() {
-                                live.name.clone()
-                            } else {
-                                format!("{} {}", live.name, live.param)
-                            };
-                            let selected = action == value;
-                            if ui
-                                .selectable_label(selected, egui::RichText::new(label))
-                                .on_hover_text(live.summary.clone())
-                                .clicked()
-                            {
-                                action = value;
-                            }
-                        }
-                    });
-            });
-        ui.checkbox(&mut repeat, "repeat")
-            .on_hover_text("Auto-repeat while held");
-        ui.checkbox(&mut locked, "locked")
-            .on_hover_text("Works while the session is locked");
-        ui.add(
-            egui::TextEdit::singleline(&mut submap)
-                .hint_text("submap")
-                .desired_width(50.0),
-        )
-        .on_hover_text("Switch to this submap layer after the action");
+        ui.add(egui::TextEdit::singleline(&mut action).desired_width(ui.available_width() - 36.0))
+            .on_hover_text("The action to run, e.g. spawn:kitty");
         removed = ui
             .button("✕")
             .on_hover_text("Remove this keybind")
             .clicked();
     });
+    ui.indent(egui::Id::new(index), |ui| {
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut repeat, "repeat")
+                .on_hover_text("Auto-repeat while held");
+            ui.checkbox(&mut locked, "locked")
+                .on_hover_text("Works while the session is locked");
+            ui.add(
+                egui::TextEdit::singleline(&mut submap)
+                    .hint_text("submap")
+                    .desired_width(60.0),
+            )
+            .on_hover_text("Switch to this submap layer after the action");
+        });
+    });
+    ui.add_space(4.0);
 
     if removed {
         doc.remove_table(&["keybinds", &bind.chord]);
