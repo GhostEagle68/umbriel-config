@@ -32,6 +32,8 @@ enum Page {
     /// A top-level schema section, e.g. `"general"`.
     Section(String),
     Outputs,
+    /// Keys in the config no other page claims.
+    Raw,
 }
 
 struct App {
@@ -258,6 +260,11 @@ impl App {
         sections
     }
 
+    /// Keys in the config that no surface claims; drives the Raw page.
+    fn raw_keys(&self) -> Vec<String> {
+        schema::uncovered(&self.doc.value_paths(), &schema::key_set(&self.schema))
+    }
+
     /// Schema from the installed packaged default; empty when unavailable.
     fn load_schema(env: &discovery::Env) -> Vec<schema::Entry> {
         discovery::packaged_default(env)
@@ -284,6 +291,7 @@ fn top_level(section: &str) -> String {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let raw_keys = self.raw_keys();
         egui::Panel::top("header").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("Umbriel Config");
@@ -356,6 +364,19 @@ impl eframe::App for App {
                     .clicked()
                 {
                     self.search.clear();
+                }
+                if !raw_keys.is_empty() {
+                    ui.separator();
+                    if ui
+                        .selectable_value(
+                            &mut self.page,
+                            Some(Page::Raw),
+                            format!("Other settings ({})", raw_keys.len()),
+                        )
+                        .clicked()
+                    {
+                        self.search.clear();
+                    }
                 }
             });
         });
@@ -443,6 +464,19 @@ impl eframe::App for App {
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         self.outputs_page(ui);
+                    });
+                }
+                Page::Raw => {
+                    ui.heading("Other settings");
+                    ui.separator();
+                    ui.label(
+                        "These keys are in your config but have no dedicated page yet.\n\
+                         They are shown here so nothing is hidden; scalar values are editable.",
+                    );
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for dotted in &raw_keys {
+                            raw_row(ui, &mut self.doc, dotted);
+                        }
                     });
                 }
             }
@@ -694,6 +728,20 @@ fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry)
                 doc.set_string(&parts, &value);
             }
         }
+        schema::Kind::List => {
+            let mut text = array_text(doc, &parts).unwrap_or_default();
+            let changed = ui
+                .horizontal(|ui| {
+                    ui.label(&label);
+                    ui.text_edit_singleline(&mut text)
+                        .on_hover_text("Comma-separated list")
+                        .changed()
+                })
+                .inner;
+            if changed {
+                store_array(doc, &parts, &text);
+            }
+        }
         schema::Kind::Choice(options) => {
             let mut value = doc
                 .get_string(&parts)
@@ -734,6 +782,110 @@ fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry)
                 doc.set_string(&parts, &color_to_hex(color));
             }
         }
+    }
+}
+
+/// One otherwise-uncovered key: scalars edit by type, arrays edit as
+/// comma-separated text in their element type; tables stay read-only
+/// notes.
+fn raw_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, dotted: &str) {
+    let parts: Vec<&str> = dotted.split('.').collect();
+    if let Some(mut value) = doc.get_bool(&parts) {
+        if ui.checkbox(&mut value, dotted).changed() {
+            doc.set_bool(&parts, value);
+        }
+        return;
+    }
+    if let Some(mut value) = doc.get_integer(&parts) {
+        let changed = ui
+            .horizontal(|ui| {
+                ui.label(dotted);
+                ui.add(egui::DragValue::new(&mut value))
+            })
+            .inner
+            .changed();
+        if changed {
+            doc.set_integer(&parts, value);
+        }
+        return;
+    }
+    if let Some(mut value) = doc.get_float(&parts) {
+        let changed = ui
+            .horizontal(|ui| {
+                ui.label(dotted);
+                ui.add(egui::DragValue::new(&mut value).speed(0.01))
+            })
+            .inner
+            .changed();
+        if changed {
+            doc.set_float(&parts, value);
+        }
+        return;
+    }
+    if let Some(mut value) = doc.get_string(&parts) {
+        let changed = ui
+            .horizontal(|ui| {
+                ui.label(dotted);
+                ui.text_edit_singleline(&mut value)
+            })
+            .inner
+            .changed();
+        if changed {
+            doc.set_string(&parts, &value);
+        }
+        return;
+    }
+    ui.label(format!(
+        "{dotted}  (table — edit the file directly for now)"
+    ));
+}
+
+/// Comma-separated text for an array value, in its element type. An empty
+/// array matches the integer getter first and edits as numbers-or-names.
+fn array_text(doc: &ConfigDocument, path: &[&str]) -> Option<String> {
+    if let Some(values) = doc.get_integers(path) {
+        return Some(
+            values
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
+    if let Some(values) = doc.get_floats(path) {
+        return Some(
+            values
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
+    doc.get_strings(path).map(|values| values.join(", "))
+}
+
+/// Parse back: all-integers stay integers, all-numbers become floats,
+/// anything else is a name list. Empty text writes an empty string array.
+fn store_array(doc: &mut ConfigDocument, path: &[&str], text: &str) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        doc.set_strings(path, &[]);
+        return;
+    }
+    let items: Vec<String> = trimmed
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if items.iter().all(|item| item.parse::<i64>().is_ok()) {
+        let values: Vec<i64> = items.iter().map(|item| item.parse().unwrap()).collect();
+        doc.set_integers(path, &values);
+    } else if items.iter().all(|item| item.parse::<f64>().is_ok()) {
+        let values: Vec<f64> = items.iter().map(|item| item.parse().unwrap()).collect();
+        doc.set_floats(path, &values);
+    } else {
+        doc.set_strings(path, &items);
     }
 }
 
