@@ -49,6 +49,18 @@ pub struct ConfigDocument {
     original: String,
 }
 
+/// One `[keybinds]` entry: a chord plus the action it runs. `None` extras
+/// mean the plain string form (`"Mod+Q" = "window-close"`); `Some` extras
+/// the inline-table form (`"Mod+R" = { action = "...", repeat = false }`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KeybindEntry {
+    pub chord: String,
+    pub action: String,
+    pub repeat: Option<bool>,
+    pub allow_when_locked: Option<bool>,
+    pub submap: Option<String>,
+}
+
 impl std::str::FromStr for ConfigDocument {
     type Err = ConfigError;
 
@@ -476,6 +488,74 @@ impl ConfigDocument {
         }
         table.remove(last).is_some()
     }
+
+    /// All `[keybinds]` entries in file order. Plain string actions have
+    /// `None` extras; table-form binds surface theirs. Entries umbriel
+    /// would reject (non-string values, missing `action`) are skipped.
+    pub fn keybinds(&self) -> Vec<KeybindEntry> {
+        let Some(table) = Self::item_at(&self.doc, &["keybinds"]).and_then(Item::as_table) else {
+            return Vec::new();
+        };
+        table
+            .iter()
+            .filter_map(|(chord, item)| {
+                let value = item.as_value()?;
+                if let Some(action) = value.as_str() {
+                    return Some(KeybindEntry {
+                        chord: chord.to_owned(),
+                        action: action.to_owned(),
+                        repeat: None,
+                        allow_when_locked: None,
+                        submap: None,
+                    });
+                }
+                let inline = value.as_inline_table()?;
+                Some(KeybindEntry {
+                    chord: chord.to_owned(),
+                    action: inline.get("action")?.as_str()?.to_owned(),
+                    repeat: inline.get("repeat").and_then(|v| v.as_bool()),
+                    allow_when_locked: inline.get("allow_when_locked").and_then(|v| v.as_bool()),
+                    submap: inline
+                        .get("submap")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned),
+                })
+            })
+            .collect()
+    }
+
+    /// Write one bind under `chord`. `None` extras produce the plain string
+    /// form; any `Some` extra the inline-table form. Rewriting an existing
+    /// chord replaces it — umbriel's own per-chord override semantics.
+    pub fn set_keybind(
+        &mut self,
+        chord: &str,
+        action: &str,
+        repeat: Option<bool>,
+        allow_when_locked: Option<bool>,
+        submap: Option<&str>,
+    ) {
+        if repeat.is_none() && allow_when_locked.is_none() && submap.is_none() {
+            Self::set_value(&mut self.doc, &["keybinds", chord], action.into());
+            return;
+        }
+        let mut inline = InlineTable::new();
+        inline.insert("action", action.into());
+        if let Some(repeat) = repeat {
+            inline.insert("repeat", repeat.into());
+        }
+        if let Some(locked) = allow_when_locked {
+            inline.insert("allow_when_locked", locked.into());
+        }
+        if let Some(submap) = submap {
+            inline.insert("submap", submap.into());
+        }
+        Self::set_value(
+            &mut self.doc,
+            &["keybinds", chord],
+            Value::InlineTable(inline),
+        );
+    }
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -750,6 +830,25 @@ curve = \"easeout\"
             Some("0.9")
         );
         assert!(!doc.rule_unset("window_rule", 0, "match.app_id"));
+    }
+
+    #[test]
+    fn keybinds_round_trip_string_and_table_forms() {
+        let mut doc = ConfigDocument::from_str(SAMPLE).unwrap();
+        doc.set_keybind("Mod+Q", "window-close", None, None, None);
+        doc.set_keybind("Mod+R", "submap:resize", Some(false), None, None);
+        let binds = doc.keybinds();
+        assert_eq!(binds.len(), 2);
+        assert_eq!(binds[0].chord, "Mod+Q");
+        assert_eq!(binds[0].action, "window-close");
+        assert_eq!(binds[0].repeat, None);
+        assert_eq!(binds[1].repeat, Some(false));
+        assert!(doc.text().contains("\"Mod+Q\" = \"window-close\""));
+        assert!(doc.text().contains("repeat = false"));
+        // Rewriting without extras converts back to the string form.
+        doc.set_keybind("Mod+R", "config-reload", None, None, None);
+        assert_eq!(doc.keybinds()[1].action, "config-reload");
+        assert!(!doc.text().contains("repeat = false"));
     }
 
     #[test]
