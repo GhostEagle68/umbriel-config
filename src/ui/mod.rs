@@ -412,6 +412,7 @@ impl App {
             )
             .on_hover_text(keybinds::CHORD_HINT);
             egui::ComboBox::from_id_salt("keybind-add-key")
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .selected_text("key…")
                 .show_ui(ui, |ui| {
                     let search_id = egui::Id::new("keybind-add-key-search");
@@ -456,6 +457,7 @@ impl App {
                 self.recording_chord = !self.recording_chord;
             }
             egui::ComboBox::from_id_salt("keybind-add-action")
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .selected_text(if self.add_action.is_empty() {
                     "pick an action".to_owned()
                 } else {
@@ -1137,6 +1139,7 @@ fn keybind_row(
             .on_hover_text(keybinds::CHORD_HINT);
         ui.add(egui::TextEdit::singleline(&mut action).desired_width(180.0));
         egui::ComboBox::from_id_salt(format!("keybind-action-{index}"))
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .selected_text("pick action")
             .show_ui(ui, |ui| {
                 let search_id = egui::Id::new(format!("keybind-row-search-{index}"));
