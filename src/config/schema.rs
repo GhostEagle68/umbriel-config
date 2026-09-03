@@ -277,7 +277,7 @@ fn overlay_label(dotted: &str, key: &str) -> String {
 }
 
 /// `drag_opacity` -> `Drag opacity`.
-fn humanize(key: &str) -> String {
+pub fn humanize(key: &str) -> String {
     let mut chars = key.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
