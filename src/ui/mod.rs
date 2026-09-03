@@ -49,6 +49,8 @@ struct App {
     page: Option<Page>,
     /// Text buffer for the Outputs page's add-by-name row.
     add_output: String,
+    /// Active settings-search query; empty means browse normally.
+    search: String,
     /// Notice from schema sync or the startup drift check; dismissable.
     schema_note: Option<String>,
 }
@@ -79,6 +81,7 @@ impl App {
             page: None,
             add_output: String::new(),
             schema_note,
+            search: String::new(),
         }
     }
 
@@ -160,6 +163,11 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.heading("Umbriel Config");
                 ui.separator();
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.search)
+                        .hint_text("Search settings")
+                        .desired_width(150.0),
+                );
                 ui.label(self.path.display().to_string());
                 if self.doc.is_modified() {
                     ui.colored_label(egui::Color32::from_rgb(230, 180, 80), "unsaved changes");
@@ -204,16 +212,26 @@ impl eframe::App for App {
             let sections = self.sections();
             ui.vertical(|ui| {
                 for section in &sections {
-                    ui.selectable_value(
-                        &mut self.page,
-                        Some(Page::Section(section.clone())),
-                        schema::humanize(section),
-                    );
+                    let clicked = ui
+                        .selectable_value(
+                            &mut self.page,
+                            Some(Page::Section(section.clone())),
+                            schema::humanize(section),
+                        )
+                        .clicked();
+                    if clicked {
+                        self.search.clear();
+                    }
                 }
                 if !sections.is_empty() {
                     ui.separator();
                 }
-                ui.selectable_value(&mut self.page, Some(Page::Outputs), "Outputs");
+                if ui
+                    .selectable_value(&mut self.page, Some(Page::Outputs), "Outputs")
+                    .clicked()
+                {
+                    self.search.clear();
+                }
             });
         });
         egui::CentralPanel::default().show(ui, |ui| {
@@ -223,6 +241,36 @@ impl eframe::App for App {
                     format!("Could not load config: {error}"),
                 );
                 ui.label("Fix the file (see `umbriel validate`) and reopen the app.");
+                return;
+            }
+            let query = self.search.trim().to_owned();
+            if !query.is_empty() {
+                let found: Vec<&schema::Entry> = self
+                    .schema
+                    .iter()
+                    .filter(|entry| schema::matches(entry, &query))
+                    .collect();
+                ui.heading(format!(
+                    "{} setting{} matching \"{query}\"",
+                    found.len(),
+                    if found.len() == 1 { "" } else { "s" }
+                ));
+                ui.separator();
+                if found.is_empty() {
+                    ui.label("Nothing found. Try fewer or different words.");
+                    return;
+                }
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let mut current_section = String::new();
+                    for entry in found {
+                        if entry.section != current_section {
+                            current_section = entry.section.clone();
+                            ui.add_space(6.0);
+                            ui.heading(schema::humanize(&current_section));
+                        }
+                        entry_row(ui, &mut self.doc, entry);
+                    }
+                });
                 return;
             }
             let sections = self.sections();
