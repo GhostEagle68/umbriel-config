@@ -9,8 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toml_edit::{Array, DocumentMut, Item, Table, Value};
-
+use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("failed to read {path}: {source}")]
@@ -267,6 +266,176 @@ impl ConfigDocument {
     pub fn set_string(&mut self, path: &[&str], value: &str) {
         Self::set_value(&mut self.doc, path, value.into());
     }
+
+    // --- Rules (`[[window_rule]]` / `[[layer_rule]]` arrays-of-tables) -----
+
+    fn aot(&self, name: &str) -> Option<&ArrayOfTables> {
+        self.doc.as_table().get(name)?.as_array_of_tables()
+    }
+
+    fn aot_mut(&mut self, name: &str) -> Option<&mut ArrayOfTables> {
+        self.doc
+            .as_table_mut()
+            .get_mut(name)?
+            .as_array_of_tables_mut()
+    }
+
+    /// Number of rules in the `[[name]]` array-of-tables.
+    pub fn rule_count(&self, name: &str) -> usize {
+        self.aot(name).map_or(0, ArrayOfTables::len)
+    }
+
+    fn rule_table(&self, name: &str, index: usize) -> Option<&Table> {
+        self.aot(name)?.iter().nth(index)
+    }
+
+    fn rule_table_mut(&mut self, name: &str, index: usize) -> Option<&mut Table> {
+        self.aot_mut(name)?.iter_mut().nth(index)
+    }
+
+    /// An item inside rule `index`; `key` may be dotted to reach a
+    /// sub-table (`"match.app_id"`).
+    fn rule_item(&self, name: &str, index: usize, key: &str) -> Option<&Item> {
+        let mut table = self.rule_table(name, index)?;
+        let mut parts = key.split('.').peekable();
+        while let Some(part) = parts.next() {
+            let item = table.get(part)?;
+            if parts.peek().is_none() {
+                return Some(item);
+            }
+            table = item.as_table()?;
+        }
+        None
+    }
+
+    /// Store a value inside rule `index`, creating intermediate tables for
+    /// dotted keys and transplanting any existing value's decor.
+    fn rule_store(&mut self, name: &str, index: usize, key: &str, mut value: Value) {
+        let mut table = self.rule_table_mut(name, index).unwrap();
+        let parts: Vec<&str> = key.split('.').collect();
+        let (last, parents) = parts.split_last().expect("non-empty key");
+        for parent in parents {
+            if !table.contains_key(parent) {
+                table.insert(parent, Item::Table(Table::new()));
+            }
+            table = match table.get_mut(parent).map(Item::as_table_mut) {
+                Some(Some(child)) => child,
+                _ => return,
+            };
+        }
+        let decor = table
+            .get_mut(last)
+            .and_then(|item| item.as_value())
+            .map(|old| old.decor().clone());
+        if let Some(decor) = decor {
+            *value.decor_mut() = decor;
+        }
+        table.insert(last, Item::Value(value));
+    }
+
+    pub fn rule_string(&self, name: &str, index: usize, key: &str) -> Option<String> {
+        self.rule_item(name, index, key)?
+            .as_value()?
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    pub fn rule_bool(&self, name: &str, index: usize, key: &str) -> Option<bool> {
+        self.rule_item(name, index, key)?.as_bool()
+    }
+
+    pub fn rule_float(&self, name: &str, index: usize, key: &str) -> Option<f64> {
+        self.rule_item(name, index, key)?.as_value()?.as_float()
+    }
+
+    pub fn rule_integer(&self, name: &str, index: usize, key: &str) -> Option<i64> {
+        self.rule_item(name, index, key)?.as_value()?.as_integer()
+    }
+
+    pub fn rule_integers(&self, name: &str, index: usize, key: &str) -> Option<Vec<i64>> {
+        let array = self.rule_item(name, index, key)?.as_value()?.as_array()?;
+        array.iter().map(|value| value.as_integer()).collect()
+    }
+
+    pub fn rule_set_string(&mut self, name: &str, index: usize, key: &str, value: &str) {
+        self.rule_store(name, index, key, value.into());
+    }
+
+    pub fn rule_set_bool(&mut self, name: &str, index: usize, key: &str, value: bool) {
+        self.rule_store(name, index, key, value.into());
+    }
+
+    pub fn rule_set_float(&mut self, name: &str, index: usize, key: &str, value: f64) {
+        self.rule_store(name, index, key, value.into());
+    }
+
+    pub fn rule_set_integer(&mut self, name: &str, index: usize, key: &str, value: i64) {
+        self.rule_store(name, index, key, value.into());
+    }
+
+    pub fn rule_set_integers(&mut self, name: &str, index: usize, key: &str, values: &[i64]) {
+        let mut array = Array::new();
+        for value in values {
+            array.push(*value);
+        }
+        self.rule_store(name, index, key, Value::Array(array));
+    }
+
+    /// Inline `{ x, y, anchor }` position; anchor absent means center.
+    pub fn rule_position(
+        &self,
+        name: &str,
+        index: usize,
+        key: &str,
+    ) -> Option<(i64, i64, Option<String>)> {
+        let inline = self
+            .rule_item(name, index, key)?
+            .as_value()?
+            .as_inline_table()?;
+        let x = inline.get("x")?.as_integer()?;
+        let y = inline.get("y")?.as_integer()?;
+        let anchor = inline
+            .get("anchor")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned);
+        Some((x, y, anchor))
+    }
+
+    pub fn rule_set_position(
+        &mut self,
+        name: &str,
+        index: usize,
+        key: &str,
+        x: i64,
+        y: i64,
+        anchor: &str,
+    ) {
+        let mut inline = InlineTable::new();
+        inline.insert("x", x.into());
+        inline.insert("y", y.into());
+        inline.insert("anchor", anchor.into());
+        self.rule_store(name, index, key, Value::InlineTable(inline));
+    }
+
+    /// Append an empty `[[name]]` rule, creating the array when absent.
+    pub fn add_rule(&mut self, name: &str) {
+        let entry = self.doc.as_table_mut().entry(name);
+        let item = entry.or_insert(Item::ArrayOfTables(ArrayOfTables::new()));
+        if let Item::ArrayOfTables(rules) = item {
+            rules.push(Table::new());
+        }
+    }
+
+    /// Delete rule `index`; returns whether anything was removed.
+    pub fn remove_rule(&mut self, name: &str, index: usize) -> bool {
+        match self.aot_mut(name) {
+            Some(rules) if index < rules.len() => {
+                rules.remove(index);
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -467,6 +636,61 @@ curve = \"easeout\"
         );
         doc.set_floats(&["layout", "width_presets"], &[0.25, 0.5, 0.75]);
         assert!(doc.text().contains("width_presets = [0.25, 0.5, 0.75]"));
+    }
+
+    #[test]
+    fn rule_accessors_read_and_write_in_place() {
+        let text = "[[window_rule]]\nmatch.app_id = \"^steam$\"\ndefault_workspace = 2\n\n[[window_rule]]\ndefault_floating = true\n";
+        let mut doc = ConfigDocument::from_str(text).unwrap();
+        assert_eq!(doc.rule_count("window_rule"), 2);
+        assert_eq!(
+            doc.rule_string("window_rule", 0, "match.app_id").as_deref(),
+            Some("^steam$")
+        );
+        assert_eq!(
+            doc.rule_integer("window_rule", 0, "default_workspace"),
+            Some(2)
+        );
+        assert_eq!(
+            doc.rule_bool("window_rule", 1, "default_floating"),
+            Some(true)
+        );
+
+        doc.rule_set_bool("window_rule", 1, "default_floating", false);
+        assert!(doc.text().contains("default_floating = false"));
+        assert!(doc.text().contains("\"^steam$\""));
+
+        // Dotted set creates the match sub-table on a rule that lacked it.
+        doc.rule_set_string("window_rule", 1, "match.title", "^Library$");
+        assert_eq!(
+            doc.rule_string("window_rule", 1, "match.title").as_deref(),
+            Some("^Library$")
+        );
+    }
+
+    #[test]
+    fn add_and_remove_rules() {
+        let mut doc = ConfigDocument::from_str("[[layer_rule]]\nblur = true\n").unwrap();
+        doc.add_rule("layer_rule");
+        assert_eq!(doc.rule_count("layer_rule"), 2);
+        assert!(doc.text().contains("[[layer_rule]]"));
+        assert!(doc.remove_rule("layer_rule", 1));
+        assert_eq!(doc.rule_count("layer_rule"), 1);
+        assert!(!doc.remove_rule("layer_rule", 5));
+    }
+
+    #[test]
+    fn rule_position_round_trips_inline() {
+        let mut doc = ConfigDocument::from_str("[[window_rule]]\n").unwrap();
+        doc.rule_set_position("window_rule", 0, "default_position", 0, -40, "bottom_right");
+        assert_eq!(
+            doc.rule_position("window_rule", 0, "default_position"),
+            Some((0, -40, Some("bottom_right".to_owned())))
+        );
+        assert!(
+            doc.text()
+                .contains("default_position = { x = 0, y = -40, anchor = \"bottom_right\" }")
+        );
     }
 
     #[test]
