@@ -70,13 +70,18 @@ impl App {
     fn new(path: PathBuf) -> Self {
         let (doc, healthy, load_error) = match ConfigDocument::load(&path) {
             Ok(doc) => (doc, true, None),
-            Err(err) => (
-                // An empty document keeps the UI alive; saving stays disabled
-                // so a broken file is never overwritten from here.
-                ConfigDocument::from_str("").expect("empty TOML parses"),
-                false,
-                Some(err.to_string()),
-            ),
+            Err(err) => {
+                // A missing file is a fresh start: saving creates it. Anything
+                // else (a broken file) keeps saving disabled so it is never
+                // overwritten from here.
+                let healthy = err.is_not_found();
+                let load_error = (!healthy).then_some(err.to_string());
+                (
+                    ConfigDocument::from_str("").expect("empty TOML parses"),
+                    healthy,
+                    load_error,
+                )
+            }
         };
         let env = discovery::Env::from_process();
         let schema = Self::load_schema(&env);
@@ -466,6 +471,12 @@ impl eframe::App for App {
                 );
                 ui.label("Fix the file (see `umbriel validate`) and reopen the app.");
                 return;
+            }
+            if self.healthy && !self.path.exists() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(140, 200, 140),
+                    "Config file does not exist yet; saving will create it.",
+                );
             }
             let query = self.search.trim().to_owned();
             if !query.is_empty() {
