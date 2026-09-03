@@ -212,6 +212,25 @@ impl ConfigDocument {
             .collect()
     }
 
+    /// Delete the table at `path` (e.g. an `[output."name"]` block).
+    /// Returns whether anything was removed.
+    pub fn remove_table(&mut self, path: &[&str]) -> bool {
+        let Some((last, parents)) = path.split_last() else {
+            return false;
+        };
+        let mut table = self.doc.as_table_mut();
+        for key in parents {
+            let Some(item) = table.get_mut(key) else {
+                return false;
+            };
+            let Some(child) = item.as_table_mut() else {
+                return false;
+            };
+            table = child;
+        }
+        table.remove(last).is_some()
+    }
+
     pub fn set_bool(&mut self, path: &[&str], value: bool) {
         Self::set_value(&mut self.doc, path, value.into());
     }
@@ -378,6 +397,17 @@ curve = \"easeout\"
         // `[output."DP-3"]` in an existing file parses to the same table and
         // is never rewritten.
         assert!(doc.text().contains("[output.DP-3]"));
+    }
+
+    #[test]
+    fn remove_table_deletes_only_that_table() {
+        let text = "[output.\"DP-3\"]\nscale = 1\n\n[output.\"eDP-1\"]\nscale = 2\n";
+        let mut doc = ConfigDocument::from_str(text).unwrap();
+        assert!(doc.remove_table(&["output", "DP-3"]));
+        assert!(!doc.text().contains("DP-3"));
+        assert!(doc.text().contains("eDP-1"));
+        assert_eq!(doc.get_integer(&["output", "eDP-1", "scale"]), Some(2));
+        assert!(!doc.remove_table(&["output", "missing"]));
     }
 
     #[test]
