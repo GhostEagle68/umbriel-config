@@ -5,6 +5,7 @@
 //! Commented-out keys are mined from the raw text; their values are the
 //! presumed defaults (the compositor's true fallbacks live in its code).
 
+use std::collections::BTreeSet;
 use toml_edit::{DocumentMut, Item};
 
 /// Widget kind and constraints for one key.
@@ -286,6 +287,60 @@ pub fn humanize(key: &str) -> String {
     .replace('_', " ")
 }
 
+/// Differences between two schema key sets, by dotted path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SchemaDiff {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+impl SchemaDiff {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty()
+    }
+
+    /// Human one-liner, e.g. `3 new: a, b, c; 1 removed: old`.
+    pub fn summary(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.added.is_empty() {
+            parts.push(format!(
+                "{} new: {}",
+                self.added.len(),
+                name_list(&self.added)
+            ));
+        }
+        if !self.removed.is_empty() {
+            parts.push(format!(
+                "{} removed: {}",
+                self.removed.len(),
+                name_list(&self.removed)
+            ));
+        }
+        parts.join("; ")
+    }
+}
+
+fn name_list(names: &[String]) -> String {
+    if names.len() > 3 {
+        format!("{}, …", names[..3].join(", "))
+    } else {
+        names.join(", ")
+    }
+}
+
+/// Dotted paths of every entry, sorted.
+pub fn key_set(entries: &[Entry]) -> BTreeSet<String> {
+    entries.iter().map(Entry::dotted).collect()
+}
+
+/// Keys present in `new` but not `old`, and vice versa.
+pub fn diff(old: &BTreeSet<String>, new: &BTreeSet<String>) -> SchemaDiff {
+    SchemaDiff {
+        added: new.difference(old).cloned().collect(),
+        removed: old.difference(new).cloned().collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,5 +489,46 @@ focus_on_activate = false
     fn quoted_and_complex_headers_are_ignored() {
         let entries = assemble(COMMENTED);
         assert!(entries.iter().all(|e| e.path[0] != "output"));
+    }
+
+    #[test]
+    fn diff_reports_additions_and_removals() {
+        let old = BTreeSet::from(["a".to_owned(), "b".to_owned(), "c".to_owned()]);
+        let new = BTreeSet::from(["b".to_owned(), "c".to_owned(), "d".to_owned()]);
+        let drift = diff(&old, &new);
+        assert_eq!(drift.added, vec!["d".to_owned()]);
+        assert_eq!(drift.removed, vec!["a".to_owned()]);
+        assert!(!drift.is_empty());
+    }
+
+    #[test]
+    fn diff_of_equal_sets_is_empty() {
+        let set = BTreeSet::from(["a".to_owned()]);
+        assert!(diff(&set, &set).is_empty());
+    }
+
+    #[test]
+    fn summary_caps_name_lists() {
+        let drift = SchemaDiff {
+            added: (1..=5).map(|i| format!("k{i}")).collect(),
+            removed: vec!["old".to_owned()],
+        };
+        assert_eq!(drift.summary(), "5 new: k1, k2, k3, …; 1 removed: old");
+    }
+
+    #[test]
+    fn key_set_collects_dotted_paths() {
+        let entries = vec![Entry {
+            path: vec!["general".to_owned(), "xwayland".to_owned()],
+            section: "general".to_owned(),
+            kind: Kind::Bool,
+            default: Some(Value::Bool(true)),
+            label: "Xwayland".to_owned(),
+            restart: false,
+        }];
+        assert_eq!(
+            key_set(&entries),
+            BTreeSet::from(["general.xwayland".to_owned()])
+        );
     }
 }

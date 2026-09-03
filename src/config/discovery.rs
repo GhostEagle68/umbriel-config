@@ -12,11 +12,12 @@ const CONFIG_RELATIVE_PATH: &str = "umbriel/config.toml";
 
 /// Environment inputs to the lookup, captured explicitly so tests never
 /// mutate process environment variables.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Env {
     pub xdg_config_home: Option<OsString>,
     pub xdg_config_dirs: Option<OsString>,
     pub xdg_data_dirs: Option<OsString>,
+    pub xdg_state_home: Option<OsString>,
     pub home: Option<OsString>,
 }
 
@@ -30,6 +31,7 @@ impl Env {
             xdg_config_home: get("XDG_CONFIG_HOME"),
             xdg_config_dirs: get("XDG_CONFIG_DIRS"),
             xdg_data_dirs: get("XDG_DATA_DIRS"),
+            xdg_state_home: get("XDG_STATE_HOME"),
             home: get("HOME"),
         }
     }
@@ -114,6 +116,7 @@ mod tests {
             xdg_config_home: config_home.map(OsString::from),
             xdg_config_dirs: config_dirs.map(OsString::from),
             xdg_data_dirs: None,
+            xdg_state_home: None,
             home: home.map(OsString::from),
         }
     }
