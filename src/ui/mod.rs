@@ -580,5 +580,70 @@ fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry)
                 doc.set_string(&parts, &value);
             }
         }
+        schema::Kind::Choice(options) => {
+            let mut value = doc
+                .get_string(&parts)
+                .unwrap_or_else(|| match &entry.default {
+                    Some(schema::Value::Text(value)) => value.clone(),
+                    _ => String::new(),
+                });
+            let original = value.clone();
+            ui.horizontal(|ui| {
+                ui.label(&label);
+                egui::ComboBox::from_id_salt(entry.dotted())
+                    .selected_text(&value)
+                    .show_ui(ui, |ui| {
+                        for option in options {
+                            ui.selectable_value(&mut value, option.clone(), option);
+                        }
+                    });
+            });
+            if value != original {
+                doc.set_string(&parts, &value);
+            }
+        }
+        schema::Kind::Color => {
+            let current = doc
+                .get_string(&parts)
+                .unwrap_or_else(|| match &entry.default {
+                    Some(schema::Value::Text(value)) => value.clone(),
+                    _ => String::new(),
+                });
+            let mut color = parse_color(&current).unwrap_or(egui::Color32::from_rgb(255, 255, 255));
+            let changed = ui
+                .horizontal(|ui| {
+                    ui.label(&label);
+                    ui.color_edit_button_srgba(&mut color).changed()
+                })
+                .inner;
+            if changed {
+                doc.set_string(&parts, &color_to_hex(color));
+            }
+        }
     }
+}
+
+/// `#RRGGBB[AA]` to an egui color.
+fn parse_color(text: &str) -> Option<egui::Color32> {
+    let hex = text.strip_prefix('#')?;
+    if (hex.len() != 6 && hex.len() != 8) || !hex.is_ascii() {
+        return None;
+    }
+    let channel = |range: std::ops::Range<usize>| u8::from_str_radix(&hex[range], 16).ok();
+    Some(egui::Color32::from_rgba_unmultiplied(
+        channel(0..2)?,
+        channel(2..4)?,
+        channel(4..6)?,
+        channel(6..8).unwrap_or(255),
+    ))
+}
+
+fn color_to_hex(color: egui::Color32) -> String {
+    format!(
+        "#{:02X}{:02X}{:02X}{:02X}",
+        color.r(),
+        color.g(),
+        color.b(),
+        color.a()
+    )
 }
