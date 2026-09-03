@@ -2,6 +2,8 @@
 //! default config so the GUI covers new keys without an app release. Sparse
 //! maintainer refinements live in [`OVERLAY`]; a missing refinement degrades
 //! a key to its derived treatment, never loses it.
+//! Commented-out keys are mined from the raw text; their values are the
+//! presumed defaults (the compositor's true fallbacks live in its code).
 
 use toml_edit::{DocumentMut, Item};
 
@@ -62,6 +64,107 @@ pub const OVERLAY: Overlay = Overlay {
     restart: &["general.xwayland"],
 };
 
+/// Add entries for commented-out keys (`# key = value`), including keys
+/// under fully commented sections (`# [environment]`). Active keys always
+/// win; a commented duplicate is skipped.
+fn mine_comments(packaged: &str, entries: &mut Vec<Entry>) {
+    let known: std::collections::HashSet<String> = entries.iter().map(Entry::dotted).collect();
+    let mut section = String::new();
+    for line in packaged.lines() {
+        let trimmed = line.trim();
+        let Some(body) = trimmed.strip_prefix('#') else {
+            if let Some(header) = parse_header(trimmed) {
+                section = header;
+            }
+            continue;
+        };
+        let body = body.trim();
+        if let Some(header) = parse_header(body) {
+            section = header;
+            continue;
+        }
+        let Some((key, raw)) = body.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if !is_bare_key(key) || section.is_empty() || is_skipped(&section) {
+            continue;
+        }
+        let dotted = format!("{section}.{key}");
+        if known.contains(&dotted) {
+            continue;
+        }
+        if let Some((kind, default)) = classify_value(raw.trim()) {
+            let mut path: Vec<String> = section.split('.').map(str::to_owned).collect();
+            path.push(key.to_owned());
+            entries.push(Entry {
+                label: overlay_label(&dotted, key),
+                restart: OVERLAY.restart.contains(&dotted.as_str()),
+                path,
+                section: section.clone(),
+                kind,
+                default: Some(default),
+            });
+        }
+    }
+}
+
+/// `[section.nested]` with bare, dotted names only; quoted or array headers
+/// (outputs, `[[window_rule]]`) are left to their dedicated editors.
+fn parse_header(line: &str) -> Option<String> {
+    let inner = line.strip_prefix('[')?.strip_suffix(']')?;
+    (!inner.is_empty()
+        && inner
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+    .then(|| inner.to_owned())
+}
+
+fn is_bare_key(key: &str) -> bool {
+    !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn is_skipped(section: &str) -> bool {
+    let top = section.split('.').next().unwrap_or_default();
+    OVERLAY.skip_sections.contains(&top)
+}
+
+/// Classify a raw assignment value: bool, integer, float, or quoted string
+/// (a trailing comment after the closing quote is ignored).
+fn classify_value(raw: &str) -> Option<(Kind, Value)> {
+    if let Ok(value) = raw.parse::<bool>() {
+        return Some((Kind::Bool, Value::Bool(value)));
+    }
+    if let Ok(value) = raw.parse::<i64>() {
+        return Some((
+            Kind::Integer {
+                min: None,
+                max: None,
+            },
+            Value::Integer(value),
+        ));
+    }
+    if let Ok(value) = raw.parse::<f64>() {
+        return Some((
+            Kind::Float {
+                min: None,
+                max: None,
+            },
+            Value::Float(value),
+        ));
+    }
+    let quoted = raw
+        .strip_prefix('"')
+        .and_then(|rest| rest.split_once('"'))
+        .map(|(value, _)| value)
+        .or_else(|| {
+            raw.strip_prefix('\'')
+                .and_then(|rest| rest.split_once('\''))
+                .map(|(value, _)| value)
+        })?;
+    Some((Kind::Text, Value::Text(quoted.to_owned())))
+}
+
 /// Derive entries from a packaged default config. Active keys only here;
 /// commented-out keys are mined in a follow-up step.
 pub fn assemble(packaged: &str) -> Vec<Entry> {
@@ -70,6 +173,7 @@ pub fn assemble(packaged: &str) -> Vec<Entry> {
     };
     let mut entries = Vec::new();
     walk_table(doc.as_table(), &mut Vec::new(), &mut entries);
+    mine_comments(packaged, &mut entries);
     entries
 }
 
@@ -275,5 +379,60 @@ files = []
     #[test]
     fn broken_input_yields_no_entries() {
         assert!(assemble("not [valid").is_empty());
+    }
+
+    const COMMENTED: &str = "\
+[colors]
+# background = \"#141419FF\"
+text_primary = \"#E8E8EAFF\"
+# backdrop = \"#000000FF\"       # fullscreen gaps
+
+# [environment]
+# GTK_THEME = \"Adwaita:dark\"
+
+# [output.\"Some Make ABC123\"]
+# scale = 1.25
+
+# prose only, nothing to mine
+
+[general]
+focus_on_activate = false
+# focus_on_activate = true
+";
+
+    #[test]
+    fn mines_commented_keys_under_active_and_commented_sections() {
+        let entries = assemble(COMMENTED);
+        let get = |dotted: &str| entries.iter().find(|e| e.dotted() == dotted);
+
+        let background = get("colors.background").expect("mined");
+        assert_eq!(background.kind, Kind::Text);
+        assert_eq!(background.default, Some(Value::Text("#141419FF".into())));
+        assert_eq!(background.section, "colors");
+        assert_eq!(background.label, "Background");
+
+        assert!(get("colors.backdrop").is_some());
+        assert!(get("environment.GTK_THEME").is_some());
+        assert_eq!(
+            get("environment.GTK_THEME").unwrap().default,
+            Some(Value::Text("Adwaita:dark".into()))
+        );
+    }
+
+    #[test]
+    fn active_keys_win_over_commented_duplicates() {
+        let entries = assemble(COMMENTED);
+        let found: Vec<_> = entries
+            .iter()
+            .filter(|e| e.dotted() == "general.focus_on_activate")
+            .collect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].default, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn quoted_and_complex_headers_are_ignored() {
+        let entries = assemble(COMMENTED);
+        assert!(entries.iter().all(|e| e.path[0] != "output"));
     }
 }
