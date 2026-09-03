@@ -634,6 +634,39 @@ pub const DEFAULT_BINDS: &[(&str, &str)] = &[
     ("Mod+WheelDown", "window-focus-right"),
 ];
 
+/// Keysyms for special/media keys, for the chord picker: (keysym, label).
+/// Any other keysym can be typed by hand — this list is the common ones.
+pub const COMMON_KEYS: &[(&str, &str)] = &[
+    ("XF86AudioRaiseVolume", "Volume up"),
+    ("XF86AudioLowerVolume", "Volume down"),
+    ("XF86AudioMute", "Mute audio"),
+    ("XF86AudioMicMute", "Mute microphone"),
+    ("XF86AudioPlay", "Play/pause"),
+    ("XF86AudioPause", "Pause"),
+    ("XF86AudioStop", "Stop"),
+    ("XF86AudioNext", "Next track"),
+    ("XF86AudioPrev", "Previous track"),
+    ("XF86AudioRewind", "Rewind"),
+    ("XF86MonBrightnessUp", "Screen brightness up"),
+    ("XF86MonBrightnessDown", "Screen brightness down"),
+    ("XF86KbdBrightnessUp", "Keyboard brightness up"),
+    ("XF86KbdBrightnessDown", "Keyboard brightness down"),
+    ("XF86Eject", "Eject"),
+    ("XF86Calculator", "Calculator"),
+    ("XF86Mail", "Mail"),
+    ("XF86Search", "Search"),
+    ("XF86HomePage", "Home page"),
+    ("XF86Favorites", "Favorites"),
+    ("XF86Refresh", "Refresh"),
+    ("XF86Tools", "Tools"),
+    ("XF86Launch1", "Launch 1"),
+    ("Print", "Print screen"),
+    ("Pause", "Pause"),
+    ("Scroll_Lock", "Scroll lock"),
+    ("Num_Lock", "Num lock"),
+    ("Menu", "Menu key"),
+];
+
 /// A runtime action parsed from the installed umbriel (owned strings).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiveAction {
