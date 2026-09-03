@@ -6,7 +6,9 @@ use eframe::egui;
 use std::path::PathBuf;
 use std::str::FromStr;
 use umbriel_config::config::{
-    discovery, document::ConfigDocument, outputs, rules, schema, state, validate,
+    discovery,
+    document::{ConfigDocument, KeybindEntry},
+    keybinds, outputs, rules, schema, state, validate,
 };
 use umbriel_config::live;
 
@@ -34,6 +36,8 @@ enum Page {
     Outputs,
     /// Window or layer rules; the payload is the TOML section name.
     Rules(&'static str),
+    /// The `[keybinds]` chord table.
+    Keybinds,
     /// Keys in the config no other page claims.
     Raw,
 }
@@ -64,6 +68,11 @@ struct App {
     search: String,
     /// Notice from schema sync or the startup drift check; dismissable.
     schema_note: Option<String>,
+    /// Action vocabulary from the installed umbriel (or the snapshot).
+    actions: Vec<keybinds::LiveAction>,
+    /// Text buffers for the Keybinds page's add row.
+    add_chord: String,
+    add_action: String,
 }
 
 impl App {
@@ -101,6 +110,9 @@ impl App {
             live_note: None,
             schema_note,
             search: String::new(),
+            actions: keybinds::builtin_actions(),
+            add_chord: String::new(),
+            add_action: String::new(),
         }
     }
 
@@ -120,6 +132,7 @@ impl App {
             format!("Synced from umbriel: {}.", drift.summary())
         });
         self.schema = fresh;
+        self.actions = Self::load_actions();
         if let Some(Page::Section(current)) = self.page.as_ref()
             && !self.sections().contains(current)
         {
@@ -298,6 +311,59 @@ impl App {
         }
     }
 
+    /// Keybinds: the user's chord overrides. Actions are free text — the
+    /// dropdown only suggests the installed umbriel's live vocabulary.
+    fn keybinds_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Keybinds");
+        ui.separator();
+        let mut mod_key = self
+            .doc
+            .get_string(&["general", "mod_key"])
+            .unwrap_or_else(|| "Super".to_owned());
+        let mod_changed = ui
+            .horizontal(|ui| {
+                ui.label("Modifier (Mod)");
+                ui.text_edit_singleline(&mut mod_key)
+                    .on_hover_text(
+                        "What \"Mod\" means in the chords below; umbriel's default is Super.",
+                    )
+                    .changed()
+            })
+            .inner;
+        if mod_changed && !mod_key.trim().is_empty() {
+            self.doc.set_string(&["general", "mod_key"], mod_key.trim());
+        }
+        ui.add_space(8.0);
+        let binds = self.doc.keybinds();
+        for (index, bind) in binds.iter().enumerate() {
+            keybind_row(ui, &mut self.doc, index, bind, &self.actions);
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Add keybind");
+            ui.add(egui::TextEdit::singleline(&mut self.add_chord).desired_width(150.0))
+                .on_hover_text(keybinds::CHORD_HINT);
+            ui.add(egui::TextEdit::singleline(&mut self.add_action).desired_width(180.0))
+                .on_hover_text("Action, e.g. spawn:kitty or window-close");
+            if ui.button("Add").clicked() {
+                let chord = self.add_chord.trim().to_owned();
+                let action = self.add_action.trim().to_owned();
+                if !chord.is_empty() && !action.is_empty() {
+                    self.doc.set_keybind(&chord, &action, None, None, None);
+                    self.add_chord.clear();
+                    self.add_action.clear();
+                }
+            }
+        });
+        if binds.is_empty() {
+            ui.add_space(4.0);
+            ui.label(
+                "No custom keybinds yet — umbriel's built-in defaults are active.\n\
+                 Add one to override a chord or bind something new.",
+            );
+        }
+    }
+
     fn save(&mut self) {
         self.last_validation = None;
         self.validation_note = None;
@@ -334,6 +400,26 @@ impl App {
             .and_then(|path| std::fs::read_to_string(path).ok())
             .map(|text| schema::assemble(&text))
             .unwrap_or_default()
+    }
+
+    /// Live action list from the installed umbriel; the committed snapshot
+    /// when it can't be asked.
+    fn load_actions() -> Vec<keybinds::LiveAction> {
+        match std::process::Command::new("umbriel")
+            .args(["msg", "--help"])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let parsed = keybinds::actions_from_help(&text);
+                if parsed.is_empty() {
+                    keybinds::builtin_actions()
+                } else {
+                    parsed
+                }
+            }
+            _ => keybinds::builtin_actions(),
+        }
     }
 
     /// Diff the fresh schema against the last run's snapshot and refresh it.
@@ -444,6 +530,12 @@ impl eframe::App for App {
                         Some(Page::Rules("layer_rule")),
                         "Layer rules",
                     )
+                    .clicked()
+                {
+                    self.search.clear();
+                }
+                if ui
+                    .selectable_value(&mut self.page, Some(Page::Keybinds), "Keybinds")
                     .clicked()
                 {
                     self.search.clear();
@@ -574,6 +666,11 @@ impl eframe::App for App {
                 Page::Rules(name) => {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         self.rules_page(ui, name);
+                    });
+                }
+                Page::Keybinds => {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        self.keybinds_page(ui);
                     });
                 }
                 Page::Raw => {
@@ -838,6 +935,112 @@ fn rule_field_row(
                 doc.rule_set_position(name, index, field.key, x, y, anchor.as_deref());
             }
         }
+    }
+}
+
+/// One keybind row: chord, action with a suggestion dropdown, extras, and
+/// remove. Any edit rewrites the whole bind via `set_keybind`; renaming a
+/// chord removes the old entry after writing the new one.
+fn keybind_row(
+    ui: &mut egui::Ui,
+    doc: &mut ConfigDocument,
+    index: usize,
+    bind: &KeybindEntry,
+    actions: &[keybinds::LiveAction],
+) {
+    let mut chord = bind.chord.clone();
+    let mut action = bind.action.clone();
+    let mut repeat = bind.repeat.unwrap_or(true);
+    let mut locked = bind.allow_when_locked.unwrap_or(false);
+    let mut submap = bind.submap.clone().unwrap_or_default();
+    let mut removed = false;
+
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut chord).desired_width(140.0))
+            .on_hover_text(keybinds::CHORD_HINT);
+        ui.add(egui::TextEdit::singleline(&mut action).desired_width(180.0));
+        egui::ComboBox::from_id_salt(format!("keybind-action-{index}"))
+            .selected_text("pick action")
+            .show_ui(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .show(ui, |ui| {
+                        for live in actions {
+                            let value = if live.param.is_empty() {
+                                live.name.clone()
+                            } else {
+                                format!("{}:", live.name)
+                            };
+                            let label = if live.param.is_empty() {
+                                live.name.clone()
+                            } else {
+                                format!("{} {}", live.name, live.param)
+                            };
+                            let selected = action == value;
+                            if ui
+                                .selectable_label(selected, egui::RichText::new(label))
+                                .on_hover_text(live.summary.clone())
+                                .clicked()
+                            {
+                                action = value;
+                            }
+                        }
+                    });
+            });
+        ui.checkbox(&mut repeat, "repeat")
+            .on_hover_text("Auto-repeat while held");
+        ui.checkbox(&mut locked, "locked")
+            .on_hover_text("Works while the session is locked");
+        ui.add(
+            egui::TextEdit::singleline(&mut submap)
+                .hint_text("submap")
+                .desired_width(50.0),
+        )
+        .on_hover_text("Switch to this submap layer after the action");
+        removed = ui
+            .button("✕")
+            .on_hover_text("Remove this keybind")
+            .clicked();
+    });
+
+    if removed {
+        doc.remove_table(&["keybinds", &bind.chord]);
+        return;
+    }
+    // Extras stay unset unless the bind already had them or they differ
+    // from umbriel's defaults — string-form binds stay minimal.
+    let repeat_out = if bind.repeat.is_some() || !repeat {
+        Some(repeat)
+    } else {
+        None
+    };
+    let locked_out = if bind.allow_when_locked.is_some() || locked {
+        Some(locked)
+    } else {
+        None
+    };
+    let submap_out = if submap.trim().is_empty() {
+        None
+    } else {
+        Some(submap.trim().to_owned())
+    };
+    let changed = chord != bind.chord
+        || action != bind.action
+        || repeat_out != bind.repeat
+        || locked_out != bind.allow_when_locked
+        || submap_out != bind.submap;
+    if !changed || chord.trim().is_empty() || action.trim().is_empty() {
+        return;
+    }
+    doc.set_keybind(
+        chord.trim(),
+        action.trim(),
+        repeat_out,
+        locked_out,
+        submap_out.as_deref(),
+    );
+    if chord.trim() != bind.chord {
+        doc.remove_table(&["keybinds", &bind.chord]);
     }
 }
 
