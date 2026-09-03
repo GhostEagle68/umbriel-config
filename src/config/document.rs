@@ -31,6 +31,17 @@ pub enum ConfigError {
     },
 }
 
+impl ConfigError {
+    /// True when the config simply does not exist yet — a fresh start,
+    /// not a broken file.
+    pub fn is_not_found(&self) -> bool {
+        matches!(
+            self,
+            ConfigError::Read { source, .. } if source.kind() == std::io::ErrorKind::NotFound
+        )
+    }
+}
+
 /// A loaded Umbriel config file, editable without losing comments or formatting.
 #[derive(Debug)]
 pub struct ConfigDocument {
@@ -83,6 +94,14 @@ impl ConfigDocument {
     /// Atomically write the document to `path`, leaving a one-time backup at
     /// `<path>.bak` holding the pre-GUI content from the first-ever save.
     pub fn save(&mut self, path: &Path) -> Result<(), ConfigError> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|source| ConfigError::Save {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
         let backup = backup_path(path);
         if !backup.exists() && path.exists() {
             fs::copy(path, &backup).map_err(|source| ConfigError::Save {
@@ -592,6 +611,24 @@ curve = \"easeout\"
         assert!(leftovers.is_empty());
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn save_creates_missing_parent_directory() {
+        let root = std::env::temp_dir().join(format!("umbriel-fresh-{}", std::process::id()));
+        let path = root.join("config/umbriel/config.toml");
+        let mut doc = ConfigDocument::from_str("[general]\nxwayland = true\n").unwrap();
+        doc.save(&path).unwrap();
+        assert!(path.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn load_flags_missing_file_as_fresh_start() {
+        let path =
+            std::env::temp_dir().join(format!("umbriel-missing-{}.toml", std::process::id()));
+        let err = ConfigDocument::load(&path).unwrap_err();
+        assert!(err.is_not_found());
     }
 
     #[test]
