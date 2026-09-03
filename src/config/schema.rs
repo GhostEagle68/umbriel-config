@@ -287,6 +287,20 @@ pub fn humanize(key: &str) -> String {
     .replace('_', " ")
 }
 
+/// Case-insensitive filter for the settings search: the label or the dotted
+/// path must contain every whitespace-separated term, in any order.
+pub fn matches(entry: &Entry, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    let dotted = entry.dotted().to_lowercase();
+    let label = entry.label.to_lowercase();
+    query
+        .split_whitespace()
+        .all(|term| dotted.contains(term) || label.contains(term))
+}
+
 /// Differences between two schema key sets, by dotted path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SchemaDiff {
@@ -530,5 +544,21 @@ focus_on_activate = false
             key_set(&entries),
             BTreeSet::from(["general.xwayland".to_owned()])
         );
+    }
+
+    #[test]
+    fn matches_by_path_label_and_terms() {
+        let entries = assemble(FIXTURE);
+        let find = |dotted: &str| entries.iter().find(|e| e.dotted() == dotted).unwrap();
+
+        let xwayland = find("general.xwayland");
+        assert!(matches(xwayland, "xwayland"));
+        assert!(matches(xwayland, "XWayland"));
+        assert!(matches(xwayland, "   "));
+
+        let radius = find("appearance.corner_radius");
+        assert!(matches(radius, "corner radius"));
+        assert!(matches(radius, "radius corner"));
+        assert!(!matches(radius, "corner border"));
     }
 }
