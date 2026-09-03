@@ -473,10 +473,26 @@ impl eframe::App for App {
                 return;
             }
             if self.healthy && !self.path.exists() {
-                ui.colored_label(
-                    egui::Color32::from_rgb(140, 200, 140),
-                    "Config file does not exist yet; saving will create it.",
-                );
+                ui.add_space(24.0);
+                ui.heading("Welcome to Umbriel Config");
+                ui.add_space(4.0);
+                ui.label(format!(
+                    "No config file exists yet, so umbriel is running on its built-in\n\
+                     defaults. Create {} to start customizing. Umbriel picks up\n\
+                     every change the moment it is saved.",
+                    self.path.display()
+                ));
+                ui.add_space(12.0);
+                if ui
+                    .button("Create config")
+                    .on_hover_text(
+                        "Creates the file; nothing is written until you change something.",
+                    )
+                    .clicked()
+                {
+                    self.save();
+                }
+                return;
             }
             let query = self.search.trim().to_owned();
             if !query.is_empty() {
