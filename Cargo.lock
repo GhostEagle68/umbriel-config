@@ -3132,6 +3132,8 @@ dependencies = [
  "eframe",
  "thiserror 2.0.20",
  "toml_edit",
+ "wayland-client",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]

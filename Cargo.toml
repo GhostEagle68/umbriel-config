@@ -8,3 +8,5 @@ anyhow = "1.0.104"
 eframe = "0.36.1"
 thiserror = "2.0.20"
 toml_edit = "0.25.13"
+wayland-client = "0.31.15"
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
