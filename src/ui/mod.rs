@@ -6,7 +6,7 @@ use eframe::egui;
 use std::path::PathBuf;
 use std::str::FromStr;
 use umbriel_config::config::{
-    discovery, document::ConfigDocument, outputs, schema, state, validate,
+    discovery, document::ConfigDocument, outputs, rules, schema, state, validate,
 };
 use umbriel_config::live;
 
@@ -32,6 +32,8 @@ enum Page {
     /// A top-level schema section, e.g. `"general"`.
     Section(String),
     Outputs,
+    /// Window or layer rules; the payload is the TOML section name.
+    Rules(&'static str),
     /// Keys in the config no other page claims.
     Raw,
 }
@@ -239,6 +241,58 @@ impl App {
         });
     }
 
+    /// Window/layer rules: one collapsible card per `[[section]]` entry.
+    /// Every field starts unset; only what the user fills in is written.
+    fn rules_page(&mut self, ui: &mut egui::Ui, name: &'static str) {
+        let label = if name == "window_rule" {
+            "Window rules"
+        } else {
+            "Layer rules"
+        };
+        let (match_fields, settings_fields): (&[rules::Field], &[rules::Field]) =
+            if name == "window_rule" {
+                (rules::WINDOW_MATCH, rules::WINDOW_SETTINGS)
+            } else {
+                (rules::LAYER_MATCH, rules::LAYER_SETTINGS)
+            };
+        ui.heading(label);
+        ui.separator();
+        if ui.button("Add rule").clicked() {
+            self.doc.add_rule(name);
+        }
+        let count = self.doc.rule_count(name);
+        if count == 0 {
+            ui.add_space(4.0);
+            ui.label(format!(
+                "No {label} yet. Add one — every field starts unset, and only\n\
+                 what you fill in is written to the config."
+            ));
+            return;
+        }
+        ui.add_space(4.0);
+        for index in 0..count {
+            let title = rules::rule_title(&self.doc, name, index, match_fields);
+            egui::CollapsingHeader::new(title)
+                .default_open(count == 1)
+                .id_salt(format!("{name}-{index}"))
+                .show(ui, |ui| {
+                    ui.strong("Match");
+                    for field in match_fields {
+                        rule_field_row(ui, &mut self.doc, name, index, field);
+                    }
+                    ui.add_space(4.0);
+                    ui.strong("Settings");
+                    for field in settings_fields {
+                        rule_field_row(ui, &mut self.doc, name, index, field);
+                    }
+                    ui.add_space(4.0);
+                    if ui.button("Remove rule").clicked() {
+                        self.doc.remove_rule(name, index);
+                    }
+                });
+        }
+    }
+
     fn save(&mut self) {
         self.last_validation = None;
         self.validation_note = None;
@@ -369,6 +423,26 @@ impl eframe::App for App {
                 {
                     self.search.clear();
                 }
+                if ui
+                    .selectable_value(
+                        &mut self.page,
+                        Some(Page::Rules("window_rule")),
+                        "Window rules",
+                    )
+                    .clicked()
+                {
+                    self.search.clear();
+                }
+                if ui
+                    .selectable_value(
+                        &mut self.page,
+                        Some(Page::Rules("layer_rule")),
+                        "Layer rules",
+                    )
+                    .clicked()
+                {
+                    self.search.clear();
+                }
                 if !raw_keys.is_empty() {
                     ui.separator();
                     if ui
@@ -468,6 +542,11 @@ impl eframe::App for App {
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         self.outputs_page(ui);
+                    });
+                }
+                Page::Rules(name) => {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        self.rules_page(ui, name);
                     });
                 }
                 Page::Raw => {
@@ -600,6 +679,136 @@ fn output_field_row(
                 .inner;
             if changed {
                 store_workspaces(doc, &path, &text);
+            }
+        }
+    }
+}
+
+/// One field of one rule card. Rules are user-authored: nothing has a
+/// default, so unset fields stay blank and clearing a field removes it.
+fn rule_field_row(
+    ui: &mut egui::Ui,
+    doc: &mut ConfigDocument,
+    name: &str,
+    index: usize,
+    field: &rules::Field,
+) {
+    let id = format!("rule-{name}-{index}-{}", field.key);
+    match &field.kind {
+        rules::FieldKind::Text => {
+            let mut value = doc.rule_string(name, index, field.key).unwrap_or_default();
+            let changed = ui
+                .horizontal(|ui| {
+                    ui.label(field.label);
+                    ui.text_edit_singleline(&mut value)
+                        .on_hover_text("Leave empty to leave unset")
+                })
+                .inner
+                .changed();
+            if changed {
+                if value.is_empty() {
+                    doc.rule_unset(name, index, field.key);
+                } else {
+                    doc.rule_set_string(name, index, field.key, &value);
+                }
+            }
+        }
+        rules::FieldKind::Toggle => {
+            let mut value = doc.rule_bool(name, index, field.key).unwrap_or(false);
+            if ui.checkbox(&mut value, field.label).changed() {
+                doc.rule_set_bool(name, index, field.key, value);
+            }
+        }
+        rules::FieldKind::Choice(options) => {
+            let mut value = doc.rule_string(name, index, field.key).unwrap_or_default();
+            let original = value.clone();
+            ui.horizontal(|ui| {
+                ui.label(field.label);
+                egui::ComboBox::from_id_salt(id)
+                    .selected_text(if value.is_empty() {
+                        "(unset)".to_owned()
+                    } else {
+                        value.clone()
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut value, String::new(), "(unset)");
+                        for option in *options {
+                            ui.selectable_value(&mut value, (*option).to_owned(), *option);
+                        }
+                    });
+            });
+            if value != original {
+                if value.is_empty() {
+                    doc.rule_unset(name, index, field.key);
+                } else {
+                    doc.rule_set_string(name, index, field.key, &value);
+                }
+            }
+        }
+        rules::FieldKind::Float { min, max } => {
+            let mut value = doc.rule_float(name, index, field.key).unwrap_or(*min);
+            if ui
+                .add(egui::Slider::new(&mut value, *min..=*max).text(field.label))
+                .changed()
+            {
+                doc.rule_set_float(name, index, field.key, value);
+            }
+        }
+        rules::FieldKind::Integer { min, max } => {
+            let mut value = doc.rule_integer(name, index, field.key).unwrap_or(*min);
+            if ui
+                .add(egui::Slider::new(&mut value, *min..=*max).text(field.label))
+                .changed()
+            {
+                doc.rule_set_integer(name, index, field.key, value);
+            }
+        }
+        rules::FieldKind::Size => {
+            let current = doc
+                .rule_integers(name, index, field.key)
+                .unwrap_or_default();
+            let mut width = current.first().copied().unwrap_or(1920);
+            let mut height = current.get(1).copied().unwrap_or(1080);
+            let changed = ui
+                .horizontal(|ui| {
+                    ui.label(field.label);
+                    let width_changed = ui.add(egui::DragValue::new(&mut width)).changed();
+                    let height_changed = ui.add(egui::DragValue::new(&mut height)).changed();
+                    width_changed || height_changed
+                })
+                .inner;
+            if changed {
+                doc.rule_set_integers(name, index, field.key, &[width, height]);
+            }
+        }
+        rules::FieldKind::Position => {
+            let (mut x, mut y, mut anchor) = doc
+                .rule_position(name, index, field.key)
+                .unwrap_or((0, 0, None));
+            let changed = ui
+                .horizontal(|ui| {
+                    ui.label(field.label);
+                    let x_changed = ui.add(egui::DragValue::new(&mut x)).changed();
+                    let y_changed = ui.add(egui::DragValue::new(&mut y)).changed();
+                    let mut anchor_changed = false;
+                    egui::ComboBox::from_id_salt(format!("{id}-anchor"))
+                        .selected_text(anchor.clone().unwrap_or_else(|| "anchor".to_owned()))
+                        .show_ui(ui, |ui| {
+                            for candidate in rules::ANCHORS {
+                                anchor_changed |= ui
+                                    .selectable_value(
+                                        &mut anchor,
+                                        Some((*candidate).to_owned()),
+                                        *candidate,
+                                    )
+                                    .changed();
+                            }
+                        });
+                    x_changed || y_changed || anchor_changed
+                })
+                .inner;
+            if changed {
+                doc.rule_set_position(name, index, field.key, x, y, anchor.as_deref());
             }
         }
     }
