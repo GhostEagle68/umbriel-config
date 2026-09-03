@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toml_edit::{DocumentMut, Item, Table, Value};
+use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -170,6 +170,48 @@ impl ConfigDocument {
         Self::item_at(&self.doc, path)?.as_str().map(str::to_owned)
     }
 
+    pub fn get_integers(&self, path: &[&str]) -> Option<Vec<i64>> {
+        let array = Self::item_at(&self.doc, path)?.as_value()?.as_array()?;
+        array.iter().map(|value| value.as_integer()).collect()
+    }
+
+    pub fn get_strings(&self, path: &[&str]) -> Option<Vec<String>> {
+        let array = Self::item_at(&self.doc, path)?.as_value()?.as_array()?;
+        array
+            .iter()
+            .map(|value| value.as_str().map(str::to_owned))
+            .collect()
+    }
+
+    pub fn set_integers(&mut self, path: &[&str], values: &[i64]) {
+        let mut array = Array::new();
+        for value in values {
+            array.push(*value);
+        }
+        Self::set_value(&mut self.doc, path, Value::Array(array));
+    }
+
+    pub fn set_strings(&mut self, path: &[&str], values: &[String]) {
+        let mut array = Array::new();
+        for value in values {
+            array.push(value.as_str());
+        }
+        Self::set_value(&mut self.doc, path, Value::Array(array));
+    }
+
+    /// Keys of the direct child tables of `path`, in file order; scalar and
+    /// array-of-table entries are skipped.
+    pub fn table_names(&self, path: &[&str]) -> Vec<String> {
+        let Some(table) = Self::item_at(&self.doc, path).and_then(Item::as_table) else {
+            return Vec::new();
+        };
+        table
+            .iter()
+            .filter(|(_, item)| item.as_table().is_some())
+            .map(|(key, _)| key.to_owned())
+            .collect()
+    }
+
     pub fn set_bool(&mut self, path: &[&str], value: bool) {
         Self::set_value(&mut self.doc, path, value.into());
     }
@@ -314,5 +356,35 @@ curve = \"easeout\"
     fn parse_errors_report_the_path() {
         let err = ConfigDocument::from_str("not [valid").unwrap_err();
         assert!(err.to_string().contains("invalid TOML"));
+    }
+
+    #[test]
+    fn array_accessors_round_trip_and_create_quoted_tables() {
+        let mut doc = ConfigDocument::from_str(SAMPLE).unwrap();
+        doc.set_integers(&["output", "DP-3", "position"], &[-1920, 0]);
+        assert_eq!(
+            doc.get_integers(&["output", "DP-3", "position"]),
+            Some(vec![-1920, 0])
+        );
+        doc.set_strings(
+            &["output", "DP-3", "workspaces"],
+            &["Games".to_owned(), "Chat".to_owned()],
+        );
+        assert_eq!(
+            doc.get_strings(&["output", "DP-3", "workspaces"]),
+            Some(vec!["Games".to_owned(), "Chat".to_owned()])
+        );
+        // Dashes are valid in bare TOML keys, so new tables render unquoted;
+        // `[output."DP-3"]` in an existing file parses to the same table and
+        // is never rewritten.
+        assert!(doc.text().contains("[output.DP-3]"));
+    }
+
+    #[test]
+    fn array_getters_reject_mixed_types() {
+        let mut doc = ConfigDocument::from_str(SAMPLE).unwrap();
+        doc.set_strings(&["output", "DP-3", "workspaces"], &["Games".to_owned()]);
+        assert_eq!(doc.get_integers(&["output", "DP-3", "workspaces"]), None);
+        assert_eq!(doc.get_strings(&["general", "xwayland"]), None);
     }
 }
