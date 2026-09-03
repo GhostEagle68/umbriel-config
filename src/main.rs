@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, bail};
 
 use umbriel_config::config::{discovery, document::ConfigDocument, validate};
+use umbriel_config::live;
 
 mod ui;
 
@@ -42,7 +43,34 @@ fn run() -> Result<()> {
         }
         "get" => get(&path, rest),
         "set" => set(&path, rest),
-        other => bail!("unknown command '{other}'; expected gui, path, get, or set"),
+        "outputs" => match live::outputs() {
+            Ok(list) => {
+                if list.is_empty() {
+                    println!("no outputs reported by the compositor");
+                }
+                for output in &list {
+                    println!(
+                        "{} \"{}\"{}",
+                        output.name,
+                        output.description,
+                        if output.enabled { "" } else { " (disabled)" }
+                    );
+                    for (index, mode) in output.modes.iter().enumerate() {
+                        let mut tags = String::new();
+                        if Some(index) == output.current {
+                            tags.push_str(" (current)");
+                        }
+                        if mode.preferred {
+                            tags.push_str(" (preferred)");
+                        }
+                        println!("  {}{}", mode.label(), tags);
+                    }
+                }
+                Ok(())
+            }
+            Err(err) => bail!("live outputs unavailable: {err}"),
+        },
+        other => bail!("unknown command '{other}'; expected gui, path, get, set, or outputs"),
     }
 }
 
