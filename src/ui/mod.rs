@@ -73,6 +73,8 @@ struct App {
     /// Text buffers for the Keybinds page's add row.
     add_chord: String,
     add_action: String,
+    /// True while waiting for a key press to record as a chord.
+    recording_chord: bool,
 }
 
 impl App {
@@ -113,6 +115,7 @@ impl App {
             actions: keybinds::builtin_actions(),
             add_chord: String::new(),
             add_action: String::new(),
+            recording_chord: false,
         }
     }
 
@@ -314,6 +317,42 @@ impl App {
     /// Keybinds: the user's chord overrides. Actions are free text — the
     /// dropdown only suggests the installed umbriel's live vocabulary.
     fn keybinds_page(&mut self, ui: &mut egui::Ui) {
+        if self.recording_chord {
+            let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
+            for event in events {
+                let egui::Event::Key {
+                    key,
+                    modifiers,
+                    pressed: true,
+                    repeat: false,
+                    ..
+                } = event
+                else {
+                    continue;
+                };
+                if key == egui::Key::Escape {
+                    self.recording_chord = false;
+                    break;
+                }
+                if let Some(name) = key_name(key) {
+                    let mut chord = String::from("Mod");
+                    if modifiers.shift {
+                        chord.push_str("+Shift");
+                    }
+                    if modifiers.ctrl {
+                        chord.push_str("+Ctrl");
+                    }
+                    if modifiers.alt {
+                        chord.push_str("+Alt");
+                    }
+                    chord.push('+');
+                    chord.push_str(&name);
+                    self.add_chord = chord;
+                    self.recording_chord = false;
+                    break;
+                }
+            }
+        }
         ui.heading("Keybinds");
         ui.separator();
         let mut mod_key = self
@@ -339,6 +378,13 @@ impl App {
             keybind_row(ui, &mut self.doc, index, bind, &self.actions);
         }
         ui.add_space(8.0);
+        if self.recording_chord {
+            ui.colored_label(
+                egui::Color32::from_rgb(140, 200, 140),
+                "Press a key combination now — with Shift/Ctrl/Alt if you like; \"Mod\" is\n\
+                 added automatically. Esc cancels.",
+            );
+        }
         ui.horizontal(|ui| {
             ui.label("Add keybind");
             ui.add(
@@ -347,6 +393,20 @@ impl App {
                     .desired_width(110.0),
             )
             .on_hover_text(keybinds::CHORD_HINT);
+            if ui
+                .button(if self.recording_chord {
+                    "⏺ recording…"
+                } else {
+                    "⏺ keys"
+                })
+                .on_hover_text(
+                    "Press the combination you want instead of typing it; \"Mod\" is added\n\
+                     automatically because the compositor keeps those keys for itself.",
+                )
+                .clicked()
+            {
+                self.recording_chord = !self.recording_chord;
+            }
             egui::ComboBox::from_id_salt("keybind-add-action")
                 .selected_text(if self.add_action.is_empty() {
                     "pick an action".to_owned()
@@ -354,10 +414,22 @@ impl App {
                     self.add_action.clone()
                 })
                 .show_ui(ui, |ui| {
+                    let search_id = egui::Id::new("keybind-add-action-search");
+                    let mut filter = combo_filter(ui, search_id);
+                    ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search actions…"));
+                    ui.memory_mut(|mem| mem.data.insert_temp(search_id, filter.clone()));
+                    let needle = filter.to_lowercase();
                     egui::ScrollArea::vertical()
                         .max_height(300.0)
                         .show(ui, |ui| {
                             for live in &self.actions {
+                                if !needle.is_empty()
+                                    && !format!("{} {} {}", live.name, live.param, live.summary)
+                                        .to_lowercase()
+                                        .contains(&needle)
+                                {
+                                    continue;
+                                }
                                 let value = if live.param.is_empty() {
                                     live.name.clone()
                                 } else {
@@ -1019,10 +1091,22 @@ fn keybind_row(
         egui::ComboBox::from_id_salt(format!("keybind-action-{index}"))
             .selected_text("pick action")
             .show_ui(ui, |ui| {
+                let search_id = egui::Id::new(format!("keybind-row-search-{index}"));
+                let mut filter = combo_filter(ui, search_id);
+                ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search actions…"));
+                ui.memory_mut(|mem| mem.data.insert_temp(search_id, filter.clone()));
+                let needle = filter.to_lowercase();
                 egui::ScrollArea::vertical()
                     .max_height(300.0)
                     .show(ui, |ui| {
                         for live in actions {
+                            if !needle.is_empty()
+                                && !format!("{} {} {}", live.name, live.param, live.summary)
+                                    .to_lowercase()
+                                    .contains(&needle)
+                            {
+                                continue;
+                            }
                             let value = if live.param.is_empty() {
                                 live.name.clone()
                             } else {
@@ -1412,4 +1496,80 @@ fn color_to_hex(color: egui::Color32) -> String {
         color.b(),
         color.a()
     )
+}
+
+/// The per-dropdown search buffer, persisted in egui's memory under `id`
+/// so each dropdown remembers its own filter.
+fn combo_filter(ui: &mut egui::Ui, id: egui::Id) -> String {
+    ui.memory_mut(|mem| {
+        let filter = mem
+            .data
+            .get_temp_mut_or_insert_with(id, String::new)
+            .clone();
+        mem.data.insert_temp(id, filter.clone());
+        filter
+    })
+}
+
+/// egui key → xkb keysym name for recorded chords; `None` for keys that
+/// cannot start a chord (clipboard commands and unmapped extras).
+fn key_name(key: egui::Key) -> Option<String> {
+    use egui::Key as K;
+    let debug = format!("{key:?}");
+    // Letters render as one capital letter ("A".."Z") in Debug.
+    if debug.len() == 1 {
+        return Some(debug.to_lowercase());
+    }
+    // Digits render as "Num0".."Num9".
+    if let Some(digit) = debug.strip_prefix("Num") {
+        return Some(digit.to_owned());
+    }
+    let name = match key {
+        K::Enter => "Return",
+        K::Space => "space",
+        K::Tab => "Tab",
+        K::Backspace => "BackSpace",
+        K::ArrowLeft => "Left",
+        K::ArrowRight => "Right",
+        K::ArrowUp => "Up",
+        K::ArrowDown => "Down",
+        K::Home => "Home",
+        K::End => "End",
+        K::PageUp => "Page_Up",
+        K::PageDown => "Page_Down",
+        K::Insert => "Insert",
+        K::Delete => "Delete",
+        K::Backtick => "grave",
+        K::Minus => "minus",
+        K::Equals => "equal",
+        K::Comma => "comma",
+        K::Period => "period",
+        K::Slash => "slash",
+        K::Backslash => "backslash",
+        K::Semicolon => "semicolon",
+        K::Quote => "apostrophe",
+        K::OpenBracket => "bracketleft",
+        K::CloseBracket => "bracketright",
+        K::OpenCurlyBracket => "braceleft",
+        K::CloseCurlyBracket => "braceright",
+        K::Colon => "colon",
+        K::Pipe => "bar",
+        K::Questionmark => "question",
+        K::Exclamationmark => "exclam",
+        K::Plus => "plus",
+        K::F1 => "F1",
+        K::F2 => "F2",
+        K::F3 => "F3",
+        K::F4 => "F4",
+        K::F5 => "F5",
+        K::F6 => "F6",
+        K::F7 => "F7",
+        K::F8 => "F8",
+        K::F9 => "F9",
+        K::F10 => "F10",
+        K::F11 => "F11",
+        K::F12 => "F12",
+        _ => return None,
+    };
+    Some(name.to_owned())
 }
