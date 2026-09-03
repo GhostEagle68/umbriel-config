@@ -558,3 +558,74 @@ pub const ACTIONS: &[Action] = &[
 pub const CHORD_HINT: &str = "Modifiers: Mod (your mod_key), Ctrl, Alt, Shift, Super/Logo/Win. \
 The last token is the key — case-sensitive, e.g. T, Return, XF86AudioRaiseVolume, \
 MouseMiddle, WheelUp. Submap-scoped binds: submap[name],chord.";
+
+/// A runtime action parsed from the installed umbriel (owned strings).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveAction {
+    pub name: String,
+    pub param: String,
+    pub summary: String,
+}
+
+/// The committed snapshot as owned actions — the fallback whenever the
+/// installed umbriel cannot be asked.
+pub fn builtin_actions() -> Vec<LiveAction> {
+    ACTIONS
+        .iter()
+        .map(|action| LiveAction {
+            name: action.name.to_owned(),
+            param: action.param.to_owned(),
+            summary: action.summary.to_owned(),
+        })
+        .collect()
+}
+
+/// Parse `umbriel msg --help`: unindented lines are category headers, and
+/// action lines read `  name[:<param>]  summary`. Anything unparsable is
+/// skipped; an empty result makes callers fall back to the snapshot.
+pub fn actions_from_help(text: &str) -> Vec<LiveAction> {
+    let mut actions = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("  ") else {
+            continue;
+        };
+        let Some((token, summary)) = rest.split_once("  ") else {
+            continue;
+        };
+        let summary = summary.trim();
+        if token.is_empty() || summary.is_empty() {
+            continue;
+        }
+        let (name, param) = match token.split_once(':') {
+            Some((name, param)) => (name, param),
+            None => (token, ""),
+        };
+        actions.push(LiveAction {
+            name: name.to_owned(),
+            param: param.to_owned(),
+            summary: summary.to_owned(),
+        });
+    }
+    actions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_msg_help_output() {
+        let text = "Usage: umbriel msg <action> [args...]\n\
+                    \n\
+                    Apps\n  spawn:<cmd>  Run a command\n\
+                    \n\
+                    Focus\n  window-focus-left        Focus the window to the left\n";
+        let actions = actions_from_help(text);
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].name, "spawn");
+        assert_eq!(actions[0].param, "<cmd>");
+        assert_eq!(actions[0].summary, "Run a command");
+        assert_eq!(actions[1].name, "window-focus-left");
+        assert_eq!(actions[1].param, "");
+    }
+}
