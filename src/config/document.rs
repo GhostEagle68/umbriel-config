@@ -183,7 +183,20 @@ impl ConfigDocument {
             .collect()
     }
 
+    pub fn get_floats(&self, path: &[&str]) -> Option<Vec<f64>> {
+        let array = Self::item_at(&self.doc, path)?.as_value()?.as_array()?;
+        array.iter().map(|value| value.as_float()).collect()
+    }
+
     pub fn set_integers(&mut self, path: &[&str], values: &[i64]) {
+        let mut array = Array::new();
+        for value in values {
+            array.push(*value);
+        }
+        Self::set_value(&mut self.doc, path, Value::Array(array));
+    }
+
+    pub fn set_floats(&mut self, path: &[&str], values: &[f64]) {
         let mut array = Array::new();
         for value in values {
             array.push(*value);
@@ -231,6 +244,14 @@ impl ConfigDocument {
         table.remove(last).is_some()
     }
 
+    /// Dotted paths of every leaf item: values and arrays, tables recursed,
+    /// array-of-tables recorded as a single leaf for their section name.
+    pub fn value_paths(&self) -> Vec<String> {
+        let mut paths = Vec::new();
+        walk_paths(self.doc.as_table(), &mut Vec::new(), &mut paths);
+        paths
+    }
+
     pub fn set_bool(&mut self, path: &[&str], value: bool) {
         Self::set_value(&mut self.doc, path, value.into());
     }
@@ -252,6 +273,18 @@ fn backup_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(".bak");
     PathBuf::from(name)
+}
+
+fn walk_paths(table: &Table, prefix: &mut Vec<String>, out: &mut Vec<String>) {
+    for (key, item) in table.iter() {
+        prefix.push(key.to_owned());
+        match item {
+            Item::Value(_) | Item::ArrayOfTables(_) => out.push(prefix.join(".")),
+            Item::Table(nested) => walk_paths(nested, prefix, out),
+            Item::None => {}
+        }
+        prefix.pop();
+    }
 }
 
 #[cfg(test)]
@@ -408,6 +441,32 @@ curve = \"easeout\"
         assert!(doc.text().contains("eDP-1"));
         assert_eq!(doc.get_integer(&["output", "eDP-1", "scale"]), Some(2));
         assert!(!doc.remove_table(&["output", "missing"]));
+    }
+
+    #[test]
+    fn value_paths_list_leaves_with_tables_recursed() {
+        let text = "[general]\nxwayland = true\n\n[output.\"DP-3\"]\nposition = [0, 0]\n\n[[window_rule]]\nmatch.app_id = \"kitty\"\n";
+        let doc = ConfigDocument::from_str(text).unwrap();
+        assert_eq!(
+            doc.value_paths(),
+            vec![
+                "general.xwayland".to_owned(),
+                "output.DP-3.position".to_owned(),
+                // Array-of-tables collapse to their section name.
+                "window_rule".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn float_arrays_round_trip() {
+        let mut doc = ConfigDocument::from_str("[layout]\nwidth_presets = [0.333, 0.5]\n").unwrap();
+        assert_eq!(
+            doc.get_floats(&["layout", "width_presets"]),
+            Some(vec![0.333, 0.5])
+        );
+        doc.set_floats(&["layout", "width_presets"], &[0.25, 0.5, 0.75]);
+        assert!(doc.text().contains("width_presets = [0.25, 0.5, 0.75]"));
     }
 
     #[test]

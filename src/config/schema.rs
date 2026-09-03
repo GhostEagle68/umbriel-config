@@ -21,6 +21,8 @@ pub enum Kind {
         max: Option<f64>,
     },
     Text,
+    /// Array of scalars, edited as a comma-separated string in the element type.
+    List,
     /// Fixed vocabulary mined from the value's comment, e.g.
     /// `# popin, zoom, slide, fade, none`.
     Choice(Vec<String>),
@@ -199,8 +201,7 @@ fn walk_table(table: &toml_edit::Table, path: &mut Vec<String>, out: &mut Vec<En
             Item::Table(nested) => {
                 walk_table(nested, path, out);
             }
-            // Arrays (autostart, width_presets), tables-of-tables (window
-            // rules), and array values get dedicated editors later.
+            // Tables-of-tables (window rules) get a dedicated editor later.
             _ => {}
         }
         path.pop();
@@ -212,7 +213,7 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
         return None;
     }
     let (kind, default) = match value {
-        toml_edit::Value::Boolean(v) => (Kind::Bool, Value::Bool(*v.value())),
+        toml_edit::Value::Boolean(v) => (Kind::Bool, Some(Value::Bool(*v.value()))),
         toml_edit::Value::Integer(v) => {
             let raw = *v.value();
             let range = v
@@ -225,7 +226,7 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
                     min: range.map(|r| r.0 as i64),
                     max: range.map(|r| r.1 as i64),
                 },
-                Value::Integer(raw),
+                Some(Value::Integer(raw)),
             )
         }
         toml_edit::Value::Float(v) => {
@@ -240,7 +241,7 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
                     min: range.map(|r| r.0),
                     max: range.map(|r| r.1),
                 },
-                Value::Float(raw),
+                Some(Value::Float(raw)),
             )
         }
         toml_edit::Value::String(v) => {
@@ -253,8 +254,9 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
                     .and_then(mine_choices)
                     .map_or(Kind::Text, Kind::Choice)
             };
-            (kind, Value::Text(text.to_owned()))
+            (kind, Some(Value::Text(text.to_owned())))
         }
+        toml_edit::Value::Array(_) => (Kind::List, None),
         _ => return None,
     };
     let dotted = path.join(".");
@@ -264,7 +266,7 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
         path: path.to_vec(),
         section: section.to_owned(),
         kind,
-        default: Some(default),
+        default,
     })
 }
 
@@ -411,6 +413,24 @@ pub fn diff(old: &BTreeSet<String>, new: &BTreeSet<String>) -> SchemaDiff {
     }
 }
 
+/// Config families owned by dedicated surfaces — the Outputs page, or
+/// editors on the roadmap — rather than schema pages.
+const MANAGED_SECTIONS: &[&str] = &["include", "keybinds", "output", "window_rule", "layer_rule"];
+
+/// Document keys no surface claims: not in the assembled schema and not in
+/// a managed family. These belong on the Raw page so nothing in a user's
+/// config is ever silently invisible.
+pub fn uncovered(paths: &[String], schema_keys: &BTreeSet<String>) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| {
+            let top = path.split('.').next().unwrap_or_default();
+            !MANAGED_SECTIONS.contains(&top) && !schema_keys.contains(*path)
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,8 +507,19 @@ files = []
         let entries = assemble(FIXTURE);
         assert!(entries.iter().all(|e| e.dotted() != "include.files"));
         assert!(entries.iter().all(|e| e.path[0] != "keybinds"));
-        assert!(entries.iter().all(|e| e.dotted() != "general.autostart"));
-        assert_eq!(entries.len(), 11);
+        assert_eq!(entries.len(), 12);
+    }
+
+    #[test]
+    fn arrays_become_list_entries() {
+        let entries = assemble(FIXTURE);
+        let autostart = entries
+            .iter()
+            .find(|e| e.dotted() == "general.autostart")
+            .expect("array entry");
+        assert_eq!(autostart.kind, Kind::List);
+        assert_eq!(autostart.default, None);
+        assert_eq!(autostart.label, "Autostart");
     }
 
     #[test]
@@ -581,6 +612,26 @@ focus_on_activate = false
     fn diff_of_equal_sets_is_empty() {
         let set = BTreeSet::from(["a".to_owned()]);
         assert!(diff(&set, &set).is_empty());
+    }
+
+    #[test]
+    fn uncovered_lists_only_unclaimed_keys() {
+        let keys = key_set(&assemble(FIXTURE));
+        let paths = vec![
+            "general.xwayland".to_owned(),
+            "environment.PROTON_ENABLE_WAYLAND".to_owned(),
+            "events.lid_close".to_owned(),
+            "keybinds.Mod+Return".to_owned(),
+            "output.DP-3.scale".to_owned(),
+            "window_rule".to_owned(),
+        ];
+        assert_eq!(
+            uncovered(&paths, &keys),
+            vec![
+                "environment.PROTON_ENABLE_WAYLAND".to_owned(),
+                "events.lid_close".to_owned(),
+            ]
+        );
     }
 
     #[test]
