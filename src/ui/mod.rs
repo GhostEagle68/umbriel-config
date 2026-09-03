@@ -204,17 +204,21 @@ impl App {
                             output_field_row(ui, &mut self.doc, name, field, live);
                         }
                         ui.add_space(4.0);
-                        if ui
-                            .small_button(
+                        let remove = ui.add_enabled(
+                            names.len() > 1,
+                            egui::Button::new(
                                 egui::RichText::new("Remove output")
                                     .color(egui::Color32::from_rgb(240, 100, 100)),
                             )
+                            .small(),
+                        );
+                        let remove = remove
                             .on_hover_text(
                                 "Deletes this output's block from the config; umbriel's\n\
                                  defaults apply after saving. Nothing is written until Save.",
                             )
-                            .clicked()
-                        {
+                            .on_disabled_hover_text("The only output cannot be removed.");
+                        if remove.clicked() {
                             self.doc.remove_table(&["output", name]);
                         }
                     }
