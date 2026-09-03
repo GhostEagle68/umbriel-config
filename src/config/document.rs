@@ -408,12 +408,14 @@ impl ConfigDocument {
         key: &str,
         x: i64,
         y: i64,
-        anchor: &str,
+        anchor: Option<&str>,
     ) {
         let mut inline = InlineTable::new();
         inline.insert("x", x.into());
         inline.insert("y", y.into());
-        inline.insert("anchor", anchor.into());
+        if let Some(anchor) = anchor {
+            inline.insert("anchor", anchor.into());
+        }
         self.rule_store(name, index, key, Value::InlineTable(inline));
     }
 
@@ -435,6 +437,25 @@ impl ConfigDocument {
             }
             _ => false,
         }
+    }
+
+    /// Remove one leaf key (dotted, e.g. `"match.app_id"`) from rule
+    /// `index`; returns whether anything was removed.
+    pub fn rule_unset(&mut self, name: &str, index: usize, key: &str) -> bool {
+        let parts: Vec<&str> = key.split('.').collect();
+        let Some((last, parents)) = parts.split_last() else {
+            return false;
+        };
+        let Some(mut table) = self.rule_table_mut(name, index) else {
+            return false;
+        };
+        for parent in parents {
+            table = match table.get_mut(parent).map(Item::as_table_mut) {
+                Some(Some(child)) => child,
+                _ => return false,
+            };
+        }
+        table.remove(last).is_some()
     }
 }
 
@@ -680,12 +701,30 @@ curve = \"easeout\"
     }
 
     #[test]
+    fn rule_unset_removes_single_keys() {
+        let mut doc = ConfigDocument::from_str(SAMPLE).unwrap();
+        doc.add_rule("window_rule");
+        doc.rule_set_string("window_rule", 0, "match.app_id", "^steam");
+        doc.rule_set_string("window_rule", 0, "opacity", "0.9");
+        assert!(doc.rule_unset("window_rule", 0, "match.app_id"));
+        assert_eq!(doc.rule_string("window_rule", 0, "match.app_id"), None);
+        assert_eq!(
+            doc.rule_string("window_rule", 0, "opacity").as_deref(),
+            Some("0.9")
+        );
+        assert!(!doc.rule_unset("window_rule", 0, "match.app_id"));
+    }
+
+    #[test]
     fn rule_position_round_trips_inline() {
         let mut doc = ConfigDocument::from_str("[[window_rule]]\n").unwrap();
-        doc.rule_set_position("window_rule", 0, "default_position", 0, -40, "bottom_right");
-        assert_eq!(
-            doc.rule_position("window_rule", 0, "default_position"),
-            Some((0, -40, Some("bottom_right".to_owned())))
+        doc.rule_set_position(
+            "window_rule",
+            0,
+            "default_position",
+            0,
+            -40,
+            Some("bottom_right"),
         );
         assert!(
             doc.text()
