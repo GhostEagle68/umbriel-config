@@ -2,12 +2,10 @@
 //! validation. Pages render from the schema assembled from umbriel's
 //! packaged default config; changes write through to the document.
 
+use eframe::egui;
 use std::path::PathBuf;
 use std::str::FromStr;
-
-use eframe::egui;
-
-use umbriel_config::config::{discovery, document::ConfigDocument, schema, validate};
+use umbriel_config::config::{discovery, document::ConfigDocument, schema, state, validate};
 
 /// Launch the GUI for `path`.
 pub fn run(path: PathBuf) -> anyhow::Result<()> {
@@ -39,6 +37,8 @@ struct App {
     schema: Vec<schema::Entry>,
     /// Selected top-level section, e.g. `"general"`.
     section: Option<String>,
+    /// Notice from schema sync or the startup drift check; dismissable.
+    schema_note: Option<String>,
 }
 
 impl App {
@@ -53,10 +53,9 @@ impl App {
                 Some(err.to_string()),
             ),
         };
-        let schema = discovery::packaged_default(&discovery::Env::from_process())
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .map(|text| schema::assemble(&text))
-            .unwrap_or_default();
+        let env = discovery::Env::from_process();
+        let schema = Self::load_schema(&env);
+        let schema_note = Self::startup_note(&env, &schema);
         Self {
             path,
             doc,
@@ -66,6 +65,32 @@ impl App {
             validation_note: None,
             schema,
             section: None,
+            schema_note,
+        }
+    }
+
+    /// Re-read the packaged default and swap in the fresh schema. Never
+    /// touches the user's config; a new key shows its default until edited.
+    fn sync_schema(&mut self) {
+        let env = discovery::Env::from_process();
+        let fresh = Self::load_schema(&env);
+        let fresh_set = schema::key_set(&fresh);
+        let drift = schema::diff(&schema::key_set(&self.schema), &fresh_set);
+        let _ = state::store(&state::snapshot_path(&env), &fresh_set);
+        self.schema_note = Some(if fresh.is_empty() {
+            "No packaged default found; install umbriel and sync again.".to_owned()
+        } else if drift.is_empty() {
+            "Schema is up to date.".to_owned()
+        } else {
+            format!("Synced from umbriel: {}.", drift.summary())
+        });
+        self.schema = fresh;
+        if !self
+            .section
+            .as_ref()
+            .is_some_and(|current| self.sections().contains(current))
+        {
+            self.section = None;
         }
     }
 
@@ -93,6 +118,25 @@ impl App {
         }
         sections
     }
+
+    /// Schema from the installed packaged default; empty when unavailable.
+    fn load_schema(env: &discovery::Env) -> Vec<schema::Entry> {
+        discovery::packaged_default(env)
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .map(|text| schema::assemble(&text))
+            .unwrap_or_default()
+    }
+
+    /// Diff the fresh schema against the last run's snapshot and refresh it.
+    /// Silent on the first run (no snapshot yet) and when nothing changed.
+    fn startup_note(env: &discovery::Env, entries: &[schema::Entry]) -> Option<String> {
+        let current = schema::key_set(entries);
+        let seen = state::load(&state::snapshot_path(env));
+        let drift = schema::diff(&seen, &current);
+        let _ = state::store(&state::snapshot_path(env), &current);
+        (!seen.is_empty() && !drift.is_empty())
+            .then(|| format!("Umbriel changed since last run: {}.", drift.summary()))
+    }
 }
 
 fn top_level(section: &str) -> String {
@@ -108,6 +152,9 @@ impl eframe::App for App {
                 ui.label(self.path.display().to_string());
                 if self.doc.is_modified() {
                     ui.colored_label(egui::Color32::from_rgb(230, 180, 80), "unsaved changes");
+                }
+                if ui.button("Sync schema").clicked() {
+                    self.sync_schema();
                 }
                 if ui.button("Save").clicked() && self.healthy {
                     self.save();
@@ -129,6 +176,17 @@ impl eframe::App for App {
         if let Some(note) = &self.validation_note {
             egui::Panel::top("validation_note").show(ui, |ui| {
                 ui.colored_label(egui::Color32::from_rgb(240, 100, 100), note);
+            });
+        }
+        let schema_note = self.schema_note.clone();
+        if let Some(note) = schema_note {
+            egui::Panel::top("schema_note").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.colored_label(egui::Color32::from_rgb(140, 200, 140), note);
+                    if ui.small_button("Dismiss").clicked() {
+                        self.schema_note = None;
+                    }
+                });
             });
         }
         egui::Panel::left("sidebar").show(ui, |ui| {
