@@ -12,9 +12,20 @@ use toml_edit::{DocumentMut, Item};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
     Bool,
-    Integer { min: Option<i64>, max: Option<i64> },
-    Float { min: Option<f64>, max: Option<f64> },
+    Integer {
+        min: Option<i64>,
+        max: Option<i64>,
+    },
+    Float {
+        min: Option<f64>,
+        max: Option<f64>,
+    },
     Text,
+    /// Fixed vocabulary mined from the value's comment, e.g.
+    /// `# popin, zoom, slide, fade, none`.
+    Choice(Vec<String>),
+    /// `#RRGGBB` or `#RRGGBBAA` color string.
+    Color,
 }
 
 /// A typed scalar value; also used for defaults.
@@ -154,16 +165,13 @@ fn classify_value(raw: &str) -> Option<(Kind, Value)> {
             Value::Float(value),
         ));
     }
-    let quoted = raw
-        .strip_prefix('"')
-        .and_then(|rest| rest.split_once('"'))
-        .map(|(value, _)| value)
-        .or_else(|| {
-            raw.strip_prefix('\'')
-                .and_then(|rest| rest.split_once('\''))
-                .map(|(value, _)| value)
-        })?;
-    Some((Kind::Text, Value::Text(quoted.to_owned())))
+    let (value, trailing) = quoted_text(raw, '"').or_else(|| quoted_text(raw, '\''))?;
+    let kind = if is_color(value) {
+        Kind::Color
+    } else {
+        mine_choices(trailing).map_or(Kind::Text, Kind::Choice)
+    };
+    Some((kind, Value::Text(value.to_owned())))
 }
 
 /// Derive entries from a packaged default config. Active keys only here;
@@ -235,7 +243,18 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
                 Value::Float(raw),
             )
         }
-        toml_edit::Value::String(v) => (Kind::Text, Value::Text(v.value().to_owned())),
+        toml_edit::Value::String(v) => {
+            let text = v.value();
+            let suffix = v.decor().suffix().and_then(toml_edit::RawString::as_str);
+            let kind = if is_color(text) {
+                Kind::Color
+            } else {
+                suffix
+                    .and_then(mine_choices)
+                    .map_or(Kind::Text, Kind::Choice)
+            };
+            (kind, Value::Text(text.to_owned()))
+        }
         _ => return None,
     };
     let dotted = path.join(".");
@@ -266,6 +285,43 @@ fn mine_range(decor: &str) -> Option<(f64, f64)> {
     let min: f64 = a.split_whitespace().next().unwrap_or(&a).parse().ok()?;
     let max: f64 = b.split_whitespace().next().unwrap_or(&b).parse().ok()?;
     (max >= min).then_some((min, max))
+}
+
+/// Best-effort vocabulary from a value's trailing comment: comma-separated
+/// words (`# popin, zoom, fade`) or ` or `-separated words
+/// (`# "scrolling" or "dwindle"`). Any piece that is not a single word
+/// rejects the whole comment, so prose never becomes a dropdown.
+fn mine_choices(comment: &str) -> Option<Vec<String>> {
+    let body = comment.split('#').nth(1)?.trim();
+    let separator = if body.contains(" or ") { " or " } else { "," };
+    let words: Vec<String> = body
+        .split(separator)
+        .map(|word| word.trim().trim_matches('"').to_owned())
+        .collect();
+    (words.len() >= 2 && words.iter().all(|word| is_word_like(word))).then_some(words)
+}
+
+fn is_word_like(word: &str) -> bool {
+    !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// `#RRGGBB` or `#RRGGBBAA`.
+fn is_color(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix('#') else {
+        return false;
+    };
+    (hex.len() == 6 || hex.len() == 8) && hex.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// A quoted string and whatever follows the closing quote (the trailing
+/// comment for commented-out keys).
+fn quoted_text(raw: &str, quote: char) -> Option<(&str, &str)> {
+    let rest = raw.strip_prefix(quote)?;
+    let end = rest.find(quote)?;
+    Some((&rest[..end], &rest[end + 1..]))
 }
 
 fn overlay_label(dotted: &str, key: &str) -> String {
@@ -359,8 +415,7 @@ pub fn diff(old: &BTreeSet<String>, new: &BTreeSet<String>) -> SchemaDiff {
 mod tests {
     use super::*;
 
-    const FIXTURE: &str = "\
-[general]
+    const FIXTURE: &str = r##"[general]
 xwayland = true                # requires restart
 autostart = []
 
@@ -368,7 +423,7 @@ autostart = []
 border_width = 2               # 0-100
 corner_radius = 10
 drag_opacity = 0.75            # 0.0-1.0
-mod_hint = \"left\"
+mod_hint = "left"
 
 [appearance.blur]
 passes = 3                     # 0-8
@@ -377,12 +432,19 @@ noise = 0.02                   # 0.0-1.0
 [appearance.shadow]
 offset_x = 2                   # -200 to 200
 
+[layout]
+mode = "dwindle"               # "scrolling" or "dwindle"
+
+[colors]
+background = "#141419FF"
+# accent = "#7AA3FFFF"
+
 [include]
 files = []
 
 [keybinds]
-\"Mod+Return\" = \"spawn:kitty\"
-";
+"Mod+Return" = "spawn:kitty"
+"##;
 
     #[test]
     fn derives_kinds_defaults_and_sections() {
@@ -426,7 +488,7 @@ files = []
         assert!(entries.iter().all(|e| e.dotted() != "include.files"));
         assert!(entries.iter().all(|e| e.path[0] != "keybinds"));
         assert!(entries.iter().all(|e| e.dotted() != "general.autostart"));
-        assert_eq!(entries.len(), 8);
+        assert_eq!(entries.len(), 11);
     }
 
     #[test]
@@ -475,7 +537,7 @@ focus_on_activate = false
         let get = |dotted: &str| entries.iter().find(|e| e.dotted() == dotted);
 
         let background = get("colors.background").expect("mined");
-        assert_eq!(background.kind, Kind::Text);
+        assert_eq!(background.kind, Kind::Color);
         assert_eq!(background.default, Some(Value::Text("#141419FF".into())));
         assert_eq!(background.section, "colors");
         assert_eq!(background.label, "Background");
@@ -560,5 +622,27 @@ focus_on_activate = false
         assert!(matches(radius, "corner radius"));
         assert!(matches(radius, "radius corner"));
         assert!(!matches(radius, "corner border"));
+    }
+
+    #[test]
+    fn mines_choices_and_colors() {
+        let entries = assemble(FIXTURE);
+        let find = |dotted: &str| entries.iter().find(|e| e.dotted() == dotted).unwrap();
+
+        assert_eq!(
+            find("layout.mode").kind,
+            Kind::Choice(vec!["scrolling".to_owned(), "dwindle".to_owned()])
+        );
+        assert_eq!(find("colors.background").kind, Kind::Color);
+        assert_eq!(find("colors.accent").kind, Kind::Color);
+        assert_eq!(find("appearance.mod_hint").kind, Kind::Text);
+    }
+
+    #[test]
+    fn prose_comments_never_become_choices() {
+        let entries = assemble("[notes]\n# x = \"a\" # see this or that guide, please\n");
+        let found = entries.iter().find(|e| e.dotted() == "notes.x").unwrap();
+        assert_eq!(found.kind, Kind::Text);
+        assert_eq!(found.default, Some(Value::Text("a".into())));
     }
 }
