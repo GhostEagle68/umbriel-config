@@ -69,14 +69,26 @@ pub fn candidates(env: &Env) -> Vec<PathBuf> {
         list.push(dir.join(CONFIG_RELATIVE_PATH));
     }
 
+    list.extend(data_dir_candidates(env));
+    list
+}
+
+fn data_dir_candidates(env: &Env) -> Vec<PathBuf> {
     let data_dirs = env
         .xdg_data_dirs
         .as_deref()
         .unwrap_or_else(|| OsStr::new("/usr/local/share:/usr/share"));
-    for dir in split_dirs(data_dirs) {
-        list.push(dir.join(CONFIG_RELATIVE_PATH));
-    }
-    list
+    split_dirs(data_dirs)
+        .into_iter()
+        .map(|dir| dir.join(CONFIG_RELATIVE_PATH))
+        .collect()
+}
+
+/// The installed packaged default config, when a data dir candidate exists.
+pub fn packaged_default(env: &Env) -> Option<PathBuf> {
+    data_dir_candidates(env)
+        .into_iter()
+        .find(|path| path.is_file())
 }
 
 /// The config a running Umbriel would load: the first candidate that exists,
@@ -182,6 +194,31 @@ mod tests {
             resolve(&missing),
             PathBuf::from("/nonexistent-umbriel-test/umbriel/config.toml")
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn packaged_default_is_first_existing_data_dir_candidate() {
+        let root = std::env::temp_dir().join(format!("umbriel-packaged-{}", std::process::id()));
+        let share = root.join("share");
+        std::fs::create_dir_all(share.join("umbriel")).unwrap();
+        std::fs::write(share.join("umbriel/config.toml"), b"").unwrap();
+
+        let found = Env {
+            xdg_data_dirs: Some(share.clone().into_os_string()),
+            ..env(None, None, None)
+        };
+        assert_eq!(
+            packaged_default(&found),
+            Some(share.join("umbriel/config.toml"))
+        );
+
+        let missing = Env {
+            xdg_data_dirs: Some("/nonexistent-umbriel-data".into()),
+            ..env(None, None, None)
+        };
+        assert_eq!(packaged_default(&missing), None);
 
         std::fs::remove_dir_all(&root).ok();
     }
