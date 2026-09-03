@@ -75,6 +75,7 @@ struct App {
     add_action: String,
     /// True while waiting for a key press to record as a chord.
     recording_chord: bool,
+    add_mod: bool,
 }
 
 impl App {
@@ -116,6 +117,7 @@ impl App {
             add_chord: String::new(),
             add_action: String::new(),
             recording_chord: false,
+            add_mod: true,
         }
     }
 
@@ -335,7 +337,23 @@ impl App {
                     break;
                 }
                 if let Some(name) = key_name(key) {
-                    let mut chord = String::from("Mod");
+                    let mut parts: Vec<&str> = Vec::new();
+                    if self.add_mod {
+                        parts.push("Mod");
+                    }
+                    if modifiers.shift {
+                        parts.push("Shift");
+                    }
+                    if modifiers.ctrl {
+                        parts.push("Ctrl");
+                    }
+                    if modifiers.alt {
+                        parts.push("Alt");
+                    }
+                    let mut chord = parts.join("+");
+                    if !chord.is_empty() {
+                        chord.push('+');
+                    }
                     if modifiers.shift {
                         chord.push_str("+Shift");
                     }
@@ -389,10 +407,39 @@ impl App {
             ui.label("Add keybind");
             ui.add(
                 egui::TextEdit::singleline(&mut self.add_chord)
-                    .hint_text("Mod+T")
-                    .desired_width(110.0),
+                    .hint_text("Mod+T or XF86AudioRaiseVolume")
+                    .desired_width(170.0),
             )
             .on_hover_text(keybinds::CHORD_HINT);
+            egui::ComboBox::from_id_salt("keybind-add-key")
+                .selected_text("key…")
+                .show_ui(ui, |ui| {
+                    let search_id = egui::Id::new("keybind-add-key-search");
+                    let mut filter = combo_filter(ui, search_id);
+                    ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search keys…"));
+                    ui.memory_mut(|mem| mem.data.insert_temp(search_id, filter.clone()));
+                    let needle = filter.to_lowercase();
+                    egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            for (keysym, label) in keybinds::COMMON_KEYS {
+                                if !needle.is_empty()
+                                    && !format!("{keysym} {label}").to_lowercase().contains(&needle)
+                                {
+                                    continue;
+                                }
+                                ui.selectable_value(
+                                    &mut self.add_chord,
+                                    (*keysym).to_owned(),
+                                    *label,
+                                )
+                                .on_hover_text(*keysym);
+                            }
+                        });
+                });
+            ui.checkbox(&mut self.add_mod, "Mod").on_hover_text(
+                "Adds \"Mod+\" in front of recorded chords; typing \"Mod+\" by hand works too.",
+            );
             if ui
                 .button(if self.recording_chord {
                     "⏺ recording…"
@@ -400,8 +447,9 @@ impl App {
                     "⏺ keys"
                 })
                 .on_hover_text(
-                    "Press the combination you want instead of typing it; \"Mod\" is added\n\
-                     automatically because the compositor keeps those keys for itself.",
+                    "Press the combination instead of typing it; the Mod checkbox chooses\n\
+                     whether \"Mod+\" is prepended. Media keys can't be captured — pick them\n\
+                     from the key list instead.",
                 )
                 .clicked()
             {
