@@ -391,6 +391,34 @@ impl App {
                  Pick an action from the list, type a chord like Mod+T, then Add.",
             );
         }
+        ui.add_space(12.0);
+        let user_chords: Vec<String> = binds.iter().map(|b| b.chord.to_lowercase()).collect();
+        egui::CollapsingHeader::new(format!(
+            "umbriel's built-in defaults ({})",
+            keybinds::DEFAULT_BINDS.len()
+        ))
+        .default_open(binds.is_empty())
+        .show(ui, |ui| {
+            ui.label(
+                "Built into umbriel — these keep working except where you bind the\n\
+                 same chord above (matching ignores letter case).",
+            );
+            for (chord, action) in keybinds::DEFAULT_BINDS {
+                let overridden = user_chords
+                    .iter()
+                    .any(|user| user.eq_ignore_ascii_case(chord));
+                let mut text = egui::RichText::new(format!("{chord}  →  {action}")).weak();
+                if overridden {
+                    text = text.strikethrough();
+                }
+                ui.horizontal(|ui| {
+                    ui.label(text);
+                    if overridden {
+                        ui.label(egui::RichText::new("overridden by your bind").weak());
+                    }
+                });
+            }
+        });
     }
 
     fn save(&mut self) {
