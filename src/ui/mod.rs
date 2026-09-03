@@ -341,25 +341,54 @@ impl App {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.label("Add keybind");
-            ui.add(egui::TextEdit::singleline(&mut self.add_chord).desired_width(150.0))
-                .on_hover_text(keybinds::CHORD_HINT);
-            ui.add(egui::TextEdit::singleline(&mut self.add_action).desired_width(180.0))
-                .on_hover_text("Action, e.g. spawn:kitty or window-close");
-            if ui.button("Add").clicked() {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.add_chord)
+                    .hint_text("Mod+T")
+                    .desired_width(110.0),
+            )
+            .on_hover_text(keybinds::CHORD_HINT);
+            egui::ComboBox::from_id_salt("keybind-add-action")
+                .selected_text(if self.add_action.is_empty() {
+                    "pick an action".to_owned()
+                } else {
+                    self.add_action.clone()
+                })
+                .show_ui(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            for live in &self.actions {
+                                let value = if live.param.is_empty() {
+                                    live.name.clone()
+                                } else {
+                                    format!("{}:", live.name)
+                                };
+                                let label = if live.param.is_empty() {
+                                    live.name.clone()
+                                } else {
+                                    format!("{} {}", live.name, live.param)
+                                };
+                                ui.selectable_value(&mut self.add_action, value, label)
+                                    .on_hover_text(&live.summary);
+                            }
+                        });
+                });
+            if ui.button("Add").clicked()
+                && !self.add_chord.trim().is_empty()
+                && !self.add_action.is_empty()
+            {
                 let chord = self.add_chord.trim().to_owned();
-                let action = self.add_action.trim().to_owned();
-                if !chord.is_empty() && !action.is_empty() {
-                    self.doc.set_keybind(&chord, &action, None, None, None);
-                    self.add_chord.clear();
-                    self.add_action.clear();
-                }
+                let action = self.add_action.clone();
+                self.doc.set_keybind(&chord, &action, None, None, None);
+                self.add_chord.clear();
+                self.add_action.clear();
             }
         });
         if binds.is_empty() {
             ui.add_space(4.0);
             ui.label(
-                "No custom keybinds yet — umbriel's built-in defaults are active.\n\
-                 Add one to override a chord or bind something new.",
+                "No custom keybinds yet. Umbriel's built-in defaults are active.\n\
+                 Pick an action from the list, type a chord like Mod+T, then Add.",
             );
         }
     }
