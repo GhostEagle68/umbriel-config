@@ -4,11 +4,19 @@
 
 use super::document::ConfigDocument;
 
+/// Const-friendly fallback value, mirroring umbriel's `OutputRule` defaults.
+pub enum DefaultValue {
+    Bool(bool),
+    Float(f64),
+    Text(&'static str),
+}
 /// One configurable field of an output, in display order.
 pub struct Field {
     pub key: &'static str,
     pub label: &'static str,
     pub kind: FieldKind,
+    /// Umbriel's fallback (its `OutputRule`), shown when the key is unset.
+    pub default: Option<DefaultValue>,
 }
 
 pub enum FieldKind {
@@ -28,24 +36,27 @@ pub enum FieldKind {
 }
 
 /// The fields umbriel's output parser accepts (umbriel
-/// `src/config/config.cpp`). The nested `layout.scrolling
-/// .default_width_fraction` override waits until fields can carry dotted
-/// paths; the global copy is already covered by the assembled schema.
+/// `src/config/config.cpp`); defaults mirror its `OutputRule`. The nested
+/// `layout.scrolling.default_width_fraction` override waits until fields can
+/// carry dotted paths; the global copy is covered by the assembled schema.
 pub const FIELDS: &[Field] = &[
     Field {
         key: "enabled",
         label: "Enabled",
         kind: FieldKind::Toggle,
+        default: Some(DefaultValue::Bool(true)),
     },
     Field {
         key: "mode",
         label: "Mode",
         kind: FieldKind::Text,
+        default: None,
     },
     Field {
         key: "position",
         label: "Position",
         kind: FieldKind::Position,
+        default: None,
     },
     Field {
         key: "scale",
@@ -54,16 +65,20 @@ pub const FIELDS: &[Field] = &[
             min: 0.25,
             max: 4.0,
         },
+        // The parser leaves unset scale to the compositor (effectively 1.0).
+        default: Some(DefaultValue::Float(1.0)),
     },
     Field {
         key: "vrr",
         label: "VRR",
         kind: FieldKind::Choice(&["disabled", "always", "fullscreen"]),
+        default: Some(DefaultValue::Text("disabled")),
     },
     Field {
         key: "hdr",
         label: "HDR",
         kind: FieldKind::Choice(&["off", "on", "auto", "fullscreen"]),
+        default: Some(DefaultValue::Text("off")),
     },
     Field {
         key: "sdr_white",
@@ -72,6 +87,7 @@ pub const FIELDS: &[Field] = &[
             min: 80.0,
             max: 1000.0,
         },
+        default: Some(DefaultValue::Float(203.0)),
     },
     Field {
         key: "transform",
@@ -86,21 +102,26 @@ pub const FIELDS: &[Field] = &[
             "flipped-180",
             "flipped-270",
         ]),
+        default: Some(DefaultValue::Text("normal")),
     },
     Field {
         key: "tearing",
         label: "Tearing",
         kind: FieldKind::Toggle,
+        default: Some(DefaultValue::Bool(false)),
     },
     Field {
         key: "direct_scanout",
         label: "Direct scanout",
         kind: FieldKind::Toggle,
+        default: Some(DefaultValue::Bool(true)),
     },
     Field {
         key: "workspaces",
         label: "Workspaces",
         kind: FieldKind::Workspaces,
+        // Omitted workspaces mean dynamic.
+        default: Some(DefaultValue::Text("dynamic")),
     },
 ];
 
