@@ -98,6 +98,11 @@ impl ConfigDocument {
         self.doc.to_string()
     }
 
+    /// The text as first loaded (or as last saved).
+    pub fn original_text(&self) -> &str {
+        &self.original
+    }
+
     /// Whether the document differs from what was loaded.
     pub fn is_modified(&self) -> bool {
         self.doc.to_string() != self.original
@@ -280,6 +285,54 @@ impl ConfigDocument {
         let mut paths = Vec::new();
         walk_paths(self.doc.as_table(), &mut Vec::new(), &mut paths);
         paths
+    }
+
+    /// Every leaf outside `[keybinds]` as `(dotted path, raw TOML text)`;
+    /// binds are diffed as whole entries (see `diff`), so their table is
+    /// skipped here. Array-of-tables count as one leaf with a summary.
+    pub fn leaf_values(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for (key, item) in self.doc.as_table().iter() {
+            if key == "keybinds" {
+                continue;
+            }
+            Self::collect_leaves(key, item, &mut out);
+        }
+        out
+    }
+
+    fn collect_leaves(path: &str, item: &Item, out: &mut Vec<(String, String)>) {
+        match item {
+            Item::Table(table) => {
+                for (key, child) in table.iter() {
+                    Self::collect_leaves(&format!("{path}.{key}"), child, out);
+                }
+            }
+            Item::Value(value) => out.push((path.to_owned(), value.to_string().trim().to_owned())),
+            Item::ArrayOfTables(array) => {
+                out.push((path.to_owned(), format!("{{ {} sections }}", array.len())))
+            }
+            Item::None => {}
+        }
+    }
+
+    /// Overwrite the leaf at a dotted `leaf_values()` path with raw TOML
+    /// value text, creating missing parents. Returns whether the text
+    /// parsed and the path was writable.
+    pub fn set_leaf_text(&mut self, path: &str, value_text: &str) -> bool {
+        let Ok(mut mini) = format!("v = {value_text}").parse::<DocumentMut>() else {
+            return false;
+        };
+        let Some(value) = mini
+            .as_table_mut()
+            .remove("v")
+            .and_then(|item| item.into_value().ok())
+        else {
+            return false;
+        };
+        let components: Vec<&str> = path.split('.').collect();
+        Self::set_value(&mut self.doc, &components, value);
+        true
     }
 
     pub fn set_bool(&mut self, path: &[&str], value: bool) {

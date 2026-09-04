@@ -6,7 +6,7 @@ use eframe::egui;
 use std::path::PathBuf;
 use std::str::FromStr;
 use umbriel_config::config::{
-    discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema, state,
+    diff, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema, state,
     validate,
 };
 use umbriel_config::live;
@@ -37,6 +37,8 @@ enum Page {
     Rules(&'static str),
     /// The `[keybinds]` chord table.
     Keybinds,
+    /// Review and discard unsaved edits across the config chain.
+    Changes,
     /// Keys in the config no other page claims.
     Raw,
 }
@@ -779,6 +781,222 @@ impl App {
         }
     }
 
+    /// Pending (unsaved) edits as one row per changed option: what the
+    /// option was, what it is now, and a per-option reset. Reset and
+    /// Discard only touch memory; nothing is written until Save.
+    fn changes_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Unsaved changes");
+        ui.separator();
+        let mut files: Vec<(String, usize, ConfigDocument)> = Vec::new();
+        for (index, inc) in self.includes.docs.iter().enumerate() {
+            if inc.doc.is_modified()
+                && let Ok(snapshot) = ConfigDocument::from_str(inc.doc.original_text())
+            {
+                files.push((inc.label.clone(), index, snapshot));
+            }
+        }
+        if self.doc.is_modified() {
+            let name = self
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "config".to_owned());
+            if let Ok(snapshot) = ConfigDocument::from_str(self.doc.original_text()) {
+                files.push((format!("{name} (main)"), self.includes.docs.len(), snapshot));
+            }
+        }
+        if files.is_empty() {
+            ui.label("No unsaved changes.");
+            return;
+        }
+        ui.label(
+            "Edits live in memory until you Save. Reset reverts one option \
+             to its saved value; Discard reverts the whole file.",
+        );
+        let mut resets: Vec<(usize, diff::OptionChange)> = Vec::new();
+        let mut discard: Option<usize> = None;
+        let mut discard_everything = false;
+        for (label, file, snapshot) in &files {
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.strong(label);
+                if ui
+                    .button("Discard")
+                    .on_hover_text("Reload this file from disk, losing these edits")
+                    .clicked()
+                {
+                    discard = Some(*file);
+                }
+            });
+            let current = if *file < self.includes.docs.len() {
+                &self.includes.docs[*file].doc
+            } else {
+                &self.doc
+            };
+            let changes = diff::option_changes(snapshot, current);
+            if changes.is_empty() {
+                ui.label(egui::RichText::new("No option values changed (formatting only).").weak());
+                continue;
+            }
+            egui::Grid::new(egui::Id::new(("changes", *file)))
+                .num_columns(4)
+                .striped(true)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    ui.strong("Option");
+                    ui.strong("Before");
+                    ui.strong("After");
+                    ui.strong("");
+                    ui.end_row();
+                    for change in &changes {
+                        ui.monospace(change.option_label());
+                        match change {
+                            diff::OptionChange::Bind { before, after, .. } => {
+                                ui.label(
+                                    before
+                                        .as_ref()
+                                        .map(diff::bind_text)
+                                        .unwrap_or_else(|| "—".to_owned()),
+                                );
+                                ui.label(
+                                    after
+                                        .as_ref()
+                                        .map(diff::bind_text)
+                                        .unwrap_or_else(|| "—".to_owned()),
+                                );
+                            }
+                            diff::OptionChange::Leaf { before, after, .. } => {
+                                ui.label(
+                                    before
+                                        .as_deref()
+                                        .map(diff::leaf_display)
+                                        .unwrap_or_else(|| "—".to_owned()),
+                                );
+                                ui.label(
+                                    after
+                                        .as_deref()
+                                        .map(diff::leaf_display)
+                                        .unwrap_or_else(|| "—".to_owned()),
+                                );
+                            }
+                        }
+                        // Added options revert by removal; whole rule
+                        // sections are managed on the rules page instead.
+                        let resettable = !matches!(
+                            change,
+                            diff::OptionChange::Leaf {
+                                before: Some(text),
+                                ..
+                            } if text.starts_with("{ ")
+                        );
+                        if resettable
+                            && ui
+                                .button("↺")
+                                .on_hover_text("Revert this option to its saved value")
+                                .clicked()
+                        {
+                            resets.push((*file, change.clone()));
+                        }
+                        ui.end_row();
+                    }
+                });
+        }
+        ui.add_space(10.0);
+        if ui
+            .button("Discard all changes")
+            .on_hover_text("Reload every modified file from disk")
+            .clicked()
+        {
+            discard_everything = true;
+        }
+        for (file, change) in resets {
+            self.reset_option(file, &change);
+        }
+        if let Some(file) = discard {
+            self.discard_file(file);
+        }
+        if discard_everything {
+            self.discard_all();
+        }
+    }
+
+    /// Revert one option to its saved value in the file that owns it.
+    fn reset_option(&mut self, file: usize, change: &diff::OptionChange) {
+        self.last_validation = None;
+        match change {
+            diff::OptionChange::Bind { chord, before, .. } => match before {
+                Some(entry) => {
+                    self.doc_mut(file).set_keybind(
+                        chord,
+                        &entry.action,
+                        entry.repeat,
+                        entry.allow_when_locked,
+                        entry.submap.as_deref(),
+                    );
+                }
+                None => {
+                    self.doc_mut(file).remove_table(&["keybinds", chord]);
+                }
+            },
+            diff::OptionChange::Leaf { path, before, .. } => match before {
+                Some(text) => {
+                    if !self.doc_mut(file).set_leaf_text(path, text) {
+                        self.validation_note = Some(format!("could not revert {path}"));
+                    }
+                }
+                None => {
+                    let parts: Vec<&str> = path.split('.').collect();
+                    self.doc_mut(file).remove_table(&parts);
+                }
+            },
+        }
+    }
+
+    /// Reload one chain document from disk; the main file (index n) also
+    /// refreshes the include chain it declares.
+    fn discard_file(&mut self, file: usize) {
+        self.last_validation = None;
+        let n = self.includes.docs.len();
+        if file < n {
+            let path = self.includes.docs[file].path.clone();
+            match ConfigDocument::load(&path) {
+                Ok(doc) => self.includes.docs[file].doc = doc,
+                Err(err) => {
+                    let label = self.includes.docs[file].label.clone();
+                    self.validation_note = Some(format!("cannot discard {label}: {err}"));
+                }
+            }
+        } else {
+            match ConfigDocument::load(&self.path) {
+                Ok(doc) => {
+                    self.doc = doc;
+                    self.includes = includes::load_chain(&self.doc, &self.path);
+                    self.healthy = true;
+                    self.load_error = None;
+                }
+                Err(err) => self.validation_note = Some(format!("cannot discard: {err}")),
+            }
+        }
+    }
+
+    /// Discard every modified file in the chain.
+    fn discard_all(&mut self) {
+        let mut files: Vec<usize> = self
+            .includes
+            .docs
+            .iter()
+            .enumerate()
+            .filter(|(_, inc)| inc.doc.is_modified())
+            .map(|(index, _)| index)
+            .collect();
+        if self.doc.is_modified() {
+            files.push(self.includes.docs.len());
+        }
+        for file in files {
+            self.discard_file(file);
+        }
+    }
+
     /// Top-level sections in schema (file) order.
     fn sections(&self) -> Vec<String> {
         let mut sections: Vec<String> = Vec::new();
@@ -874,8 +1092,13 @@ impl eframe::App for App {
                     )
                     .on_hover_text(self.includes.notes.join("\n"));
                 }
-                if self.any_modified() {
-                    ui.colored_label(egui::Color32::from_rgb(230, 180, 80), "unsaved changes");
+                if self.any_modified()
+                    && ui
+                        .button("unsaved changes")
+                        .on_hover_text("Review what changed, or discard it")
+                        .clicked()
+                {
+                    self.page = Some(Page::Changes);
                 }
                 if ui.button("Sync schema").clicked() {
                     self.sync_schema();
@@ -960,6 +1183,13 @@ impl eframe::App for App {
                 if ui
                     .selectable_value(&mut self.page, Some(Page::Keybinds), "Keybinds")
                     .clicked()
+                {
+                    self.search.clear();
+                }
+                if self.any_modified()
+                    && ui
+                        .selectable_value(&mut self.page, Some(Page::Changes), "● Unsaved changes")
+                        .clicked()
                 {
                     self.search.clear();
                 }
@@ -1094,6 +1324,11 @@ impl eframe::App for App {
                 Page::Keybinds => {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         self.keybinds_page(ui);
+                    });
+                }
+                Page::Changes => {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        self.changes_page(ui);
                     });
                 }
                 Page::Raw => {
