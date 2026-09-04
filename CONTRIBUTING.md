@@ -2,8 +2,7 @@
 
 umbriel-config is a GUI configurator for the Umbriel Wayland compositor
 (Noctalia team). Rust + Cargo, edition 2024. This document is the authoritative
-reference for conventions; keep it accurate after every change that affects
-them.
+reference for conventions.
 
 ## Project layout
 
