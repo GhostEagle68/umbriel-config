@@ -55,7 +55,7 @@ Two layers, strictly separated:
 ## Branching and commits
 
 - `main` holds confirmed-working state; `dev` is the integration branch.
-  New work lands on `dev` (topic branches optional:
+  New work lands on `dev` (topic branches required for PRs:
   `type/short-description`, e.g. `feat/config-discovery`). After a change
   is confirmed working, merge `dev` into `main`. Tag releases on `main`.
 - Conventional Commits: `type(scope): imperative summary`. Types: `feat`,
