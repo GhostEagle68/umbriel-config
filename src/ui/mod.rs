@@ -6,7 +6,8 @@ use eframe::egui;
 use std::path::PathBuf;
 use std::str::FromStr;
 use umbriel_config::config::{
-    discovery, document::ConfigDocument, keybinds, outputs, rules, schema, state, validate,
+    discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema, state,
+    validate,
 };
 use umbriel_config::live;
 
@@ -72,6 +73,9 @@ struct App {
     kb_search: String,
     /// The single open keybind editor, if any.
     kb_editor: Option<KbEditor>,
+    /// The loaded `[include]` chain: files the main config lists, read
+    /// like umbriel's own loader (missing or broken ones become notes).
+    includes: includes::IncludeChain,
 }
 
 impl App {
@@ -91,6 +95,7 @@ impl App {
                 )
             }
         };
+        let includes = includes::load_chain(&doc, &path);
         let env = discovery::Env::from_process();
         let schema = Self::load_schema(&env);
         let schema_note = Self::startup_note(&env, &schema);
@@ -112,6 +117,7 @@ impl App {
             actions: keybinds::builtin_actions(),
             kb_search: String::new(),
             kb_editor: None,
+            includes,
         }
     }
 
@@ -313,6 +319,54 @@ impl App {
     /// Keybinds: one merged, grouped list — umbriel's built-in defaults
     /// with your overrides replacing them in place — plus a single draft
     /// editor. Nothing is written until the editor's Apply.
+    /// All documents in umbriel's precedence order: the `[include]`
+    /// chain first, the main file last — per chord, the last bind wins.
+    fn chain(&self) -> Vec<&ConfigDocument> {
+        let mut docs: Vec<&ConfigDocument> =
+            self.includes.docs.iter().map(|inc| &inc.doc).collect();
+        docs.push(&self.doc);
+        docs
+    }
+
+    /// Mutable document for a chain index: includes are `0..n`, the main
+    /// file is `n` — matching `chain()` and `SourcedBind::source_file`.
+    fn doc_mut(&mut self, file: usize) -> &mut ConfigDocument {
+        if file < self.includes.docs.len() {
+            &mut self.includes.docs[file].doc
+        } else {
+            &mut self.doc
+        }
+    }
+
+    /// Where a brand-new keybind lands: the main file when it already has
+    /// a `[keybinds]` table, else the included file that owns one, else
+    /// the main file (the table is created on write).
+    fn new_bind_target(&self) -> usize {
+        if self
+            .doc
+            .table_names(&[])
+            .iter()
+            .any(|name| name == "keybinds")
+        {
+            return self.includes.docs.len();
+        }
+        self.includes
+            .docs
+            .iter()
+            .position(|inc| {
+                inc.doc
+                    .table_names(&[])
+                    .iter()
+                    .any(|name| name == "keybinds")
+            })
+            .unwrap_or(self.includes.docs.len())
+    }
+
+    /// Whether the main config or any included file has unsaved edits.
+    fn any_modified(&self) -> bool {
+        self.doc.is_modified() || self.includes.docs.iter().any(|inc| inc.doc.is_modified())
+    }
+
     fn keybinds_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Keybinds");
         ui.separator();
@@ -366,8 +420,8 @@ impl App {
         });
         ui.label(
             egui::RichText::new(
-                "Bold rows are yours; the rest are umbriel's built-in defaults. \
-                 Click any row to edit it.",
+                "Bold rows are yours, the hover says which file defines them; the rest are \
+                 umbriel's built-in defaults. Click any row to edit it.",
             )
             .weak()
             .small(),
@@ -383,9 +437,10 @@ impl App {
             ui.add_space(6.0);
         }
 
-        // Merged rows: built-in defaults overridden in place by user
-        // binds, then user binds that no default claims.
-        let binds = self.doc.keybinds();
+        // Merged rows: built-in defaults overridden in place by the
+        // winning bind across the whole chain, then user binds no default
+        // claims.
+        let binds = keybinds::merged_binds(&self.chain());
         let mut rows: Vec<MergedRow> = Vec::new();
         for (chord, action) in keybinds::DEFAULT_BINDS {
             match binds.iter().find(|b| b.chord.eq_ignore_ascii_case(chord)) {
@@ -395,7 +450,7 @@ impl App {
                     repeat: user.repeat,
                     allow_when_locked: user.allow_when_locked,
                     submap: user.submap.clone(),
-                    user: Some(user.chord.clone()),
+                    user: Some((user.source_file, user.chord.clone())),
                     shadows_default: true,
                 }),
                 None => rows.push(MergedRow {
@@ -420,20 +475,11 @@ impl App {
                     repeat: bind.repeat,
                     allow_when_locked: bind.allow_when_locked,
                     submap: bind.submap.clone(),
-                    user: Some(bind.chord.clone()),
+                    user: Some((bind.source_file, bind.chord.clone())),
                     shadows_default: false,
                 });
             }
         }
-
-        // Chords bound twice in the user's file highlight red.
-        let duplicated = |chord: &str| {
-            binds
-                .iter()
-                .filter(|b| b.chord.eq_ignore_ascii_case(chord))
-                .count()
-                > 1
-        };
 
         let needle = self.kb_search.trim().to_lowercase();
         let edit_target = self
@@ -478,25 +524,36 @@ impl App {
                     .is_some_and(|target| target.eq_ignore_ascii_case(&row.chord))
                 {
                     self.kb_editor_ui(ui);
-                } else if keybind_display_row(
-                    ui,
-                    &mut self.doc,
-                    &self.actions,
-                    row,
-                    duplicated(&row.chord),
-                ) {
-                    self.kb_editor = Some(KbEditor {
-                        target: Some(row.chord.clone()),
-                        original: row.user.clone(),
-                        draft: keybinds::BindDraft::from_parts(
-                            &row.chord,
-                            &row.action,
-                            row.repeat,
-                            row.allow_when_locked,
-                            row.submap.clone(),
-                        ),
-                        capturing: false,
-                    });
+                } else {
+                    let source = match &row.user {
+                        Some((file, _)) if *file < self.includes.docs.len() => {
+                            self.includes.docs[*file].label.as_str()
+                        }
+                        Some(_) => "the main config",
+                        None => "umbriel's built-in defaults",
+                    };
+                    match keybind_display_row(ui, &self.actions, row, source) {
+                        RowClick::Edit => {
+                            self.kb_editor = Some(KbEditor {
+                                target: Some(row.chord.clone()),
+                                original: row.user.clone(),
+                                draft: keybinds::BindDraft::from_parts(
+                                    &row.chord,
+                                    &row.action,
+                                    row.repeat,
+                                    row.allow_when_locked,
+                                    row.submap.clone(),
+                                ),
+                                capturing: false,
+                            });
+                        }
+                        RowClick::Remove => {
+                            if let Some((file, chord)) = &row.user {
+                                self.doc_mut(*file).remove_table(&["keybinds", chord]);
+                            }
+                        }
+                        RowClick::None => {}
+                    }
                 }
             }
         }
@@ -614,8 +671,11 @@ impl App {
                 });
             let composed = editor.draft.composed_chord();
             ui.label(egui::RichText::new(format!("→ {composed}")).weak().small());
-            let conflict =
-                keybinds::find_conflict(&[&self.doc], &composed, editor.original.as_deref());
+            let conflict = keybinds::find_conflict(
+                &self.chain(),
+                &composed,
+                editor.original.as_ref().map(|(_, chord)| chord.as_str()),
+            );
             if composed.is_empty() || editor.draft.action.trim().is_empty() {
                 ui.label(egui::RichText::new("A chord and an action are both needed.").weak());
             } else if let Some((_, other)) = &conflict {
@@ -636,30 +696,42 @@ impl App {
         });
         if apply {
             let composed = editor.draft.composed_chord();
-            if replace
-                && let Some(file) = self
-                    .doc
-                    .keybinds()
-                    .iter()
-                    .find(|b| {
-                        b.chord.eq_ignore_ascii_case(&composed)
-                            && editor.original.as_deref() != Some(b.chord.as_str())
-                    })
-                    .map(|b| b.chord.clone())
-            {
-                self.doc.remove_table(&["keybinds", &file]);
+            // Replacing clears every chain copy of the chord except the
+            // bind being edited — removing only the winner would just
+            // reveal the previous file's bind underneath.
+            if replace {
+                let mut victims: Vec<(usize, String)> = Vec::new();
+                for (file, doc) in self.chain().iter().enumerate() {
+                    for bind in doc.keybinds() {
+                        let is_original = editor.original.as_ref().is_some_and(|(f, c)| {
+                            *f == file && c.eq_ignore_ascii_case(&bind.chord)
+                        });
+                        if bind.chord.eq_ignore_ascii_case(&composed) && !is_original {
+                            victims.push((file, bind.chord.clone()));
+                        }
+                    }
+                }
+                for (file, chord) in victims {
+                    self.doc_mut(file).remove_table(&["keybinds", &chord]);
+                }
             }
-            self.doc.set_keybind(
+            // An edit stays in the file that owns the bind; a new bind
+            // lands where [keybinds] already lives.
+            let (target, original) = match &editor.original {
+                Some((file, chord)) => (*file, Some(chord.as_str())),
+                None => (self.new_bind_target(), None),
+            };
+            self.doc_mut(target).set_keybind(
                 &composed,
                 editor.draft.action.trim(),
                 editor.draft.repeat,
                 editor.draft.allow_when_locked,
                 editor.draft.submap.as_deref(),
             );
-            if let Some(original) = &editor.original
+            if let Some(original) = original
                 && !original.eq_ignore_ascii_case(&composed)
             {
-                self.doc.remove_table(&["keybinds", original]);
+                self.doc_mut(target).remove_table(&["keybinds", original]);
             }
             self.kb_editor = None;
         } else if close {
@@ -672,12 +744,37 @@ impl App {
     fn save(&mut self) {
         self.last_validation = None;
         self.validation_note = None;
+        // Included files first, then the main config, so a failure part
+        // way leaves the chain consistent; every written file is
+        // validated and the diagnostics merge into one report.
+        let mut chain_diagnostics = Vec::new();
+        for inc in self
+            .includes
+            .docs
+            .iter_mut()
+            .filter(|inc| inc.doc.is_modified())
+        {
+            if let Err(err) = inc.doc.save(&inc.path) {
+                self.validation_note = Some(format!("{}: {err}", inc.label));
+                return;
+            }
+            match validate::validate(&inc.path) {
+                Ok(report) => chain_diagnostics.extend(report.diagnostics),
+                Err(err) => {
+                    self.validation_note = Some(format!("{}: {err}", inc.label));
+                    return;
+                }
+            }
+        }
         if let Err(err) = self.doc.save(&self.path) {
             self.validation_note = Some(err.to_string());
             return;
         }
         match validate::validate(&self.path) {
-            Ok(report) => self.last_validation = Some(report),
+            Ok(mut report) => {
+                report.diagnostics.extend(chain_diagnostics);
+                self.last_validation = Some(report);
+            }
             Err(err) => self.validation_note = Some(err.to_string()),
         }
     }
@@ -756,7 +853,28 @@ impl eframe::App for App {
                         .desired_width(150.0),
                 );
                 ui.label(self.path.display().to_string());
-                if self.doc.is_modified() {
+                if !self.includes.docs.is_empty() {
+                    let names: Vec<&str> = self
+                        .includes
+                        .docs
+                        .iter()
+                        .map(|inc| inc.label.as_str())
+                        .collect();
+                    ui.label(
+                        egui::RichText::new(format!("+ {} included", names.len()))
+                            .weak()
+                            .small(),
+                    )
+                    .on_hover_text(format!("Included files: {}", names.join(", ")));
+                }
+                if !self.includes.notes.is_empty() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(230, 180, 80),
+                        format!("⚠ {} include note(s)", self.includes.notes.len()),
+                    )
+                    .on_hover_text(self.includes.notes.join("\n"));
+                }
+                if self.any_modified() {
                     ui.colored_label(egui::Color32::from_rgb(230, 180, 80), "unsaved changes");
                 }
                 if ui.button("Sync schema").clicked() {
@@ -1251,58 +1369,67 @@ struct MergedRow {
     repeat: Option<bool>,
     allow_when_locked: Option<bool>,
     submap: Option<String>,
-    /// File-exact chord of the user bind backing this row, if any.
-    user: Option<String>,
+    /// Chain file index + file-exact chord of the user bind backing this
+    /// row, if any.
+    user: Option<(usize, String)>,
     /// The row shadows a built-in default (a ↺ reset is available).
     shadows_default: bool,
 }
 
 /// The single open keybind editor. `target` places it inline under its
 /// row (None renders it at the top, for a new bind); `original` is the
-/// file-exact chord being edited, so a rename removes the old entry.
+/// chain file index and file-exact chord being edited, so a rename
+/// removes the old entry from the file that owns it.
 struct KbEditor {
     target: Option<String>,
-    original: Option<String>,
+    original: Option<(usize, String)>,
     draft: keybinds::BindDraft,
     capturing: bool,
 }
 
-/// One merged keybind row: the chord (bold when yours, red when the same
-/// chord is bound twice) and the human action text; either opens the
-/// editor. Overridden defaults get ↺ reset, user-only binds ✕ remove.
-/// Returns whether the row was clicked for editing.
+/// What a click on a merged keybind row asked for.
+enum RowClick {
+    None,
+    Edit,
+    Remove,
+}
+
+/// One merged keybind row: the chord (bold when yours) and the human
+/// action text; either opens the editor. Overridden defaults get ↺ reset,
+/// user-only binds ✕ remove.
 fn keybind_display_row(
     ui: &mut egui::Ui,
-    doc: &mut ConfigDocument,
     actions: &[keybinds::LiveAction],
     row: &MergedRow,
-    duplicated: bool,
-) -> bool {
+    source: &str,
+) -> RowClick {
     let summary = keybinds::describe(&row.action, actions);
-    let mut edit = false;
+    let mut click = RowClick::None;
     ui.horizontal(|ui| {
         let mut chord = egui::RichText::new(&row.chord).monospace();
         if row.user.is_some() {
             chord = chord.strong();
         }
-        if duplicated {
-            chord = chord.color(egui::Color32::from_rgb(240, 100, 100));
-        }
+        let hover = if row.user.is_some() {
+            format!("Click to edit — defined in {source}")
+        } else {
+            format!("Click to edit — {source}")
+        };
         if ui
             .selectable_label(false, chord)
-            .on_hover_text("Click to edit")
+            .on_hover_text(hover)
             .clicked()
         {
-            edit = true;
+            click = RowClick::Edit;
         }
         if ui
             .selectable_label(false, summary.as_str())
             .on_hover_text(row.action.as_str())
             .clicked()
         {
-            edit = true;
+            click = RowClick::Edit;
         }
-        if let Some(file) = &row.user {
+        if row.user.is_some() {
             let remove = if row.shadows_default {
                 ui.button("↺")
                     .on_hover_text("Reset to umbriel's built-in default")
@@ -1313,11 +1440,11 @@ fn keybind_display_row(
                     .clicked()
             };
             if remove {
-                doc.remove_table(&["keybinds", file]);
+                click = RowClick::Remove;
             }
         }
     });
-    edit
+    click
 }
 
 /// Searchable picker of special keys (media, mouse, wheel, numpad);
