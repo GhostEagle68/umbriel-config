@@ -665,43 +665,97 @@ pub const COMMON_KEYS: &[(&str, &str)] = &[
     ("Scroll_Lock", "Scroll lock"),
     ("Num_Lock", "Num lock"),
     ("Menu", "Menu key"),
+    // Mouse buttons and wheel directions (chords like "Mod+MouseMiddle").
+    ("MouseLeft", "Left mouse button"),
+    ("MouseRight", "Right mouse button"),
+    ("MouseMiddle", "Middle mouse button"),
+    ("MouseBack", "Back mouse button"),
+    ("MouseForward", "Forward mouse button"),
+    ("WheelUp", "Wheel up"),
+    ("WheelDown", "Wheel down"),
+    ("WheelLeft", "Wheel left"),
+    ("WheelRight", "Wheel right"),
+    // Numpad keys (umbriel distinguishes them from top-row digits).
+    ("KP_0", "Numpad 0"),
+    ("KP_1", "Numpad 1"),
+    ("KP_2", "Numpad 2"),
+    ("KP_3", "Numpad 3"),
+    ("KP_4", "Numpad 4"),
+    ("KP_5", "Numpad 5"),
+    ("KP_6", "Numpad 6"),
+    ("KP_7", "Numpad 7"),
+    ("KP_8", "Numpad 8"),
+    ("KP_9", "Numpad 9"),
+    ("KP_Enter", "Numpad Enter"),
+    ("KP_Add", "Numpad +"),
+    ("KP_Subtract", "Numpad -"),
+    ("KP_Multiply", "Numpad *"),
+    ("KP_Divide", "Numpad /"),
+    ("KP_Decimal", "Numpad ."),
 ];
 
-/// One-click starter binds for the common media/laptop cases, matching the
-/// packaged default's suggestions: (chord, action, label).
-pub const COMMON_BINDS: &[(&str, &str, &str)] = &[
-    (
-        "XF86AudioRaiseVolume",
-        "spawn:wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+",
-        "Volume up",
-    ),
-    (
-        "XF86AudioLowerVolume",
-        "spawn:wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-",
-        "Volume down",
-    ),
-    (
-        "XF86AudioMute",
-        "spawn:wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
-        "Mute audio",
-    ),
-    (
-        "XF86AudioPlay",
-        "spawn:playerctl play-pause",
-        "Play / pause",
-    ),
-    ("XF86AudioNext", "spawn:playerctl next", "Next track"),
-    ("XF86AudioPrev", "spawn:playerctl prev", "Previous track"),
-    (
-        "XF86MonBrightnessUp",
-        "spawn:noctalia msg brightness-up 10",
-        "Brightness up",
-    ),
-    (
-        "XF86MonBrightnessDown",
-        "spawn:noctalia msg brightness-down 10",
-        "Brightness down",
-    ),
+/// Which page section an action belongs to. Groups follow the action
+/// name's family prefix, so new upstream actions usually land in the
+/// right section automatically.
+pub fn action_group(action: &str) -> &'static str {
+    let name = action.split(':').next().unwrap_or(action);
+    if name.starts_with("window-focus") || name.starts_with("column-focus") {
+        "Focus"
+    } else if name.starts_with("window-move")
+        || name.starts_with("window-swap")
+        || name.starts_with("window-consume")
+        || name.starts_with("column-move")
+    {
+        "Move windows"
+    } else if name.starts_with("window-toggle")
+        || name.starts_with("window-set")
+        || name.starts_with("window-modify")
+        || name.starts_with("window-cycle")
+        || name == "window-center"
+    {
+        "Window state & size"
+    } else if name.starts_with("workspace") {
+        "Workspaces"
+    } else if name.starts_with("scratchpad") {
+        "Scratchpad"
+    } else if name.starts_with("overview") {
+        "Overview"
+    } else if name.starts_with("output") {
+        "Outputs"
+    } else if name.starts_with("layout") {
+        "Layout"
+    } else if name.starts_with("cheatsheet") {
+        "Cheatsheet"
+    } else if name == "spawn" {
+        "Launch apps"
+    } else if matches!(
+        name,
+        "dpms-off" | "dpms-on" | "session-quit" | "config-reload" | "keyboard-layout-next"
+    ) {
+        "Session & system"
+    } else if name == "submap" {
+        "Submaps"
+    } else {
+        "Other"
+    }
+}
+
+/// Display order for the keybind page's groups; unknown groups land at
+/// the end via `Other`.
+pub const GROUP_ORDER: &[&str] = &[
+    "Launch apps",
+    "Focus",
+    "Move windows",
+    "Window state & size",
+    "Workspaces",
+    "Scratchpad",
+    "Overview",
+    "Outputs",
+    "Layout",
+    "Cheatsheet",
+    "Session & system",
+    "Submaps",
+    "Other",
 ];
 
 /// A runtime action parsed from the installed umbriel (owned strings).
@@ -754,9 +808,120 @@ pub fn actions_from_help(text: &str) -> Vec<LiveAction> {
     actions
 }
 
+/// Draft state for the single keybind editor. Nothing here reaches the
+/// document until the UI applies it, so intermediate typing is never
+/// written.
+#[derive(Debug, Clone, Default)]
+pub struct BindDraft {
+    /// Chord body without the submap scope; may already include "Mod+".
+    pub chord: String,
+    /// Prepend "Mod+" when composing. The compositor keeps the mod key
+    /// for itself while a GUI is focused, so capture adds it here.
+    pub use_mod: bool,
+    /// Optional `submap[name]` scope; scoped chords only fire in that layer.
+    pub scope: String,
+    pub action: String,
+    pub repeat: Option<bool>,
+    pub allow_when_locked: Option<bool>,
+    /// Post-action submap transition, or "reset" to exit the layer.
+    pub submap: Option<String>,
+}
+
+impl BindDraft {
+    /// The final `[keybinds]` key: `submap[scope],Mod+chord`. Never
+    /// double-prefixes Mod.
+    pub fn composed_chord(&self) -> String {
+        let body = self.chord.trim();
+        let has_mod =
+            body.eq_ignore_ascii_case("mod") || body.to_ascii_lowercase().starts_with("mod+");
+        let mut chord = if self.use_mod && !has_mod {
+            format!("Mod+{body}")
+        } else {
+            body.to_owned()
+        };
+        let scope = self.scope.trim();
+        if !scope.is_empty() {
+            chord = format!("submap[{scope}],{chord}");
+        }
+        chord
+    }
+
+    /// Rebuild draft parts from an existing `[keybinds]` entry.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts(
+        chord: &str,
+        action: &str,
+        repeat: Option<bool>,
+        allow_when_locked: Option<bool>,
+        submap: Option<String>,
+    ) -> Self {
+        let (scope, body) = split_scope(chord);
+        let use_mod =
+            body.eq_ignore_ascii_case("mod") || body.to_ascii_lowercase().starts_with("mod+");
+        Self {
+            chord: body,
+            use_mod,
+            scope,
+            action: action.to_owned(),
+            repeat,
+            allow_when_locked,
+            submap,
+        }
+    }
+}
+
+/// Split `submap[name],chord` into (name, chord); (empty, chord) otherwise.
+fn split_scope(chord: &str) -> (String, String) {
+    let Some(rest) = chord.strip_prefix("submap[") else {
+        return (String::new(), chord.to_owned());
+    };
+    let Some((scope, tail)) = rest.split_once(']') else {
+        return (String::new(), chord.to_owned());
+    };
+    (scope.to_owned(), tail.trim_start_matches(',').to_owned())
+}
+
+/// Whether another user bind already owns `chord` (umbriel matches chords
+/// ignoring letter case). `skip` is the file-exact chord being edited, if
+/// any. Returns the other bind's action, for the warning text.
+pub fn find_conflict(
+    doc: &super::document::ConfigDocument,
+    chord: &str,
+    skip: Option<&str>,
+) -> Option<String> {
+    let chord = chord.trim().to_ascii_lowercase();
+    if chord.is_empty() {
+        return None;
+    }
+    doc.keybinds()
+        .iter()
+        .find(|bind| {
+            bind.chord.trim().to_ascii_lowercase() == chord
+                && skip.is_none_or(|skip| bind.chord.trim() != skip)
+        })
+        .map(|bind| bind.action.clone())
+}
+
+/// Human text for an action string: the live vocabulary's summary with any
+/// parameter appended; the raw action when unknown (a spawn command or an
+/// action newer than the installed umbriel's list).
+pub fn describe(action: &str, actions: &[LiveAction]) -> String {
+    let (name, param) = action.split_once(':').unwrap_or((action, ""));
+    let summary = actions
+        .iter()
+        .find(|live| live.name == name)
+        .map(|live| live.summary.clone());
+    match (summary, param.is_empty()) {
+        (Some(summary), true) => summary,
+        (Some(summary), false) => format!("{summary} ({param})"),
+        (None, _) => action.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn parses_msg_help_output() {
@@ -772,5 +937,66 @@ mod tests {
         assert_eq!(actions[0].summary, "Run a command");
         assert_eq!(actions[1].name, "window-focus-left");
         assert_eq!(actions[1].param, "");
+    }
+
+    #[test]
+    fn composed_chord_folds_scope_and_mod() {
+        let mut draft = BindDraft {
+            chord: "T".to_owned(),
+            use_mod: true,
+            ..Default::default()
+        };
+        assert_eq!(draft.composed_chord(), "Mod+T");
+        draft.scope = "resize".to_owned();
+        assert_eq!(draft.composed_chord(), "submap[resize],Mod+T");
+        // Mod is never double-prefixed, and a bare modifier chord survives.
+        draft.chord = "Mod+Shift+T".to_owned();
+        draft.use_mod = false;
+        assert_eq!(draft.composed_chord(), "submap[resize],Mod+Shift+T");
+        draft.chord = "Mod".to_owned();
+        draft.use_mod = true;
+        draft.scope.clear();
+        assert_eq!(draft.composed_chord(), "Mod");
+    }
+
+    #[test]
+    fn conflicts_are_case_insensitive_and_skip_the_edited_bind() {
+        let doc = crate::config::document::ConfigDocument::from_str(
+            "[keybinds]\n\"Mod+T\" = \"window-close\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            find_conflict(&doc, "mod+t", None).as_deref(),
+            Some("window-close")
+        );
+        assert_eq!(find_conflict(&doc, "Mod+T", Some("Mod+T")), None);
+        assert_eq!(find_conflict(&doc, "Mod+X", None), None);
+    }
+
+    #[test]
+    fn describe_uses_live_summaries_and_falls_back() {
+        let actions = vec![LiveAction {
+            name: "spawn".to_owned(),
+            param: "<cmd>".to_owned(),
+            summary: "Run a command".to_owned(),
+        }];
+        assert_eq!(describe("spawn:kitty", &actions), "Run a command (kitty)");
+        assert_eq!(describe("spawn", &actions), "Run a command");
+        assert_eq!(describe("brand-new:thing", &actions), "brand-new:thing");
+    }
+
+    #[test]
+    fn draft_round_trips_scoped_chords() {
+        let draft = BindDraft::from_parts(
+            "submap[resize],Mod+Escape",
+            "submap:reset",
+            None,
+            None,
+            None,
+        );
+        assert_eq!(draft.scope, "resize");
+        assert_eq!(draft.chord, "Mod+Escape");
+        assert!(draft.use_mod);
+        assert_eq!(draft.composed_chord(), "submap[resize],Mod+Escape");
     }
 }

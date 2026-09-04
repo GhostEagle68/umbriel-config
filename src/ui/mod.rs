@@ -6,9 +6,7 @@ use eframe::egui;
 use std::path::PathBuf;
 use std::str::FromStr;
 use umbriel_config::config::{
-    discovery,
-    document::{ConfigDocument, KeybindEntry},
-    keybinds, outputs, rules, schema, state, validate,
+    discovery, document::ConfigDocument, keybinds, outputs, rules, schema, state, validate,
 };
 use umbriel_config::live;
 
@@ -70,12 +68,10 @@ struct App {
     schema_note: Option<String>,
     /// Action vocabulary from the installed umbriel (or the snapshot).
     actions: Vec<keybinds::LiveAction>,
-    /// Text buffers for the Keybinds page's add row.
-    add_chord: String,
-    add_action: String,
-    /// True while waiting for a key press to record as a chord.
-    recording_chord: bool,
-    add_mod: bool,
+    /// Search filter for the keybinds page.
+    kb_search: String,
+    /// The single open keybind editor, if any.
+    kb_editor: Option<KbEditor>,
 }
 
 impl App {
@@ -114,10 +110,8 @@ impl App {
             schema_note,
             search: String::new(),
             actions: keybinds::builtin_actions(),
-            add_chord: String::new(),
-            add_action: String::new(),
-            recording_chord: false,
-            add_mod: true,
+            kb_search: String::new(),
+            kb_editor: None,
         }
     }
 
@@ -316,63 +310,24 @@ impl App {
         }
     }
 
-    /// Keybinds: the user's chord overrides. Actions are free text — the
-    /// dropdown only suggests the installed umbriel's live vocabulary.
+    /// Keybinds: one merged, grouped list — umbriel's built-in defaults
+    /// with your overrides replacing them in place — plus a single draft
+    /// editor. Nothing is written until the editor's Apply.
     fn keybinds_page(&mut self, ui: &mut egui::Ui) {
-        if self.recording_chord {
-            let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
-            for event in events {
-                let egui::Event::Key {
-                    key,
-                    modifiers,
-                    pressed: true,
-                    repeat: false,
-                    ..
-                } = event
-                else {
-                    continue;
-                };
-                if key == egui::Key::Escape {
-                    self.recording_chord = false;
-                    break;
-                }
-                if let Some(name) = key_name(key) {
-                    let mut parts: Vec<&str> = Vec::new();
-                    if self.add_mod {
-                        parts.push("Mod");
-                    }
-                    if modifiers.shift {
-                        parts.push("Shift");
-                    }
-                    if modifiers.ctrl {
-                        parts.push("Ctrl");
-                    }
-                    if modifiers.alt {
-                        parts.push("Alt");
-                    }
-                    let mut chord = parts.join("+");
-                    if !chord.is_empty() {
-                        chord.push('+');
-                    }
-                    if modifiers.shift {
-                        chord.push_str("+Shift");
-                    }
-                    if modifiers.ctrl {
-                        chord.push_str("+Ctrl");
-                    }
-                    if modifiers.alt {
-                        chord.push_str("+Alt");
-                    }
-                    chord.push('+');
-                    chord.push_str(&name);
-                    self.add_chord = chord;
-                    self.recording_chord = false;
-                    break;
-                }
-            }
-        }
         ui.heading("Keybinds");
         ui.separator();
+
+        // While capturing a chord the page is only the prompt, so pressed
+        // keys cannot leak into any text field.
+        if self
+            .kb_editor
+            .as_ref()
+            .is_some_and(|editor| editor.capturing)
+        {
+            self.capture_chord(ui);
+            return;
+        }
+
         let mut mod_key = self
             .doc
             .get_string(&["general", "mod_key"])
@@ -391,187 +346,327 @@ impl App {
             self.doc.set_string(&["general", "mod_key"], mod_key.trim());
         }
         ui.add_space(4.0);
-        egui::ComboBox::from_id_salt("keybind-common")
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .selected_text("Add a common bind (volume, media, brightness)…")
-            .show_ui(ui, |ui| {
-                let search_id = egui::Id::new("keybind-common-search");
-                let mut filter = combo_filter(ui, search_id);
-                ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search binds…"));
-                ui.memory_mut(|mem| mem.data.insert_temp(search_id, filter.clone()));
-                let needle = filter.to_lowercase();
-                egui::ScrollArea::vertical()
-                    .max_height(200.0)
-                    .show(ui, |ui| {
-                        for (chord, action, label) in keybinds::COMMON_BINDS {
-                            if !needle.is_empty()
-                                && !format!("{chord} {action} {label}")
-                                    .to_lowercase()
-                                    .contains(&needle)
-                            {
-                                continue;
-                            }
-                            if ui
-                                .selectable_label(false, egui::RichText::new(*label))
-                                .on_hover_text(format!("{chord} = {action}"))
-                                .clicked()
-                            {
-                                self.doc.set_keybind(chord, action, None, None, None);
-                            }
-                        }
-                    });
-            });
-        ui.add_space(8.0);
-        let binds = self.doc.keybinds();
-        for (index, bind) in binds.iter().enumerate() {
-            keybind_row(ui, &mut self.doc, index, bind);
-        }
-        ui.add_space(8.0);
-        if self.recording_chord {
-            ui.colored_label(
-                egui::Color32::from_rgb(140, 200, 140),
-                "Press a key combination now — with Shift/Ctrl/Alt if you like; \"Mod\" is\n\
-                 added automatically. Esc cancels.",
-            );
-        }
         ui.horizontal(|ui| {
-            ui.label("Add keybind");
             ui.add(
-                egui::TextEdit::singleline(&mut self.add_chord)
-                    .hint_text("Mod+T or XF86AudioRaiseVolume")
-                    .desired_width(170.0),
+                egui::TextEdit::singleline(&mut self.kb_search)
+                    .hint_text("Search keybinds…")
+                    .desired_width(200.0),
+            );
+            if ui.button("Add keybind").clicked() {
+                self.kb_editor = Some(KbEditor {
+                    target: None,
+                    original: None,
+                    draft: keybinds::BindDraft {
+                        use_mod: true,
+                        ..Default::default()
+                    },
+                    capturing: false,
+                });
+            }
+        });
+        ui.label(
+            egui::RichText::new(
+                "Bold rows are yours; the rest are umbriel's built-in defaults. \
+                 Click any row to edit it.",
             )
-            .on_hover_text(keybinds::CHORD_HINT);
-            egui::ComboBox::from_id_salt("keybind-add-key")
-                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                .selected_text("key…")
-                .show_ui(ui, |ui| {
-                    let search_id = egui::Id::new("keybind-add-key-search");
-                    let mut filter = combo_filter(ui, search_id);
-                    ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search keys…"));
-                    ui.memory_mut(|mem| mem.data.insert_temp(search_id, filter.clone()));
-                    let needle = filter.to_lowercase();
-                    egui::ScrollArea::vertical()
-                        .max_height(300.0)
-                        .show(ui, |ui| {
-                            for (keysym, label) in keybinds::COMMON_KEYS {
-                                if !needle.is_empty()
-                                    && !format!("{keysym} {label}").to_lowercase().contains(&needle)
-                                {
-                                    continue;
-                                }
-                                ui.selectable_value(
-                                    &mut self.add_chord,
-                                    (*keysym).to_owned(),
-                                    *label,
-                                )
-                                .on_hover_text(*keysym);
-                            }
-                        });
-                });
-            ui.checkbox(&mut self.add_mod, "Mod").on_hover_text(
-                "Adds \"Mod+\" in front of recorded chords; typing \"Mod+\" by hand works too.",
-            );
-            if ui
-                .button(if self.recording_chord {
-                    "⏺ recording…"
-                } else {
-                    "⏺ keys"
-                })
-                .on_hover_text(
-                    "Press the combination instead of typing it; the Mod checkbox chooses\n\
-                     whether \"Mod+\" is prepended. Media keys can't be captured — pick them\n\
-                     from the key list instead.",
-                )
-                .clicked()
-            {
-                self.recording_chord = !self.recording_chord;
-            }
-            egui::ComboBox::from_id_salt("keybind-add-action")
-                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                .selected_text(if self.add_action.is_empty() {
-                    "pick an action".to_owned()
-                } else {
-                    self.add_action.clone()
-                })
-                .show_ui(ui, |ui| {
-                    let search_id = egui::Id::new("keybind-add-action-search");
-                    let mut filter = combo_filter(ui, search_id);
-                    ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search actions…"));
-                    ui.memory_mut(|mem| mem.data.insert_temp(search_id, filter.clone()));
-                    let needle = filter.to_lowercase();
-                    egui::ScrollArea::vertical()
-                        .max_height(300.0)
-                        .show(ui, |ui| {
-                            for live in &self.actions {
-                                if !needle.is_empty()
-                                    && !format!("{} {} {}", live.name, live.param, live.summary)
-                                        .to_lowercase()
-                                        .contains(&needle)
-                                {
-                                    continue;
-                                }
-                                let value = if live.param.is_empty() {
-                                    live.name.clone()
-                                } else {
-                                    format!("{}:", live.name)
-                                };
-                                let label = if live.param.is_empty() {
-                                    live.name.clone()
-                                } else {
-                                    format!("{} {}", live.name, live.param)
-                                };
-                                ui.selectable_value(&mut self.add_action, value, label)
-                                    .on_hover_text(&live.summary);
-                            }
-                        });
-                });
-            if ui.button("Add").clicked()
-                && !self.add_chord.trim().is_empty()
-                && !self.add_action.is_empty()
-            {
-                let chord = self.add_chord.trim().to_owned();
-                let action = self.add_action.clone();
-                self.doc.set_keybind(&chord, &action, None, None, None);
-                self.add_chord.clear();
-                self.add_action.clear();
-            }
-        });
-        if binds.is_empty() {
-            ui.add_space(4.0);
-            ui.label(
-                "No custom keybinds yet. Umbriel's built-in defaults are active.\n\
-                 Pick an action from the list, type a chord like Mod+T, then Add.",
-            );
+            .weak()
+            .small(),
+        );
+
+        // The new-bind editor renders above the list.
+        if self
+            .kb_editor
+            .as_ref()
+            .is_some_and(|editor| editor.target.is_none())
+        {
+            self.kb_editor_ui(ui);
+            ui.add_space(6.0);
         }
-        ui.add_space(12.0);
-        let user_chords: Vec<String> = binds.iter().map(|b| b.chord.to_lowercase()).collect();
-        egui::CollapsingHeader::new(format!(
-            "umbriel's built-in defaults ({})",
-            keybinds::DEFAULT_BINDS.len()
-        ))
-        .default_open(binds.is_empty())
-        .show(ui, |ui| {
-            ui.label(
-                "Built into umbriel — these keep working except where you bind the\n\
-                 same chord above (matching ignores letter case).",
-            );
-            for (chord, action) in keybinds::DEFAULT_BINDS {
-                let overridden = user_chords
-                    .iter()
-                    .any(|user| user.eq_ignore_ascii_case(chord));
-                let mut text = egui::RichText::new(format!("{chord}  →  {action}")).weak();
-                if overridden {
-                    text = text.strikethrough();
-                }
-                ui.horizontal(|ui| {
-                    ui.label(text);
-                    if overridden {
-                        ui.label(egui::RichText::new("overridden by your bind").weak());
-                    }
+
+        // Merged rows: built-in defaults overridden in place by user
+        // binds, then user binds that no default claims.
+        let binds = self.doc.keybinds();
+        let mut rows: Vec<MergedRow> = Vec::new();
+        for (chord, action) in keybinds::DEFAULT_BINDS {
+            match binds.iter().find(|b| b.chord.eq_ignore_ascii_case(chord)) {
+                Some(user) => rows.push(MergedRow {
+                    chord: user.chord.clone(),
+                    action: user.action.clone(),
+                    repeat: user.repeat,
+                    allow_when_locked: user.allow_when_locked,
+                    submap: user.submap.clone(),
+                    user: Some(user.chord.clone()),
+                    shadows_default: true,
+                }),
+                None => rows.push(MergedRow {
+                    chord: (*chord).to_owned(),
+                    action: (*action).to_owned(),
+                    repeat: None,
+                    allow_when_locked: None,
+                    submap: None,
+                    user: None,
+                    shadows_default: false,
+                }),
+            }
+        }
+        for bind in &binds {
+            if !keybinds::DEFAULT_BINDS
+                .iter()
+                .any(|(chord, _)| chord.eq_ignore_ascii_case(&bind.chord))
+            {
+                rows.push(MergedRow {
+                    chord: bind.chord.clone(),
+                    action: bind.action.clone(),
+                    repeat: bind.repeat,
+                    allow_when_locked: bind.allow_when_locked,
+                    submap: bind.submap.clone(),
+                    user: Some(bind.chord.clone()),
+                    shadows_default: false,
                 });
             }
+        }
+
+        // Chords bound twice in the user's file highlight red.
+        let duplicated = |chord: &str| {
+            binds
+                .iter()
+                .filter(|b| b.chord.eq_ignore_ascii_case(chord))
+                .count()
+                > 1
+        };
+
+        let needle = self.kb_search.trim().to_lowercase();
+        let edit_target = self
+            .kb_editor
+            .as_ref()
+            .and_then(|editor| editor.target.clone());
+        let mut groups: Vec<(&'static str, Vec<&MergedRow>)> = Vec::new();
+        for row in &rows {
+            let group = keybinds::action_group(&row.action);
+            match groups.iter_mut().find(|(name, _)| *name == group) {
+                Some((_, list)) => list.push(row),
+                None => groups.push((group, vec![row])),
+            }
+        }
+        groups.sort_by_key(|(name, _)| {
+            keybinds::GROUP_ORDER
+                .iter()
+                .position(|known| known == name)
+                .unwrap_or(usize::MAX)
         });
+        for (group, entries) in &groups {
+            let visible: Vec<&MergedRow> = entries
+                .iter()
+                .copied()
+                .filter(|row| {
+                    needle.is_empty()
+                        || row.chord.to_lowercase().contains(&needle)
+                        || row.action.to_lowercase().contains(&needle)
+                        || keybinds::describe(&row.action, &self.actions)
+                            .to_lowercase()
+                            .contains(&needle)
+                })
+                .collect();
+            if visible.is_empty() {
+                continue;
+            }
+            ui.add_space(6.0);
+            ui.strong(format!("{group} ({})", visible.len()));
+            for row in visible {
+                if edit_target
+                    .as_ref()
+                    .is_some_and(|target| target.eq_ignore_ascii_case(&row.chord))
+                {
+                    self.kb_editor_ui(ui);
+                } else if keybind_display_row(
+                    ui,
+                    &mut self.doc,
+                    &self.actions,
+                    row,
+                    duplicated(&row.chord),
+                ) {
+                    self.kb_editor = Some(KbEditor {
+                        target: Some(row.chord.clone()),
+                        original: row.user.clone(),
+                        draft: keybinds::BindDraft::from_parts(
+                            &row.chord,
+                            &row.action,
+                            row.repeat,
+                            row.allow_when_locked,
+                            row.submap.clone(),
+                        ),
+                        capturing: false,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Full-page chord-capture prompt: Esc cancels, Backspace clears the
+    /// chord, any other recordable key completes it. "Mod" comes from the
+    /// editor's checkbox — the compositor keeps the mod key for itself
+    /// while a GUI is focused.
+    fn capture_chord(&mut self, ui: &mut egui::Ui) {
+        let Some(editor) = self.kb_editor.as_mut() else {
+            return;
+        };
+        ui.add_space(16.0);
+        ui.colored_label(
+            egui::Color32::from_rgb(140, 200, 140),
+            "Press the keys for this keybind…  Esc cancels, Backspace clears.",
+        );
+        let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
+        for event in events {
+            let egui::Event::Key {
+                key,
+                modifiers,
+                pressed: true,
+                repeat: false,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            match key {
+                egui::Key::Escape => editor.capturing = false,
+                egui::Key::Backspace => {
+                    editor.draft.chord.clear();
+                    editor.capturing = false;
+                }
+                _ => {
+                    if let Some(name) = key_name(key) {
+                        let mut parts: Vec<String> = Vec::new();
+                        if modifiers.shift {
+                            parts.push("Shift".to_owned());
+                        }
+                        if modifiers.ctrl {
+                            parts.push("Ctrl".to_owned());
+                        }
+                        if modifiers.alt {
+                            parts.push("Alt".to_owned());
+                        }
+                        parts.push(name);
+                        editor.draft.chord = parts.join("+");
+                        editor.capturing = false;
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    /// The single draft editor. Writes nothing to the document until
+    /// Apply (or Replace, when the chord is already taken).
+    fn kb_editor_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(mut editor) = self.kb_editor.take() else {
+            return;
+        };
+        let mut close = false;
+        let mut apply = false;
+        let mut replace = false;
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Chord");
+                ui.add(egui::TextEdit::singleline(&mut editor.draft.chord).desired_width(150.0))
+                    .on_hover_text(keybinds::CHORD_HINT);
+                if ui.button("⌨ Press keys…").clicked() {
+                    editor.capturing = true;
+                }
+                key_picker(ui, &mut editor.draft.chord);
+                ui.checkbox(&mut editor.draft.use_mod, "Mod")
+                    .on_hover_text("Prefix the chord with Mod (your mod_key)");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Action");
+                ui.add(egui::TextEdit::singleline(&mut editor.draft.action).desired_width(260.0));
+                action_picker(ui, &mut editor.draft.action, &self.actions);
+            });
+            egui::CollapsingHeader::new(egui::RichText::new("advanced").small())
+                .id_salt("kb-editor-advanced")
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let mut repeat = editor.draft.repeat.unwrap_or(true);
+                        ui.checkbox(&mut repeat, "repeat")
+                            .on_hover_text("Auto-repeat while held");
+                        editor.draft.repeat = (!repeat).then_some(false);
+                        let mut locked = editor.draft.allow_when_locked.unwrap_or(false);
+                        ui.checkbox(&mut locked, "locked")
+                            .on_hover_text("Works while the session is locked");
+                        editor.draft.allow_when_locked = locked.then_some(true);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut editor.draft.scope)
+                                .hint_text("submap scope")
+                                .desired_width(110.0),
+                        )
+                        .on_hover_text("Only active inside this submap layer");
+                        let mut submap = editor.draft.submap.clone().unwrap_or_default();
+                        ui.add(
+                            egui::TextEdit::singleline(&mut submap)
+                                .hint_text("then enter submap")
+                                .desired_width(110.0),
+                        )
+                        .on_hover_text(
+                            "Switch to this submap layer after the action (or \"reset\")",
+                        );
+                        editor.draft.submap =
+                            (!submap.trim().is_empty()).then(|| submap.trim().to_owned());
+                    });
+                });
+            let composed = editor.draft.composed_chord();
+            ui.label(egui::RichText::new(format!("→ {composed}")).weak().small());
+            let conflict =
+                keybinds::find_conflict(&self.doc, &composed, editor.original.as_deref());
+            if composed.is_empty() || editor.draft.action.trim().is_empty() {
+                ui.label(egui::RichText::new("A chord and an action are both needed.").weak());
+            } else if let Some(other) = &conflict {
+                ui.colored_label(
+                    egui::Color32::from_rgb(240, 100, 100),
+                    format!("⚠ {composed} is already bound to {other}"),
+                );
+                if ui.button("Replace it").clicked() {
+                    replace = true;
+                    apply = true;
+                }
+            } else if ui.button("Apply").clicked() {
+                apply = true;
+            }
+            if ui.button("Cancel").clicked() {
+                close = true;
+            }
+        });
+        if apply {
+            let composed = editor.draft.composed_chord();
+            if replace
+                && let Some(file) = self
+                    .doc
+                    .keybinds()
+                    .iter()
+                    .find(|b| {
+                        b.chord.eq_ignore_ascii_case(&composed)
+                            && editor.original.as_deref() != Some(b.chord.as_str())
+                    })
+                    .map(|b| b.chord.clone())
+            {
+                self.doc.remove_table(&["keybinds", &file]);
+            }
+            self.doc.set_keybind(
+                &composed,
+                editor.draft.action.trim(),
+                editor.draft.repeat,
+                editor.draft.allow_when_locked,
+                editor.draft.submap.as_deref(),
+            );
+            if let Some(original) = &editor.original
+                && !original.eq_ignore_ascii_case(&composed)
+            {
+                self.doc.remove_table(&["keybinds", original]);
+            }
+            self.kb_editor = None;
+        } else if close {
+            self.kb_editor = None;
+        } else {
+            self.kb_editor = Some(editor);
+        }
     }
 
     fn save(&mut self) {
@@ -1148,83 +1243,159 @@ fn rule_field_row(
     }
 }
 
-/// One keybind row: chord and action on the first line (the action field
-/// fills the row so long spawn commands stay editable), extras below, and
-/// remove. Any edit rewrites the whole bind via `set_keybind`; renaming a
-/// chord removes the old entry after writing the new one.
-fn keybind_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, index: usize, bind: &KeybindEntry) {
-    let mut chord = bind.chord.clone();
-    let mut action = bind.action.clone();
-    let mut repeat = bind.repeat.unwrap_or(true);
-    let mut locked = bind.allow_when_locked.unwrap_or(false);
-    let mut submap = bind.submap.clone().unwrap_or_default();
-    let mut removed = false;
+/// One row of the merged keybind list: a built-in default or user bind,
+/// with the user's override already applied in place.
+struct MergedRow {
+    chord: String,
+    action: String,
+    repeat: Option<bool>,
+    allow_when_locked: Option<bool>,
+    submap: Option<String>,
+    /// File-exact chord of the user bind backing this row, if any.
+    user: Option<String>,
+    /// The row shadows a built-in default (a ↺ reset is available).
+    shadows_default: bool,
+}
 
+/// The single open keybind editor. `target` places it inline under its
+/// row (None renders it at the top, for a new bind); `original` is the
+/// file-exact chord being edited, so a rename removes the old entry.
+struct KbEditor {
+    target: Option<String>,
+    original: Option<String>,
+    draft: keybinds::BindDraft,
+    capturing: bool,
+}
+
+/// One merged keybind row: the chord (bold when yours, red when the same
+/// chord is bound twice) and the human action text; either opens the
+/// editor. Overridden defaults get ↺ reset, user-only binds ✕ remove.
+/// Returns whether the row was clicked for editing.
+fn keybind_display_row(
+    ui: &mut egui::Ui,
+    doc: &mut ConfigDocument,
+    actions: &[keybinds::LiveAction],
+    row: &MergedRow,
+    duplicated: bool,
+) -> bool {
+    let summary = keybinds::describe(&row.action, actions);
+    let mut edit = false;
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut chord).desired_width(140.0))
-            .on_hover_text(keybinds::CHORD_HINT);
-        ui.add(egui::TextEdit::singleline(&mut action).desired_width(ui.available_width() - 36.0))
-            .on_hover_text("The action to run, e.g. spawn:kitty");
-        removed = ui
-            .button("✕")
-            .on_hover_text("Remove this keybind")
-            .clicked();
+        let mut chord = egui::RichText::new(&row.chord).monospace();
+        if row.user.is_some() {
+            chord = chord.strong();
+        }
+        if duplicated {
+            chord = chord.color(egui::Color32::from_rgb(240, 100, 100));
+        }
+        if ui
+            .selectable_label(false, chord)
+            .on_hover_text("Click to edit")
+            .clicked()
+        {
+            edit = true;
+        }
+        if ui
+            .selectable_label(false, summary.as_str())
+            .on_hover_text(row.action.as_str())
+            .clicked()
+        {
+            edit = true;
+        }
+        if let Some(file) = &row.user {
+            let remove = if row.shadows_default {
+                ui.button("↺")
+                    .on_hover_text("Reset to umbriel's built-in default")
+                    .clicked()
+            } else {
+                ui.button("✕")
+                    .on_hover_text("Remove this keybind")
+                    .clicked()
+            };
+            if remove {
+                doc.remove_table(&["keybinds", file]);
+            }
+        }
     });
-    ui.indent(egui::Id::new(index), |ui| {
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut repeat, "repeat")
-                .on_hover_text("Auto-repeat while held");
-            ui.checkbox(&mut locked, "locked")
-                .on_hover_text("Works while the session is locked");
-            ui.add(
-                egui::TextEdit::singleline(&mut submap)
-                    .hint_text("submap")
-                    .desired_width(60.0),
-            )
-            .on_hover_text("Switch to this submap layer after the action");
-        });
-    });
-    ui.add_space(4.0);
+    edit
+}
 
-    if removed {
-        doc.remove_table(&["keybinds", &bind.chord]);
-        return;
-    }
-    // Extras stay unset unless the bind already had them or they differ
-    // from umbriel's defaults — string-form binds stay minimal.
-    let repeat_out = if bind.repeat.is_some() || !repeat {
-        Some(repeat)
-    } else {
-        None
-    };
-    let locked_out = if bind.allow_when_locked.is_some() || locked {
-        Some(locked)
-    } else {
-        None
-    };
-    let submap_out = if submap.trim().is_empty() {
-        None
-    } else {
-        Some(submap.trim().to_owned())
-    };
-    let changed = chord != bind.chord
-        || action != bind.action
-        || repeat_out != bind.repeat
-        || locked_out != bind.allow_when_locked
-        || submap_out != bind.submap;
-    if !changed || chord.trim().is_empty() || action.trim().is_empty() {
-        return;
-    }
-    doc.set_keybind(
-        chord.trim(),
-        action.trim(),
-        repeat_out,
-        locked_out,
-        submap_out.as_deref(),
-    );
-    if chord.trim() != bind.chord {
-        doc.remove_table(&["keybinds", &bind.chord]);
-    }
+/// Searchable picker of special keys (media, mouse, wheel, numpad);
+/// picking writes the bare keysym into the draft chord.
+fn key_picker(ui: &mut egui::Ui, chord: &mut String) {
+    egui::ComboBox::from_id_salt("kb-key-picker")
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .selected_text("key…")
+        .show_ui(ui, |ui| {
+            let search_id = egui::Id::new("kb-key-picker-search");
+            let mut filter = combo_filter(ui, search_id);
+            ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search keys…"));
+            ui.memory_mut(|mem| mem.data.insert_temp(search_id, filter.clone()));
+            let needle = filter.to_lowercase();
+            egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    for (keysym, label) in keybinds::COMMON_KEYS {
+                        if !needle.is_empty()
+                            && !format!("{keysym} {label}").to_lowercase().contains(&needle)
+                        {
+                            continue;
+                        }
+                        if ui
+                            .selectable_label(false, *label)
+                            .on_hover_text(*keysym)
+                            .clicked()
+                        {
+                            *chord = (*keysym).to_owned();
+                        }
+                    }
+                });
+        });
+}
+
+/// Searchable action picker over the installed umbriel's live list;
+/// picking a parameterized action writes `name:` ready for the argument.
+fn action_picker(ui: &mut egui::Ui, action: &mut String, actions: &[keybinds::LiveAction]) {
+    egui::ComboBox::from_id_salt("kb-action-picker")
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .selected_text("pick…")
+        .show_ui(ui, |ui| {
+            let search_id = egui::Id::new("kb-action-picker-search");
+            let mut filter = combo_filter(ui, search_id);
+            ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search actions…"));
+            ui.memory_mut(|mem| mem.data.insert_temp(search_id, filter.clone()));
+            let needle = filter.to_lowercase();
+            egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    for live in actions {
+                        if !needle.is_empty()
+                            && !format!("{} {} {}", live.name, live.param, live.summary)
+                                .to_lowercase()
+                                .contains(&needle)
+                        {
+                            continue;
+                        }
+                        let value = if live.param.is_empty() {
+                            live.name.clone()
+                        } else {
+                            format!("{}:", live.name)
+                        };
+                        let label = if live.param.is_empty() {
+                            live.name.clone()
+                        } else {
+                            format!("{} {}", live.name, live.param)
+                        };
+                        if ui
+                            .selectable_label(*action == value, egui::RichText::new(label))
+                            .on_hover_text(live.summary.clone())
+                            .clicked()
+                        {
+                            *action = value;
+                        }
+                    }
+                });
+        });
 }
 
 fn default_text(field: &outputs::Field) -> String {
