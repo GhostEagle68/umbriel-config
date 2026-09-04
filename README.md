@@ -9,6 +9,9 @@ live-reloads and the change applies immediately.
 > **Status: alpha.** The core is usable but has rough edges, recommended for using as testing right now.
 > [Bug reports and ideas are welcome](https://github.com/GhostEagle68/umbriel-config/issues).
 
+# Disclaimer
+Zcode GLM 5.3 models were used to help plan, review code and research only. All code is looked over by me and tested locally.
+
 ## Features
 
 - **Always in sync with your umbriel** — setting pages are assembled at
