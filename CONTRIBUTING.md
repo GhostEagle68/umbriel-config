@@ -55,9 +55,10 @@ Two layers, strictly separated:
 
 ## Branching and commits
 
-- `main` is the working branch (this repo is not an upstream mirror).
-- Topic branch per code change: `type/short-description`
-  (e.g. `feat/config-discovery`, `fix/backup-race`).
+- `main` holds confirmed-working state; `dev` is the integration branch.
+  New work lands on `dev` (topic branches optional:
+  `type/short-description`, e.g. `feat/config-discovery`). After a change
+  is confirmed working, merge `dev` into `main`. Tag releases on `main`.
 - Conventional Commits: `type(scope): imperative summary`. Types: `feat`,
   `fix`, `refactor`, `docs`, `test`, `build`, `chore`, `perf`, `style`, `ci`.
   Scope = module or area (`config`, `ui`, `docs`).
@@ -66,11 +67,13 @@ Two layers, strictly separated:
 ## Versioning
 
 - Semver; the single source of truth is `version` in `Cargo.toml`.
+- Version bumps happen only when cutting a release, never per commit. A
+  release is: bump `version` in `Cargo.toml` in its own `chore(release):`
+  commit, merge `dev` into `main`, and tag `v0.x.y` on `main`.
 - 0.x while the GUI matures: features and breaking changes bump the minor,
   fixes bump the patch.
-- Tag releases on `main` only when there is a runnable artifact. Release
-  automation (cargo-release or release-plz) is added together with the first
-  release, not before.
+- Release automation (cargo-release or release-plz) is added together with
+  the first release, not before.
 
 ## Phase roadmap
 

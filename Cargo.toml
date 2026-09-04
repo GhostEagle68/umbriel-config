@@ -2,6 +2,13 @@
 name = "umbriel-config"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "GUI configurator for the Umbriel Wayland compositor"
+license = "MIT"
+repository = "https://github.com/GhostEagle68/umbriel-config"
+readme = "README.md"
+keywords = ["wayland", "umbriel", "configuration", "gui"]
+categories = ["gui", "configuration"]
 
 [dependencies]
 anyhow = "1.0.104"

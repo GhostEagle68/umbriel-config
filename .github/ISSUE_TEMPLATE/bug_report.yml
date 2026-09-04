@@ -1,0 +1,124 @@
+name: Bug Report
+description: Report a bug or regression in umbriel-config
+title: "[BUG] "
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Bug reports are always welcome, including small ones.
+
+        Please report compositor issues (umbriel ignoring a valid config,
+        wrong behavior after reload) to
+        [umbriel](https://github.com/noctalia-dev/umbriel), and desktop shell
+        issues (bar, launcher, notifications, widgets) to
+        [noctalia](https://github.com/noctalia-dev/noctalia).
+
+  - type: checkboxes
+    id: submission-checklist
+    attributes:
+      label: Submission checklist
+      description: Please confirm the following before submitting.
+      options:
+        - label: I have searched existing issues and confirmed this is not a duplicate.
+          required: true
+        - label: I am using the latest release or a recent build of `main`.
+          required: true
+        - label: I checked whether this is a GUI issue (what the app writes) and not a compositor issue (how umbriel behaves with the saved file).
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: A clear and concise description of the issue.
+      placeholder: Describe the problem...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Steps required to reproduce the issue, starting from opening umbriel-config.
+
+        Include the config snippet if it is needed.
+      placeholder: |
+        1. Open ...
+        2. Change ...
+        3. Save / reopen ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      options:
+        - Keybinds
+        - Outputs
+        - Rules (window/layer)
+        - Schema pages
+        - Changes page
+        - CLI
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: umbriel-config version
+      description: The release tag, or the commit hash if you are running a development build.
+      placeholder: "v0.1.0-alpha.1 (commit hash)"
+    validations:
+      required: true
+
+  - type: input
+    id: umbriel-version
+    attributes:
+      label: umbriel compositor version
+      description: How you installed it, or the output of `umbriel msg version`.
+      placeholder: "e.g. built from main, AUR, ..."
+  - type: textarea
+    id: config
+    attributes:
+      label: Config snippet
+      description: |
+        The part of your config involved — trim to the relevant section.
+        Include the `[include]` table if your config is split across files.
+      render: toml
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: |
+        Terminal output is relevant if you launched umbriel-config from a
+        terminal. Large outputs can be wrapped in a `<details>` block.
+      render: text
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add any other context, screenshots, or relevant information here.
