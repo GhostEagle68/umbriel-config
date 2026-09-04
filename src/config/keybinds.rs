@@ -885,21 +885,68 @@ fn split_scope(chord: &str) -> (String, String) {
 /// ignoring letter case). `skip` is the file-exact chord being edited, if
 /// any. Returns the other bind's action, for the warning text.
 pub fn find_conflict(
-    doc: &super::document::ConfigDocument,
+    docs: &[&super::document::ConfigDocument],
     chord: &str,
     skip: Option<&str>,
-) -> Option<String> {
+) -> Option<(usize, String)> {
     let chord = chord.trim().to_ascii_lowercase();
     if chord.is_empty() {
         return None;
     }
-    doc.keybinds()
-        .iter()
-        .find(|bind| {
+    for (file, doc) in docs.iter().enumerate() {
+        if let Some(bind) = doc.keybinds().iter().find(|bind| {
             bind.chord.trim().to_ascii_lowercase() == chord
                 && skip.is_none_or(|skip| bind.chord.trim() != skip)
-        })
-        .map(|bind| bind.action.clone())
+        }) {
+            return Some((file, bind.action.clone()));
+        }
+    }
+    None
+}
+
+/// A user bind and the index of the document that owns it — the winner
+/// for its chord under umbriel's precedence: later documents override
+/// earlier ones, case-insensitively per chord.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourcedBind {
+    pub chord: String,
+    pub action: String,
+    pub repeat: Option<bool>,
+    pub allow_when_locked: Option<bool>,
+    pub submap: Option<String>,
+    pub source_file: usize,
+}
+
+/// User binds across the include chain and the main file, in umbriel's
+/// precedence: per chord, the last document that binds it wins.
+pub fn merged_binds(docs: &[&super::document::ConfigDocument]) -> Vec<SourcedBind> {
+    let mut merged: Vec<SourcedBind> = Vec::new();
+    for (file, doc) in docs.iter().enumerate() {
+        for bind in doc.keybinds() {
+            match merged
+                .iter_mut()
+                .find(|existing| existing.chord.eq_ignore_ascii_case(&bind.chord))
+            {
+                Some(existing) => {
+                    existing.chord = bind.chord.clone();
+                    existing.action = bind.action.clone();
+                    existing.repeat = bind.repeat;
+                    existing.allow_when_locked = bind.allow_when_locked;
+                    existing.submap = bind.submap.clone();
+                    existing.source_file = file;
+                }
+                None => merged.push(SourcedBind {
+                    chord: bind.chord.clone(),
+                    action: bind.action.clone(),
+                    repeat: bind.repeat,
+                    allow_when_locked: bind.allow_when_locked,
+                    submap: bind.submap.clone(),
+                    source_file: file,
+                }),
+            }
+        }
+    }
+    merged
 }
 
 /// Human text for an action string: the live vocabulary's summary with any
@@ -966,11 +1013,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            find_conflict(&doc, "mod+t", None).as_deref(),
-            Some("window-close")
+            find_conflict(&[&doc], "mod+t", None),
+            Some((0, "window-close".to_owned()))
         );
-        assert_eq!(find_conflict(&doc, "Mod+T", Some("Mod+T")), None);
-        assert_eq!(find_conflict(&doc, "Mod+X", None), None);
+        assert_eq!(find_conflict(&[&doc], "Mod+T", Some("Mod+T")), None);
+        assert_eq!(find_conflict(&[&doc], "Mod+X", None), None);
+    }
+
+    #[test]
+    fn merged_binds_last_file_wins_per_chord() {
+        let first = crate::config::document::ConfigDocument::from_str(
+            "[keybinds]\n\"Mod+T\" = \"window-close\"\n\"Mod+X\" = \"window-close\"\n",
+        )
+        .unwrap();
+        let main = crate::config::document::ConfigDocument::from_str(
+            "[keybinds]\n\"mod+t\" = \"config-reload\"\n",
+        )
+        .unwrap();
+        let merged = merged_binds(&[&first, &main]);
+        assert_eq!(merged.len(), 2);
+        let t = merged.iter().find(|b| b.chord == "mod+t").unwrap();
+        assert_eq!((t.source_file, t.action.as_str()), (1, "config-reload"));
+        let x = merged.iter().find(|b| b.chord == "Mod+X").unwrap();
+        assert_eq!((x.source_file, x.action.as_str()), (0, "window-close"));
     }
 
     #[test]

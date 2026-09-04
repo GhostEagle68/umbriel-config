@@ -1,5 +1,6 @@
 pub mod discovery;
 pub mod document;
+pub mod includes;
 pub mod keybinds;
 pub mod outputs;
 pub mod rules;

@@ -615,10 +615,10 @@ impl App {
             let composed = editor.draft.composed_chord();
             ui.label(egui::RichText::new(format!("→ {composed}")).weak().small());
             let conflict =
-                keybinds::find_conflict(&self.doc, &composed, editor.original.as_deref());
+                keybinds::find_conflict(&[&self.doc], &composed, editor.original.as_deref());
             if composed.is_empty() || editor.draft.action.trim().is_empty() {
                 ui.label(egui::RichText::new("A chord and an action are both needed.").weak());
-            } else if let Some(other) = &conflict {
+            } else if let Some((_, other)) = &conflict {
                 ui.colored_label(
                     egui::Color32::from_rgb(240, 100, 100),
                     format!("⚠ {composed} is already bound to {other}"),
