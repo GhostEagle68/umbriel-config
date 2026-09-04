@@ -1,13 +1,13 @@
 # umbriel-config
 
-A stupid-simple GUI configurator for the [Umbriel](https://github.com/noctalia-dev/umbriel)
+A simple GUI configurator for the [Umbriel](https://github.com/noctalia-dev/umbriel)
 Wayland compositor by the Noctalia team.
 
 Open your config, click through the settings, hit **Save** — Umbriel
 live-reloads and the change applies immediately.
 
-> **Status: alpha.** The core is usable for daily driving; rough edges
-> remain. [Bug reports and ideas are welcome](https://github.com/GhostEagle68/umbriel-config/issues).
+> **Status: alpha.** The core is usable but has rough edges, recommended for using as testing right now.
+> [Bug reports and ideas are welcome](https://github.com/GhostEagle68/umbriel-config/issues).
 
 ## Features
 
