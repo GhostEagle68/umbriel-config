@@ -69,7 +69,9 @@ Two layers, strictly separated:
 - Semver; the single source of truth is `version` in `Cargo.toml`.
 - Version bumps happen only when cutting a release, never per commit. A
   release is: bump `version` in `Cargo.toml` in its own `chore(release):`
-  commit, merge `dev` into `main`, and tag `v0.x.y` on `main`.
+  commit, merge `dev` into `main`, and tag `v0.x.y` on `main`. Pushing the
+  tag triggers the release workflow, which builds the Linux binary and
+  attaches it (with checksums) to the GitHub Release.
 - 0.x while the GUI matures: features and breaking changes bump the minor,
   fixes bump the patch.
 - Release automation (cargo-release or release-plz) is added together with

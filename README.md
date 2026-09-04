@@ -30,16 +30,21 @@ live-reloads and the change applies immediately.
 
 ## Install
 
-Requires a recent stable Rust toolchain (edition 2024, Rust 1.88+).
+Prebuilt binaries are attached to every release — no compiler needed.
+
+```sh
+mkdir -p ~/.local/bin
+curl -fLO https://github.com/GhostEagle68/umbriel-config/releases/latest/download/umbriel-config-x86_64-linux.tar.gz
+tar -xzf umbriel-config-x86_64-linux.tar.gz -C ~/.local/bin
+```
+
+Make sure `~/.local/bin` is on your `PATH`, then run `umbriel-config`. A
+`.sha256` checksum sits next to the tarball on the release page.
+
+Build from source instead (Rust 1.88+, edition 2024):
 
 ```sh
 cargo install --git https://github.com/GhostEagle68/umbriel-config
-```
-
-For the alpha, pin the tag to match a release:
-
-```sh
-cargo install --git https://github.com/GhostEagle68/umbriel-config --tag v0.1.0-alpha.1
 ```
 
 ## Usage
@@ -56,8 +61,7 @@ umbriel-config outputs        # list outputs reported by the compositor
 
 - Only the **keybinds** page follows the `[include]` chain so far; the
   schema, rules, and raw pages edit the main config file.
-- No distro packaging yet (AUR/Flatpak later); no crates.io publish yet —
-  install is from this repository.
+- Linux x86_64 only for now; no AUR or crates.io packaging yet.
 - Eye-candy and polish pass still pending.
 
 ## Development
