@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # Cargo dependencies (updates Cargo.lock too, which the release build
+  # requires via `--locked`).
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    target-branch: "dev"
+    groups:
+      # One PR per week for routine minor/patch bumps; majors stay separate.
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Actions used by rust.yml and release.yml.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    target-branch: "dev"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
