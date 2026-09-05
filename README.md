@@ -44,9 +44,20 @@ tar -xzf umbriel-config-x86_64-linux.tar.gz -C ~/.local/bin
 Make sure `~/.local/bin` is on your `PATH`, then run `umbriel-config`. A
 `.sha256` checksum sits next to the tarball on the release page.
 
-Build from source instead. **Dependencies:**
+### Build from source
+
+**Dependencies:**
 - Rust 1.88+ (includes cargo)
 - Edition 2024
+
+If you don't have Rust installed, install it with [rustup](https://rustup.rs):
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+```
+
+Then build and install umbriel-config:
 
 ```sh
 cargo install --git https://github.com/GhostEagle68/umbriel-config
