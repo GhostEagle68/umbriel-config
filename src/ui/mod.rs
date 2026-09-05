@@ -1285,7 +1285,12 @@ impl App {
 
     /// Keys in the config that no surface claims; drives the Raw page.
     fn raw_keys(&self) -> Vec<String> {
-        schema::uncovered(&self.doc.value_paths(), &schema::key_set(&self.schema))
+        let claims = schema::managed_claims(&self.chain());
+        schema::uncovered(
+            &self.doc.value_paths(),
+            &schema::key_set(&self.schema),
+            &claims,
+        )
     }
 
     /// Schema from the installed packaged default; empty when unavailable.
