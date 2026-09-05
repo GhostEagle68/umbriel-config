@@ -140,5 +140,6 @@ jobs:
             umbriel-config-x86_64-linux.tar.gz
             umbriel-config-x86_64-linux.tar.gz.sha256
           body_path: release_notes.md
+          clobber: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
