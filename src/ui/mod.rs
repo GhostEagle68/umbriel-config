@@ -518,6 +518,17 @@ impl App {
             }
         }
         let has_editors = owns_keybinds || !owned_rules.is_empty();
+        let claims = schema::managed_claims(&self.chain());
+        let schema_keys = schema::key_set(&self.schema);
+        let other_keys: Vec<String> = if file < n {
+            schema::uncovered(
+                &self.includes.docs[file].doc.value_paths(),
+                &schema_keys,
+                &claims,
+            )
+        } else {
+            schema::uncovered(&self.doc.value_paths(), &schema_keys, &claims)
+        };
 
         ui.heading(&label);
         ui.separator();
@@ -525,7 +536,7 @@ impl App {
             ui.label("Nothing the settings pages cover lives in this file.");
             return;
         }
-        if !groups.is_empty() {
+        if groups.is_empty() && !has_editors && other_keys.is_empty() {
             ui.label(
                 egui::RichText::new(format!(
                     "Edits here write to {label}, which your main config pulls in via [include]."
@@ -554,6 +565,25 @@ impl App {
                 ui.add_space(8.0);
                 ui.strong(rules_label(family));
                 self.rules_content(ui, family);
+            }
+            if !other_keys.is_empty() {
+                ui.add_space(8.0);
+                egui::CollapsingHeader::new(format!(
+                    "Other keys in this file ({})",
+                    other_keys.len()
+                ))
+                .id_salt(format!("other-{file}"))
+                .default_open(false)
+                .show(ui, |ui| {
+                    for dotted in &other_keys {
+                        let doc = if file < n {
+                            &mut self.includes.docs[file].doc
+                        } else {
+                            &mut self.doc
+                        };
+                        raw_row(ui, doc, dotted);
+                    }
+                });
             }
         });
     }
@@ -1283,14 +1313,17 @@ impl App {
         sections
     }
 
-    /// Keys in the config that no surface claims; drives the Raw page.
-    fn raw_keys(&self) -> Vec<String> {
+    /// Every uncovered key across the chain, tagged with its owning file.
+    fn raw_rows(&self) -> Vec<(usize, String)> {
         let claims = schema::managed_claims(&self.chain());
-        schema::uncovered(
-            &self.doc.value_paths(),
-            &schema::key_set(&self.schema),
-            &claims,
-        )
+        let schema_keys = schema::key_set(&self.schema);
+        let mut rows: Vec<(usize, String)> = Vec::new();
+        for (file, doc) in self.chain().iter().enumerate() {
+            for dotted in schema::uncovered(&doc.value_paths(), &schema_keys, &claims) {
+                rows.push((file, dotted));
+            }
+        }
+        rows
     }
 
     /// Schema from the installed packaged default; empty when unavailable.
@@ -1339,7 +1372,7 @@ fn top_level(section: &str) -> String {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let raw_keys = self.raw_keys();
+        let raw_rows = self.raw_rows();
         egui::Panel::top("header").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("Umbriel Config");
@@ -1515,13 +1548,13 @@ impl eframe::App for App {
                 {
                     self.search.clear();
                 }
-                if !raw_keys.is_empty() {
+                if !raw_rows.is_empty() {
                     ui.separator();
                     if ui
                         .selectable_value(
                             &mut self.page,
                             Some(Page::Raw),
-                            format!("Other settings ({})", raw_keys.len()),
+                            format!("Other settings ({})", raw_rows.len()),
                         )
                         .clicked()
                     {
@@ -1734,12 +1767,33 @@ impl eframe::App for App {
                     ui.heading("Other settings");
                     ui.separator();
                     ui.label(
-                        "These keys are in your config but have no dedicated page yet.\n\
-                         They are shown here so nothing is hidden; scalar values are editable.",
+                        "Keys no page claims across your whole config chain, grouped\n\
+                         by the file that holds them. Scalars are editable.",
                     );
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        for dotted in &raw_keys {
-                            raw_row(ui, &mut self.doc, dotted);
+                        let mut current_file: Option<usize> = None;
+                        for (file, dotted) in &raw_rows {
+                            if current_file != Some(*file) {
+                                current_file = Some(*file);
+                                ui.add_space(8.0);
+                                let label = if *file < self.includes.docs.len() {
+                                    self.includes.docs[*file].label.clone()
+                                } else {
+                                    let name = self
+                                        .path
+                                        .file_name()
+                                        .map(|name| name.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| "config".to_owned());
+                                    format!("{name} (main)")
+                                };
+                                ui.strong(label);
+                            }
+                            let doc = if *file < self.includes.docs.len() {
+                                &mut self.includes.docs[*file].doc
+                            } else {
+                                &mut self.doc
+                            };
+                            raw_row(ui, doc, dotted);
                         }
                     });
                 }
