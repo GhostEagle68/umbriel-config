@@ -341,12 +341,24 @@ impl App {
     /// One include file's own settings: schema entries this file actually
     /// has, grouped like the main pages, writing to that file.
     fn file_page(&mut self, ui: &mut egui::Ui, file: usize) {
-        let Some(inc) = self.includes.docs.get(file) else {
-            return;
+        let n = self.includes.docs.len();
+        let (label, present): (String, std::collections::BTreeSet<String>) = if file < n {
+            let inc = &self.includes.docs[file];
+            (
+                inc.label.clone(),
+                inc.doc.value_paths().into_iter().collect(),
+            )
+        } else {
+            let name = self
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "config".to_owned());
+            (
+                format!("{name} (main)"),
+                self.doc.value_paths().into_iter().collect(),
+            )
         };
-        let label = inc.label.clone();
-        let present: std::collections::BTreeSet<String> =
-            inc.doc.value_paths().into_iter().collect();
 
         let mut groups: Vec<(String, Vec<&schema::Entry>)> = Vec::new();
         for entry in &self.schema {
@@ -380,7 +392,12 @@ impl App {
             for (section, group) in &groups {
                 ui.add_space(6.0);
                 ui.strong(schema::humanize(section));
-                schema_entries_ui(ui, &mut self.includes.docs[file].doc, group, section);
+                let doc = if file < n {
+                    &mut self.includes.docs[file].doc
+                } else {
+                    &mut self.doc
+                };
+                schema_entries_ui(ui, doc, group, section);
             }
         });
     }
@@ -1246,6 +1263,23 @@ impl eframe::App for App {
                 }
                 if !self.includes.docs.is_empty() {
                     ui.separator();
+                    let n = self.includes.docs.len();
+                    let main_label = self
+                        .path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "config".to_owned());
+                    if ui
+                        .selectable_value(
+                            &mut self.page,
+                            Some(Page::File(n)),
+                            format!("{main_label} (main)"),
+                        )
+                        .on_hover_text(self.path.display().to_string())
+                        .clicked()
+                    {
+                        self.search.clear();
+                    }
                     for (index, inc) in self.includes.docs.iter().enumerate() {
                         if ui
                             .selectable_value(
