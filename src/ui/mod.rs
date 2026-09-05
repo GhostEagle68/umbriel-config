@@ -269,17 +269,16 @@ impl App {
     /// Window/layer rules: one collapsible card per `[[section]]` entry.
     /// Every field starts unset; only what the user fills in is written.
     fn rules_page(&mut self, ui: &mut egui::Ui, name: &'static str) {
-        let label = if name == "window_rule" {
-            "Window rules"
-        } else {
-            "Layer rules"
+        let label = match name {
+            "window_rule" => "Window rules",
+            "layer_rule" => "Layer rules",
+            _ => "Security contexts",
         };
-        let (match_fields, settings_fields): (&[rules::Field], &[rules::Field]) =
-            if name == "window_rule" {
-                (rules::WINDOW_MATCH, rules::WINDOW_SETTINGS)
-            } else {
-                (rules::LAYER_MATCH, rules::LAYER_SETTINGS)
-            };
+        let (match_fields, settings_fields): (&[rules::Field], &[rules::Field]) = match name {
+            "window_rule" => (rules::WINDOW_MATCH, rules::WINDOW_SETTINGS),
+            "layer_rule" => (rules::LAYER_MATCH, rules::LAYER_SETTINGS),
+            _ => (rules::SECURITY_MATCH, rules::SECURITY_SETTINGS),
+        };
         ui.heading(label);
         ui.separator();
         if ui.button("Add rule").clicked() {
@@ -1181,6 +1180,16 @@ impl eframe::App for App {
                     self.search.clear();
                 }
                 if ui
+                    .selectable_value(
+                        &mut self.page,
+                        Some(Page::Rules("security_context_rule")),
+                        "Security contexts",
+                    )
+                    .clicked()
+                {
+                    self.search.clear();
+                }
+                if ui
                     .selectable_value(&mut self.page, Some(Page::Keybinds), "Keybinds")
                     .clicked()
                 {
@@ -1591,6 +1600,30 @@ fn rule_field_row(
                 .inner;
             if changed {
                 doc.rule_set_position(name, index, field.key, x, y, anchor.as_deref());
+            }
+        }
+        rules::FieldKind::List => {
+            let current = doc.rule_strings(name, index, field.key).unwrap_or_default();
+            let mut value = current.join(", ");
+            let changed = ui
+                .horizontal(|ui| {
+                    ui.label(field.label);
+                    ui.text_edit_singleline(&mut value)
+                        .on_hover_text("Comma-separated; leave empty to leave unset")
+                })
+                .inner
+                .changed();
+            if changed {
+                let items: Vec<String> = value
+                    .split(',')
+                    .map(|item| item.trim().to_owned())
+                    .filter(|item| !item.is_empty())
+                    .collect();
+                if items.is_empty() {
+                    doc.rule_unset(name, index, field.key);
+                } else {
+                    doc.rule_set_strings(name, index, field.key, &items);
+                }
             }
         }
     }
