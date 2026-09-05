@@ -32,6 +32,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
 enum Page {
     /// A top-level schema section, e.g. `"general"`.
     Section(String),
+    /// One included file's own settings.
+    File(usize),
     Outputs,
     /// Window or layer rules; the payload is the TOML section name.
     Rules(&'static str),
@@ -317,6 +319,53 @@ impl App {
         }
     }
 
+    /// One include file's own settings: schema entries this file actually
+    /// has, grouped like the main pages, writing to that file.
+    fn file_page(&mut self, ui: &mut egui::Ui, file: usize) {
+        let Some(inc) = self.includes.docs.get(file) else {
+            return;
+        };
+        let label = inc.label.clone();
+        let present: std::collections::BTreeSet<String> =
+            inc.doc.value_paths().into_iter().collect();
+
+        let mut groups: Vec<(String, Vec<&schema::Entry>)> = Vec::new();
+        for entry in &self.schema {
+            if !present.contains(&entry.dotted()) {
+                continue;
+            }
+            let top = top_level(&entry.section);
+            match groups.iter_mut().find(|(name, _)| *name == top) {
+                Some((_, list)) => list.push(entry),
+                None => groups.push((top, vec![entry])),
+            }
+        }
+
+        ui.heading(&label);
+        ui.separator();
+        if groups.is_empty() {
+            ui.label(
+                "Nothing the settings pages cover lives in this file yet.\n\
+                 Keybinds are on the Keybinds page, rules on the rules pages.",
+            );
+            return;
+        }
+        ui.label(
+            egui::RichText::new(format!(
+                "Edits here write to {label}, which your main config pulls in via [include]."
+            ))
+            .weak()
+            .small(),
+        );
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for (section, group) in &groups {
+                ui.add_space(6.0);
+                ui.strong(schema::humanize(section));
+                schema_entries_ui(ui, &mut self.includes.docs[file].doc, group, section);
+            }
+        });
+    }
+
     /// Keybinds: one merged, grouped list — umbriel's built-in defaults
     /// with your overrides replacing them in place — plus a single draft
     /// editor. Nothing is written until the editor's Apply.
@@ -337,6 +386,19 @@ impl App {
         } else {
             &mut self.doc
         }
+    }
+
+    /// Which chain document owns a dotted path: main when it has it,
+    /// else the include that does, else main.
+    fn entry_home(&self, dotted: &str) -> usize {
+        if self.doc.value_paths().iter().any(|path| path == dotted) {
+            return self.includes.docs.len();
+        }
+        self.includes
+            .docs
+            .iter()
+            .position(|inc| inc.doc.value_paths().iter().any(|path| path == dotted))
+            .unwrap_or(self.includes.docs.len())
     }
 
     /// Where a brand-new keybind lands: the main file when it already has
@@ -1153,6 +1215,22 @@ impl eframe::App for App {
                 if !sections.is_empty() {
                     ui.separator();
                 }
+                if !self.includes.docs.is_empty() {
+                    ui.separator();
+                    for (index, inc) in self.includes.docs.iter().enumerate() {
+                        if ui
+                            .selectable_value(
+                                &mut self.page,
+                                Some(Page::File(index)),
+                                inc.label.as_str(),
+                            )
+                            .on_hover_text(inc.path.display().to_string())
+                            .clicked()
+                        {
+                            self.search.clear();
+                        }
+                    }
+                }
                 if ui
                     .selectable_value(&mut self.page, Some(Page::Outputs), "Outputs")
                     .clicked()
@@ -1265,15 +1343,24 @@ impl eframe::App for App {
                     ui.label("Nothing found. Try fewer or different words.");
                     return;
                 }
+                let rows: Vec<(&schema::Entry, usize)> = found
+                    .iter()
+                    .map(|entry| (*entry, self.entry_home(&entry.dotted())))
+                    .collect();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     let mut current_section = String::new();
-                    for entry in found {
+                    for (entry, home) in &rows {
                         if entry.section != current_section {
                             current_section = entry.section.clone();
                             ui.add_space(6.0);
                             ui.heading(schema::humanize(&current_section));
                         }
-                        entry_row(ui, &mut self.doc, entry);
+                        let doc = if *home < self.includes.docs.len() {
+                            &mut self.includes.docs[*home].doc
+                        } else {
+                            &mut self.doc
+                        };
+                        entry_row(ui, doc, entry);
                     }
                 });
                 return;
@@ -1299,24 +1386,17 @@ impl eframe::App for App {
                     }
                     ui.heading(schema::humanize(&section));
                     ui.separator();
+                    let entries: Vec<&schema::Entry> = self
+                        .schema
+                        .iter()
+                        .filter(|entry| top_level(&entry.section) == *section)
+                        .collect();
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        let mut current_group = String::new();
-                        for entry in &self.schema {
-                            if top_level(&entry.section) != section {
-                                continue;
-                            }
-                            if entry.section != section && entry.section != current_group {
-                                current_group = entry.section.clone();
-                                let group = entry
-                                    .section
-                                    .strip_prefix(&format!("{section}."))
-                                    .unwrap_or(&entry.section);
-                                ui.add_space(6.0);
-                                ui.heading(schema::humanize(group));
-                            }
-                            entry_row(ui, &mut self.doc, entry);
-                        }
+                        schema_entries_ui(ui, &mut self.doc, &entries, &section);
                     });
+                }
+                Page::File(file) => {
+                    self.file_page(ui, file);
                 }
                 Page::Outputs => {
                     ui.heading("Outputs");
@@ -1839,6 +1919,29 @@ fn store_workspaces(doc: &mut ConfigDocument, path: &[&str], text: &str) {
         if !names.is_empty() {
             doc.set_strings(path, &names);
         }
+    }
+}
+
+/// Render the schema entries of one sidebar page, grouped by dotted
+/// sub-section, writing edits through to `doc`.
+fn schema_entries_ui(
+    ui: &mut egui::Ui,
+    doc: &mut ConfigDocument,
+    entries: &[&schema::Entry],
+    section: &str,
+) {
+    let mut current_group = String::new();
+    for entry in entries {
+        if entry.section != section && entry.section != current_group {
+            current_group = entry.section.clone();
+            let group = entry
+                .section
+                .strip_prefix(&format!("{section}."))
+                .unwrap_or(&entry.section);
+            ui.add_space(6.0);
+            ui.heading(schema::humanize(group));
+        }
+        entry_row(ui, doc, entry);
     }
 }
 
