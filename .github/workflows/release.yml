@@ -19,6 +19,24 @@ jobs:
         with:
           fetch-depth: 0 # needed so the release-notes git log can see tags
 
+      - name: Determine release channel
+        id: channel
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          case "$VERSION" in
+            *-alpha*) CHANNEL="Alpha" ;;
+            *-beta*)  CHANNEL="Beta" ;;
+            *-rc*)    CHANNEL="Release Candidate" ;;
+            *)        CHANNEL="Stable" ;;
+          esac
+          if [ "$CHANNEL" = "Stable" ]; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -48,16 +66,76 @@ jobs:
             RANGE="${PREV_TAG}..${GITHUB_REF_NAME}"
             SINCE_LABEL="${PREV_TAG}"
           fi
-          echo "# Release ${GITHUB_REF_NAME}" > release_notes.md
-          echo "" >> release_notes.md
-          echo "## Changes since ${SINCE_LABEL}" >> release_notes.md
-          echo "" >> release_notes.md
-          git log ${RANGE} --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H)) by %an" >> release_notes.md
-          echo "" >> release_notes.md
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          case "$VERSION" in
+            *-alpha*) CHANNEL="Alpha" ;;
+            *-beta*)  CHANNEL="Beta" ;;
+            *-rc*)    CHANNEL="Release Candidate" ;;
+            *)        CHANNEL="Stable" ;;
+          esac
+
+          NOTES=release_notes.md
+          {
+            echo "# umbriel-config ${GITHUB_REF_NAME}"
+            echo ""
+            if [ "$CHANNEL" = "Stable" ]; then
+              echo "**Channel:** Stable"
+            else
+              echo "**Channel:** ${CHANNEL} (pre-release — expect rough edges)"
+            fi
+            echo ""
+            echo "## Changes since ${SINCE_LABEL}"
+            echo ""
+          } > "$NOTES"
+
+          # Group commits by conventional-commit type; sections appear only when non-empty.
+          declare -A BODIES
+          while IFS=$'\x1f' read -r subject short full; do
+            case "$subject" in "chore(release): "*) continue ;; esac
+            section="other"
+            scope=""
+            text="$subject"
+            if [[ "$subject" =~ ^([A-Za-z]+)(\(([A-Za-z0-9._/-]+)\))?:[[:space:]]+(.*)$ ]]; then
+              type="${BASH_REMATCH[1],,}"
+              scope="${BASH_REMATCH[3]:-}"
+              text="${BASH_REMATCH[4]}"
+              case "$type" in
+                feat) section=feat ;;
+                fix)  section=fix ;;
+                perf|refactor) section=improve ;;
+              esac
+            fi
+            label=""
+            if [ -n "$scope" ]; then
+              label="**${scope}:** "
+            fi
+            BODIES[$section]="${BODIES[$section]:-}- ${label}${text} ([${short}](https://github.com/${GITHUB_REPOSITORY}/commit/${full}))"$'\n'
+          done < <(git log ${RANGE} --no-merges --pretty=format:"%s%x1f%h%x1f%H")
+
+          for s in feat fix improve other; do
+            case "$s" in
+              feat)    title="Features" ;;
+              fix)     title="Bug Fixes" ;;
+              improve) title="Improvements" ;;
+              other)   title="Other Changes" ;;
+            esac
+            body="${BODIES[$s]:-}"
+            if [ -n "$body" ]; then
+              {
+                echo "## ${title}"
+                echo ""
+                printf '%s' "$body"
+              } >> "$NOTES"
+              echo "" >> "$NOTES"
+            fi
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ github.ref_name }} — ${{ steps.channel.outputs.channel }}
+          prerelease: ${{ steps.channel.outputs.prerelease }}
           files: |
             umbriel-config-x86_64-linux.tar.gz
             umbriel-config-x86_64-linux.tar.gz.sha256
