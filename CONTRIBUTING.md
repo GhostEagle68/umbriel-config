@@ -76,17 +76,3 @@ Two layers, strictly separated:
 - Release automation (cargo-release or release-plz) is added together with
   the first release, not before.
 
-## Phase roadmap
-
-1. Project setup — scaffolding, docs, private GitHub repo.
-2. Config backend — discovery, toml_edit document, typed model, validation,
-   debug CLI.
-3. Minimal egui GUI — sidebar, first pages (Appearance, Animation, General),
-   save action and validation-error banner.
-4. Full section coverage — Input, Layout, Overview, Hot corners, Colors,
-   outputs.
-5. Advanced editors — keybind capture, window/layer rule lists, output config
-   seeded from `umbriel outputs`.
-6. Integration and polish — IPC events, profiles/undo, packaging, CI, and an
-   optional UI-framework upgrade for polish.
-
