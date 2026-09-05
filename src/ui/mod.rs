@@ -271,12 +271,23 @@ impl App {
     /// Window/layer rules: one collapsible card per `[[section]]` entry.
     /// Every field starts unset; only what the user fills in is written.
     fn rules_page(&mut self, ui: &mut egui::Ui, name: &'static str) {
+        ui.heading(rules_label(name));
+        ui.separator();
         let target = self.rule_target(name);
-        let label = match name {
-            "window_rule" => "Window rules",
-            "layer_rule" => "Layer rules",
-            _ => "Security contexts",
-        };
+        if target < self.includes.docs.len() {
+            let label = self.includes.docs[target].label.clone();
+            ui.label(format!("These rules live in {label}."));
+            if ui.button(format!("Open {label}")).clicked() {
+                self.page = Some(Page::File(target));
+            }
+            return;
+        }
+        self.rules_content(ui, name);
+    }
+
+    /// The rule editor for one family, editing the document that owns it.
+    fn rules_content(&mut self, ui: &mut egui::Ui, name: &'static str) {
+        let target = self.rule_target(name);
         let (match_fields, settings_fields): (&[rules::Field], &[rules::Field]) = match name {
             "window_rule" => (rules::WINDOW_MATCH, rules::WINDOW_SETTINGS),
             "layer_rule" => (rules::LAYER_MATCH, rules::LAYER_SETTINGS),
@@ -287,15 +298,13 @@ impl App {
         } else {
             "the main config".to_owned()
         };
-        // One mutable borrow for the whole page: everything below touches
-        // only `doc` and `ui`, so the borrow lives to the end.
+        // One mutable borrow for the whole editor: everything below
+        // touches only `doc` and `ui`, so the borrow lives to the end.
         let doc = if target < self.includes.docs.len() {
             &mut self.includes.docs[target].doc
         } else {
             &mut self.doc
         };
-        ui.heading(label);
-        ui.separator();
         ui.label(
             egui::RichText::new(format!("Editing {editing}."))
                 .weak()
@@ -309,8 +318,9 @@ impl App {
         if count == 0 {
             ui.add_space(4.0);
             ui.label(format!(
-                "No {label} yet. Add one — every field starts unset, and only\n\
-                 what you fill in is written to the config."
+                "No {} yet. Add one — every field starts unset, and only\n\
+                 what you fill in is written to the config.",
+                rules_label(name)
             ));
             return;
         }
@@ -372,39 +382,56 @@ impl App {
             }
         }
 
+        // Families this file owns get their editors embedded below.
+        let owns_keybinds =
+            self.new_bind_target() == file && (file < n || !self.doc.keybinds().is_empty());
+        let mut owned_rules: Vec<&'static str> = Vec::new();
+        for family in ["window_rule", "layer_rule", "security_context_rule"] {
+            if self.rule_target(family) == file && (file < n || self.doc.rule_count(family) > 0) {
+                owned_rules.push(family);
+            }
+        }
+        let has_editors = owns_keybinds || !owned_rules.is_empty();
+
         ui.heading(&label);
         ui.separator();
-        if groups.is_empty() {
-            ui.label(
-                "Nothing the settings pages cover lives in this file yet.\n\
-                 Keybinds are on the Keybinds page, rules on the rules pages.",
-            );
+        if groups.is_empty() && !has_editors {
+            ui.label("Nothing the settings pages cover lives in this file.");
             return;
         }
-        ui.label(
-            egui::RichText::new(format!(
-                "Edits here write to {label}, which your main config pulls in via [include]."
-            ))
-            .weak()
-            .small(),
-        );
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for (section, group) in &groups {
-                ui.add_space(6.0);
-                ui.strong(schema::humanize(section));
-                let doc = if file < n {
-                    &mut self.includes.docs[file].doc
-                } else {
-                    &mut self.doc
-                };
-                schema_entries_ui(ui, doc, group, section);
-            }
-        });
+        if !groups.is_empty() {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Edits here write to {label}, which your main config pulls in via [include]."
+                ))
+                .weak()
+                .small(),
+            );
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for (section, group) in &groups {
+                    ui.add_space(6.0);
+                    ui.strong(schema::humanize(section));
+                    let doc = if file < n {
+                        &mut self.includes.docs[file].doc
+                    } else {
+                        &mut self.doc
+                    };
+                    schema_entries_ui(ui, doc, group, section);
+                }
+            });
+        }
+        if owns_keybinds {
+            ui.add_space(8.0);
+            ui.strong("Keybinds");
+            self.keybinds_content(ui);
+        }
+        for family in owned_rules {
+            ui.add_space(8.0);
+            ui.strong(rules_label(family));
+            self.rules_content(ui, family);
+        }
     }
 
-    /// Keybinds: one merged, grouped list — umbriel's built-in defaults
-    /// with your overrides replacing them in place — plus a single draft
-    /// editor. Nothing is written until the editor's Apply.
     /// All documents in umbriel's precedence order: the `[include]`
     /// chain first, the main file last — per chord, the last bind wins.
     fn chain(&self) -> Vec<&ConfigDocument> {
@@ -479,7 +506,21 @@ impl App {
     fn keybinds_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Keybinds");
         ui.separator();
+        let owner = self.new_bind_target();
+        if owner < self.includes.docs.len() {
+            let label = self.includes.docs[owner].label.clone();
+            ui.label(format!("Your keybinds live in {label}."));
+            if ui.button(format!("Open {label}")).clicked() {
+                self.page = Some(Page::File(owner));
+            }
+            return;
+        }
+        self.keybinds_content(ui);
+    }
 
+    /// The keybinds editor itself. Routed by `new_bind_target`; shared by
+    /// the Keybinds page and the owning file's page.
+    fn keybinds_content(&mut self, ui: &mut egui::Ui) {
         // While capturing a chord the page is only the prompt, so pressed
         // keys cannot leak into any text field.
         if self
@@ -2005,6 +2046,14 @@ fn schema_entries_ui(
             ui.heading(schema::humanize(group));
         }
         entry_row(ui, doc, entry);
+    }
+}
+
+fn rules_label(name: &str) -> &'static str {
+    match name {
+        "window_rule" => "Window rules",
+        "layer_rule" => "Layer rules",
+        _ => "Security contexts",
     }
 }
 
