@@ -28,6 +28,8 @@ pub enum FieldKind {
     /// Inline `{ x, y, anchor }`; anchors: top_left, top_right, bottom_left,
     /// bottom_right, top, bottom, left, right, center.
     Position,
+    /// Array of strings, edited comma-separated.
+    List,
 }
 
 pub const ANCHORS: &[&str] = &[
@@ -67,6 +69,11 @@ pub const WINDOW_MATCH: &[Field] = &[
     Field {
         key: "match.is_focused",
         label: "Is focused",
+        kind: FieldKind::Toggle,
+    },
+    Field {
+        key: "match.at_startup",
+        label: "At startup",
         kind: FieldKind::Toggle,
     },
 ];
@@ -224,6 +231,29 @@ pub const LAYER_SETTINGS: &[Field] = &[
     },
 ];
 
+/// What a security-context rule can match on (sandboxed apps).
+pub const SECURITY_MATCH: &[Field] = &[
+    Field {
+        key: "match.sandbox_engine",
+        label: "Sandbox engine (regex)",
+        kind: FieldKind::Text,
+    },
+    Field {
+        key: "match.app_id",
+        label: "App id (regex)",
+        kind: FieldKind::Text,
+    },
+];
+
+/// What a security-context rule can configure: the wayland globals a
+/// sandboxed client may bind. umbriel rejects an empty list, so the UI
+/// unsets the key instead of writing one.
+pub const SECURITY_SETTINGS: &[Field] = &[Field {
+    key: "allow_globals",
+    label: "Allow globals",
+    kind: FieldKind::List,
+}];
+
 /// Card title for a rule: the first match value, or a fallback.
 pub fn rule_title(
     doc: &super::document::ConfigDocument,
@@ -260,6 +290,8 @@ mod tests {
         assert!(unique(WINDOW_SETTINGS));
         assert!(unique(LAYER_MATCH));
         assert!(unique(LAYER_SETTINGS));
+        assert!(unique(SECURITY_MATCH));
+        assert!(unique(SECURITY_SETTINGS));
     }
 
     #[test]

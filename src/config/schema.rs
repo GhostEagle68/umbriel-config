@@ -5,6 +5,8 @@
 //! Commented-out keys are mined from the raw text; their values are the
 //! presumed defaults (the compositor's true fallbacks live in its code).
 
+use super::document::ConfigDocument;
+use super::outputs;
 use std::collections::BTreeSet;
 use toml_edit::{DocumentMut, Item};
 
@@ -413,19 +415,46 @@ pub fn diff(old: &BTreeSet<String>, new: &BTreeSet<String>) -> SchemaDiff {
     }
 }
 
-/// Config families owned by dedicated surfaces — the Outputs page, or
-/// editors on the roadmap — rather than schema pages.
-const MANAGED_SECTIONS: &[&str] = &["include", "keybinds", "output", "window_rule", "layer_rule"];
+/// Prefixes of document paths that dedicated surfaces own — the keybinds
+/// editor owns every chord in `[keybinds]`, the rules pages own the rule
+/// arrays, and the Outputs page owns each configured output's known
+/// fields. A path under one of these never reaches the Raw sweep.
+pub fn managed_claims(docs: &[&ConfigDocument]) -> BTreeSet<String> {
+    let mut claims: BTreeSet<String> = [
+        "keybinds",
+        "window_rule",
+        "layer_rule",
+        "security_context_rule",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    claims.insert("include.files".to_owned());
+    for doc in docs {
+        for name in outputs::configured(doc) {
+            for field in outputs::FIELDS {
+                claims.insert(format!("output.{name}.{}", field.key));
+            }
+        }
+    }
+    claims
+}
 
-/// Document keys no surface claims: not in the assembled schema and not in
-/// a managed family. These belong on the Raw page so nothing in a user's
-/// config is ever silently invisible.
-pub fn uncovered(paths: &[String], schema_keys: &BTreeSet<String>) -> Vec<String> {
+/// Document keys no surface claims: not in the assembled schema and not
+/// under a managed claim. These belong on the Raw page so nothing in a
+/// user's config is ever silently invisible.
+pub fn uncovered(
+    paths: &[String],
+    schema_keys: &BTreeSet<String>,
+    managed: &BTreeSet<String>,
+) -> Vec<String> {
     paths
         .iter()
         .filter(|path| {
-            let top = path.split('.').next().unwrap_or_default();
-            !MANAGED_SECTIONS.contains(&top) && !schema_keys.contains(*path)
+            !schema_keys.contains(*path)
+                && !managed.iter().any(|claim| {
+                    path.as_str() == claim.as_str() || path.starts_with(&format!("{}.", claim))
+                })
         })
         .cloned()
         .collect()
@@ -434,6 +463,7 @@ pub fn uncovered(paths: &[String], schema_keys: &BTreeSet<String>) -> Vec<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     const FIXTURE: &str = r##"[general]
 xwayland = true                # requires restart
@@ -617,6 +647,11 @@ focus_on_activate = false
     #[test]
     fn uncovered_lists_only_unclaimed_keys() {
         let keys = key_set(&assemble(FIXTURE));
+        let managed = BTreeSet::from([
+            "keybinds".to_owned(),
+            "output.DP-3.scale".to_owned(),
+            "window_rule".to_owned(),
+        ]);
         let paths = vec![
             "general.xwayland".to_owned(),
             "environment.PROTON_ENABLE_WAYLAND".to_owned(),
@@ -626,7 +661,7 @@ focus_on_activate = false
             "window_rule".to_owned(),
         ];
         assert_eq!(
-            uncovered(&paths, &keys),
+            uncovered(&paths, &keys, &managed),
             vec![
                 "environment.PROTON_ENABLE_WAYLAND".to_owned(),
                 "events.lid_close".to_owned(),
@@ -695,5 +730,39 @@ focus_on_activate = false
         let found = entries.iter().find(|e| e.dotted() == "notes.x").unwrap();
         assert_eq!(found.kind, Kind::Text);
         assert_eq!(found.default, Some(Value::Text("a".into())));
+    }
+
+    #[test]
+    fn uncovered_respects_schema_keys_and_claim_prefixes() {
+        let schema_keys: BTreeSet<String> =
+            ["general.mod_key"].into_iter().map(str::to_owned).collect();
+        let managed: BTreeSet<String> = ["keybinds", "include.files"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let paths = vec![
+            "general.mod_key".to_owned(),
+            "general.custom".to_owned(),
+            "keybinds.\"Mod+T\"".to_owned(),
+            "keybinds.\"Mod+T\".action".to_owned(),
+            "include.files".to_owned(),
+            "output.DP-1.mode".to_owned(),
+        ];
+        assert_eq!(
+            uncovered(&paths, &schema_keys, &managed),
+            vec!["general.custom".to_owned(), "output.DP-1.mode".to_owned()]
+        );
+    }
+
+    #[test]
+    fn managed_claims_cover_configured_output_fields() {
+        let doc = ConfigDocument::from_str("[output.DP-1]\nmode = \"1920x1080\"\n").unwrap();
+        let claims = managed_claims(&[&doc]);
+        assert!(claims.contains("keybinds"));
+        assert!(claims.contains("include.files"));
+        assert!(claims.contains("output.DP-1.mode"));
+        // The output itself is not claimed wholesale — unknown fields under
+        // it must stay visible.
+        assert!(!claims.contains("output.DP-1"));
     }
 }

@@ -50,6 +50,28 @@ Build from source instead (Rust 1.88+, edition 2024):
 cargo install --git https://github.com/GhostEagle68/umbriel-config
 ```
 
+## Uninstall
+
+How to remove umbriel-config depends on how it was installed.
+
+**Installed with `cargo install`:**
+
+```sh
+cargo uninstall umbriel-config
+```
+
+This removes the binary from `~/.cargo/bin` and cargo's install registry.
+To update instead, just re-run the `cargo install --git` command above.
+
+**Installed from a release tarball:**
+
+```sh
+rm ~/.local/bin/umbriel-config
+```
+
+Uninstalling only removes the app. Your Umbriel config files. And the
+`.bak` backups it made on save are your own data and are left untouched.
+
 ## Usage
 
 ```sh

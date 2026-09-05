@@ -32,6 +32,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
 enum Page {
     /// A top-level schema section, e.g. `"general"`.
     Section(String),
+    /// One included file's own settings.
+    File(usize),
     Outputs,
     /// Window or layer rules; the payload is the TOML section name.
     Rules(&'static str),
@@ -78,6 +80,12 @@ struct App {
     /// The loaded `[include]` chain: files the main config lists, read
     /// like umbriel's own loader (missing or broken ones become notes).
     includes: includes::IncludeChain,
+    /// An available setting picked for adding, awaiting a destination.
+    pending_add: Option<schema::Entry>,
+    /// Whether the destination picker is creating a new include file.
+    creating_include: bool,
+    /// Name for the include file being created.
+    new_include_name: String,
 }
 
 impl App {
@@ -120,6 +128,9 @@ impl App {
             kb_search: String::new(),
             kb_editor: None,
             includes,
+            pending_add: None,
+            creating_include: false,
+            new_include_name: String::new(),
         }
     }
 
@@ -269,58 +280,314 @@ impl App {
     /// Window/layer rules: one collapsible card per `[[section]]` entry.
     /// Every field starts unset; only what the user fills in is written.
     fn rules_page(&mut self, ui: &mut egui::Ui, name: &'static str) {
-        let label = if name == "window_rule" {
-            "Window rules"
-        } else {
-            "Layer rules"
-        };
-        let (match_fields, settings_fields): (&[rules::Field], &[rules::Field]) =
-            if name == "window_rule" {
-                (rules::WINDOW_MATCH, rules::WINDOW_SETTINGS)
-            } else {
-                (rules::LAYER_MATCH, rules::LAYER_SETTINGS)
-            };
-        ui.heading(label);
+        ui.heading(rules_label(name));
         ui.separator();
-        if ui.button("Add rule").clicked() {
-            self.doc.add_rule(name);
+        let target = self.rule_target(name);
+        if target < self.includes.docs.len() {
+            let label = self.includes.docs[target].label.clone();
+            ui.label(format!("These rules live in {label}."));
+            if ui.button(format!("Open {label}")).clicked() {
+                self.page = Some(Page::File(target));
+            }
+            return;
         }
-        let count = self.doc.rule_count(name);
+        self.rules_content(ui, name);
+    }
+
+    /// The rule editor for one family, editing the document that owns it.
+    fn rules_content(&mut self, ui: &mut egui::Ui, name: &'static str) {
+        let target = self.rule_target(name);
+        let (match_fields, settings_fields): (&[rules::Field], &[rules::Field]) = match name {
+            "window_rule" => (rules::WINDOW_MATCH, rules::WINDOW_SETTINGS),
+            "layer_rule" => (rules::LAYER_MATCH, rules::LAYER_SETTINGS),
+            _ => (rules::SECURITY_MATCH, rules::SECURITY_SETTINGS),
+        };
+        let editing = if target < self.includes.docs.len() {
+            self.includes.docs[target].label.clone()
+        } else {
+            "the main config".to_owned()
+        };
+        // One mutable borrow for the whole editor: everything below
+        // touches only `doc` and `ui`, so the borrow lives to the end.
+        let doc = if target < self.includes.docs.len() {
+            &mut self.includes.docs[target].doc
+        } else {
+            &mut self.doc
+        };
+        ui.label(
+            egui::RichText::new(format!("Editing {editing}."))
+                .weak()
+                .small(),
+        );
+        if ui.button("Add rule").clicked() {
+            doc.add_rule(name);
+        }
+
+        let count = doc.rule_count(name);
         if count == 0 {
             ui.add_space(4.0);
             ui.label(format!(
-                "No {label} yet. Add one — every field starts unset, and only\n\
-                 what you fill in is written to the config."
+                "No {} yet. Add one — every field starts unset, and only\n\
+                 what you fill in is written to the config.",
+                rules_label(name)
             ));
             return;
         }
         ui.add_space(4.0);
         for index in 0..count {
-            let title = rules::rule_title(&self.doc, name, index, match_fields);
+            let title = rules::rule_title(doc, name, index, match_fields);
             egui::CollapsingHeader::new(title)
                 .default_open(count == 1)
                 .id_salt(format!("{name}-{index}"))
                 .show(ui, |ui| {
                     ui.strong("Match");
                     for field in match_fields {
-                        rule_field_row(ui, &mut self.doc, name, index, field);
+                        rule_field_row(ui, doc, name, index, field);
                     }
                     ui.add_space(4.0);
                     ui.strong("Settings");
                     for field in settings_fields {
-                        rule_field_row(ui, &mut self.doc, name, index, field);
+                        rule_field_row(ui, doc, name, index, field);
                     }
                     ui.add_space(4.0);
                     if ui.button("Remove rule").clicked() {
-                        self.doc.remove_rule(name, index);
+                        doc.remove_rule(name, index);
                     }
                 });
         }
     }
 
-    /// Keybinds: one merged, grouped list — umbriel's built-in defaults
-    /// with your overrides replacing them in place — plus a single draft
-    /// editor. Nothing is written until the editor's Apply.
+    /// Where should a newly added setting live? The main config, an
+    /// existing include, or a brand-new file — which is created and
+    /// registered in `[include].files` so umbriel actually reads it.
+    fn pending_add_picker(&mut self, ui: &mut egui::Ui) {
+        let Some(entry) = self.pending_add.clone() else {
+            return;
+        };
+        let Some(default) = entry.default.clone() else {
+            ui.label(format!(
+                "{} has no known default; add it by editing a file directly.",
+                entry.dotted()
+            ));
+            if ui.button("Cancel").clicked() {
+                self.pending_add = None;
+            }
+            return;
+        };
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.label(format!(
+                "Add {} (= {})? Choose where it lives:",
+                entry.dotted(),
+                match &default {
+                    schema::Value::Bool(v) => format!("{v}"),
+                    schema::Value::Integer(v) => format!("{v}"),
+                    schema::Value::Float(v) => format!("{v}"),
+                    schema::Value::Text(v) => v.clone(),
+                }
+            ));
+            ui.horizontal(|ui| {
+                let n = self.includes.docs.len();
+                let mut chosen: Option<usize> = None;
+                let main_label = self
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "config".to_owned());
+                if ui.button(main_label).clicked() {
+                    chosen = Some(n);
+                }
+                for index in 0..n {
+                    if ui
+                        .button(self.includes.docs[index].label.as_str())
+                        .clicked()
+                    {
+                        chosen = Some(index);
+                    }
+                }
+                if let Some(home) = chosen {
+                    let doc = if home < n {
+                        &mut self.includes.docs[home].doc
+                    } else {
+                        &mut self.doc
+                    };
+                    set_entry_value(doc, &entry, default.clone());
+                    self.pending_add = None;
+                }
+                if ui.button("New file…").clicked() {
+                    self.creating_include = true;
+                }
+            });
+            if self.creating_include {
+                ui.horizontal(|ui| {
+                    ui.label("File name:");
+                    let name_field = ui.text_edit_singleline(&mut self.new_include_name);
+                    let name = self.new_include_name.trim();
+                    let valid = !name.is_empty()
+                        && !name.contains('/')
+                        && !name.contains('\\')
+                        && !name.contains("..");
+                    let submitted = ui.button("Create").clicked()
+                        || (valid
+                            && name_field.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+                    if submitted {
+                        if !valid {
+                            self.validation_note =
+                                Some("File name must be plain, e.g. media.toml".to_owned());
+                        } else {
+                            let base = name.trim_end_matches(".toml");
+                            let file_name = format!("{base}.toml");
+                            let target = self
+                                .path
+                                .parent()
+                                .map(|dir| dir.join(&file_name))
+                                .expect("config path has a parent");
+                            let mut doc = ConfigDocument::from_str("").expect("empty TOML parses");
+                            set_entry_value(&mut doc, &entry, default.clone());
+                            match doc.save(&target) {
+                                Ok(()) => {
+                                    let mut files = self
+                                        .doc
+                                        .get_strings(&["include", "files"])
+                                        .unwrap_or_default();
+                                    if !files.iter().any(|f| f == &file_name) {
+                                        files.push(file_name);
+                                    }
+                                    self.doc.set_strings(&["include", "files"], &files);
+                                    self.includes = includes::load_chain(&self.doc, &self.path);
+                                    self.pending_add = None;
+                                    self.creating_include = false;
+                                    self.new_include_name.clear();
+                                }
+                                Err(err) => {
+                                    self.validation_note = Some(err.to_string());
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            if ui.button("Cancel").clicked() {
+                self.pending_add = None;
+                self.creating_include = false;
+            }
+        });
+    }
+
+    /// One include file's own settings: schema entries this file actually
+    /// has, grouped like the main pages, writing to that file.
+    fn file_page(&mut self, ui: &mut egui::Ui, file: usize) {
+        let n = self.includes.docs.len();
+        let (label, present): (String, std::collections::BTreeSet<String>) = if file < n {
+            let inc = &self.includes.docs[file];
+            (
+                inc.label.clone(),
+                inc.doc.value_paths().into_iter().collect(),
+            )
+        } else {
+            let name = self
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "config".to_owned());
+            (
+                format!("{name} (main)"),
+                self.doc.value_paths().into_iter().collect(),
+            )
+        };
+
+        let mut groups: Vec<(String, Vec<schema::Entry>)> = Vec::new();
+        for entry in &self.schema {
+            if !present.contains(&entry.dotted()) {
+                continue;
+            }
+            let top = top_level(&entry.section);
+            match groups.iter_mut().find(|(name, _)| *name == top) {
+                Some((_, list)) => list.push(entry.clone()),
+                None => groups.push((top, vec![entry.clone()])),
+            }
+        }
+
+        // Families this file owns get their editors embedded below.
+        let owns_keybinds =
+            self.new_bind_target() == file && (file < n || !self.doc.keybinds().is_empty());
+        let mut owned_rules: Vec<&'static str> = Vec::new();
+        for family in ["window_rule", "layer_rule", "security_context_rule"] {
+            if self.rule_target(family) == file && (file < n || self.doc.rule_count(family) > 0) {
+                owned_rules.push(family);
+            }
+        }
+        let has_editors = owns_keybinds || !owned_rules.is_empty();
+        let claims = schema::managed_claims(&self.chain());
+        let schema_keys = schema::key_set(&self.schema);
+        let other_keys: Vec<String> = if file < n {
+            schema::uncovered(
+                &self.includes.docs[file].doc.value_paths(),
+                &schema_keys,
+                &claims,
+            )
+        } else {
+            schema::uncovered(&self.doc.value_paths(), &schema_keys, &claims)
+        };
+
+        ui.heading(&label);
+        ui.separator();
+        if groups.is_empty() && !has_editors {
+            ui.label("Nothing the settings pages cover lives in this file.");
+            return;
+        }
+        if groups.is_empty() && !has_editors && other_keys.is_empty() {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Edits here write to {label}, which your main config pulls in via [include]."
+                ))
+                .weak()
+                .small(),
+            );
+        }
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for (section, group) in &groups {
+                ui.add_space(6.0);
+                ui.strong(schema::humanize(section));
+                let doc = if file < n {
+                    &mut self.includes.docs[file].doc
+                } else {
+                    &mut self.doc
+                };
+                schema_entries_ui(ui, doc, group, section);
+            }
+            if owns_keybinds {
+                ui.add_space(8.0);
+                ui.strong("Keybinds");
+                self.keybinds_content(ui);
+            }
+            for family in owned_rules {
+                ui.add_space(8.0);
+                ui.strong(rules_label(family));
+                self.rules_content(ui, family);
+            }
+            if !other_keys.is_empty() {
+                ui.add_space(8.0);
+                egui::CollapsingHeader::new(format!(
+                    "Other keys in this file ({})",
+                    other_keys.len()
+                ))
+                .id_salt(format!("other-{file}"))
+                .default_open(false)
+                .show(ui, |ui| {
+                    for dotted in &other_keys {
+                        let doc = if file < n {
+                            &mut self.includes.docs[file].doc
+                        } else {
+                            &mut self.doc
+                        };
+                        raw_row(ui, doc, dotted);
+                    }
+                });
+            }
+        });
+    }
+
     /// All documents in umbriel's precedence order: the `[include]`
     /// chain first, the main file last — per chord, the last bind wins.
     fn chain(&self) -> Vec<&ConfigDocument> {
@@ -338,6 +605,29 @@ impl App {
         } else {
             &mut self.doc
         }
+    }
+
+    /// Which chain document owns a dotted path: main when it has it,
+    /// else the include that does, else main.
+    fn entry_home(&self, dotted: &str) -> usize {
+        if self.doc.value_paths().iter().any(|path| path == dotted) {
+            return self.includes.docs.len();
+        }
+        self.includes
+            .docs
+            .iter()
+            .position(|inc| inc.doc.value_paths().iter().any(|path| path == dotted))
+            .unwrap_or(self.includes.docs.len())
+    }
+
+    /// Which chain document owns a rule family: the first include that
+    /// has rules in it, else the main config.
+    fn rule_target(&self, name: &str) -> usize {
+        self.includes
+            .docs
+            .iter()
+            .position(|inc| inc.doc.rule_count(name) > 0)
+            .unwrap_or(self.includes.docs.len())
     }
 
     /// Where a brand-new keybind lands: the main file when it already has
@@ -372,7 +662,21 @@ impl App {
     fn keybinds_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Keybinds");
         ui.separator();
+        let owner = self.new_bind_target();
+        if owner < self.includes.docs.len() {
+            let label = self.includes.docs[owner].label.clone();
+            ui.label(format!("Your keybinds live in {label}."));
+            if ui.button(format!("Open {label}")).clicked() {
+                self.page = Some(Page::File(owner));
+            }
+            return;
+        }
+        self.keybinds_content(ui);
+    }
 
+    /// The keybinds editor itself. Routed by `new_bind_target`; shared by
+    /// the Keybinds page and the owning file's page.
+    fn keybinds_content(&mut self, ui: &mut egui::Ui) {
         // While capturing a chord the page is only the prompt, so pressed
         // keys cannot leak into any text field.
         if self
@@ -1009,9 +1313,17 @@ impl App {
         sections
     }
 
-    /// Keys in the config that no surface claims; drives the Raw page.
-    fn raw_keys(&self) -> Vec<String> {
-        schema::uncovered(&self.doc.value_paths(), &schema::key_set(&self.schema))
+    /// Every uncovered key across the chain, tagged with its owning file.
+    fn raw_rows(&self) -> Vec<(usize, String)> {
+        let claims = schema::managed_claims(&self.chain());
+        let schema_keys = schema::key_set(&self.schema);
+        let mut rows: Vec<(usize, String)> = Vec::new();
+        for (file, doc) in self.chain().iter().enumerate() {
+            for dotted in schema::uncovered(&doc.value_paths(), &schema_keys, &claims) {
+                rows.push((file, dotted));
+            }
+        }
+        rows
     }
 
     /// Schema from the installed packaged default; empty when unavailable.
@@ -1060,7 +1372,7 @@ fn top_level(section: &str) -> String {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let raw_keys = self.raw_keys();
+        let raw_rows = self.raw_rows();
         egui::Panel::top("header").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("Umbriel Config");
@@ -1154,6 +1466,37 @@ impl eframe::App for App {
                 if !sections.is_empty() {
                     ui.separator();
                 }
+                ui.separator();
+                let n = self.includes.docs.len();
+                let main_label = self
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "config".to_owned());
+                if ui
+                    .selectable_value(
+                        &mut self.page,
+                        Some(Page::File(n)),
+                        format!("{main_label} (main)"),
+                    )
+                    .on_hover_text(self.path.display().to_string())
+                    .clicked()
+                {
+                    self.search.clear();
+                }
+                for (index, inc) in self.includes.docs.iter().enumerate() {
+                    if ui
+                        .selectable_value(
+                            &mut self.page,
+                            Some(Page::File(index)),
+                            inc.label.as_str(),
+                        )
+                        .on_hover_text(inc.path.display().to_string())
+                        .clicked()
+                    {
+                        self.search.clear();
+                    }
+                }
                 if ui
                     .selectable_value(&mut self.page, Some(Page::Outputs), "Outputs")
                     .clicked()
@@ -1181,6 +1524,16 @@ impl eframe::App for App {
                     self.search.clear();
                 }
                 if ui
+                    .selectable_value(
+                        &mut self.page,
+                        Some(Page::Rules("security_context_rule")),
+                        "Security contexts",
+                    )
+                    .clicked()
+                {
+                    self.search.clear();
+                }
+                if ui
                     .selectable_value(&mut self.page, Some(Page::Keybinds), "Keybinds")
                     .clicked()
                 {
@@ -1193,13 +1546,13 @@ impl eframe::App for App {
                 {
                     self.search.clear();
                 }
-                if !raw_keys.is_empty() {
+                if !raw_rows.is_empty() {
                     ui.separator();
                     if ui
                         .selectable_value(
                             &mut self.page,
                             Some(Page::Raw),
-                            format!("Other settings ({})", raw_keys.len()),
+                            format!("Other settings ({})", raw_rows.len()),
                         )
                         .clicked()
                     {
@@ -1256,15 +1609,24 @@ impl eframe::App for App {
                     ui.label("Nothing found. Try fewer or different words.");
                     return;
                 }
+                let rows: Vec<(&schema::Entry, usize)> = found
+                    .iter()
+                    .map(|entry| (*entry, self.entry_home(&entry.dotted())))
+                    .collect();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     let mut current_section = String::new();
-                    for entry in found {
+                    for (entry, home) in &rows {
                         if entry.section != current_section {
                             current_section = entry.section.clone();
                             ui.add_space(6.0);
                             ui.heading(schema::humanize(&current_section));
                         }
-                        entry_row(ui, &mut self.doc, entry);
+                        let doc = if *home < self.includes.docs.len() {
+                            &mut self.includes.docs[*home].doc
+                        } else {
+                            &mut self.doc
+                        };
+                        entry_row(ui, doc, entry);
                     }
                 });
                 return;
@@ -1290,24 +1652,100 @@ impl eframe::App for App {
                     }
                     ui.heading(schema::humanize(&section));
                     ui.separator();
+                    self.pending_add_picker(ui);
+                    let doc_paths: Vec<std::collections::BTreeSet<String>> = self
+                        .chain()
+                        .iter()
+                        .map(|doc| doc.value_paths().into_iter().collect())
+                        .collect();
+                    let mut pointers: Vec<(&schema::Entry, usize)> = Vec::new();
+                    let mut available: Vec<&schema::Entry> = Vec::new();
+                    for entry in &self.schema {
+                        if top_level(&entry.section) != section {
+                            continue;
+                        }
+                        let dotted = entry.dotted();
+                        match doc_paths.iter().position(|paths| paths.contains(&dotted)) {
+                            Some(home) => pointers.push((entry, home)),
+                            None => available.push(entry),
+                        }
+                    }
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         let mut current_group = String::new();
-                        for entry in &self.schema {
-                            if top_level(&entry.section) != section {
-                                continue;
-                            }
-                            if entry.section != section && entry.section != current_group {
+                        for (entry, home) in &pointers {
+                            if entry.section != current_group {
                                 current_group = entry.section.clone();
-                                let group = entry
-                                    .section
-                                    .strip_prefix(&format!("{section}."))
-                                    .unwrap_or(&entry.section);
                                 ui.add_space(6.0);
-                                ui.heading(schema::humanize(group));
+                                ui.heading(schema::humanize(&current_group));
                             }
-                            entry_row(ui, &mut self.doc, entry);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(&entry.label).weak());
+                                let label = if *home < self.includes.docs.len() {
+                                    self.includes.docs[*home].label.clone()
+                                } else {
+                                    let name = self
+                                        .path
+                                        .file_name()
+                                        .map(|name| name.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| "config".to_owned());
+                                    format!("{name} (main)")
+                                };
+                                if ui
+                                    .button(format!("in {label} — open"))
+                                    .on_hover_text(entry.dotted())
+                                    .clicked()
+                                {
+                                    self.page = Some(Page::File(*home));
+                                }
+                            });
+                        }
+                        if !available.is_empty() {
+                            ui.add_space(10.0);
+                            egui::CollapsingHeader::new(format!(
+                                "Available — not set anywhere ({})",
+                                available.len()
+                            ))
+                            .id_salt(format!("available-{section}"))
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "In umbriel's packaged default but commented out\n\
+                                         (or absent) in your config. Adding one writes its\n\
+                                         default value to the file you pick.",
+                                    )
+                                    .weak()
+                                    .small(),
+                                );
+                                for entry in &available {
+                                    ui.horizontal(|ui| {
+                                        ui.label(&entry.label);
+                                        let default_text = match &entry.default {
+                                            Some(schema::Value::Bool(v)) => format!("{v}"),
+                                            Some(schema::Value::Integer(v)) => format!("{v}"),
+                                            Some(schema::Value::Float(v)) => format!("{v}"),
+                                            Some(schema::Value::Text(v)) => v.clone(),
+                                            None => String::new(),
+                                        };
+                                        if !default_text.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "(default: {default_text})"
+                                                ))
+                                                .weak(),
+                                            );
+                                        }
+                                        if ui.button("Add…").clicked() {
+                                            self.pending_add = Some((*entry).clone());
+                                        }
+                                    });
+                                }
+                            });
                         }
                     });
+                }
+                Page::File(file) => {
+                    self.file_page(ui, file);
                 }
                 Page::Outputs => {
                     ui.heading("Outputs");
@@ -1335,12 +1773,33 @@ impl eframe::App for App {
                     ui.heading("Other settings");
                     ui.separator();
                     ui.label(
-                        "These keys are in your config but have no dedicated page yet.\n\
-                         They are shown here so nothing is hidden; scalar values are editable.",
+                        "Keys no page claims across your whole config chain, grouped\n\
+                         by the file that holds them. Scalars are editable.",
                     );
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        for dotted in &raw_keys {
-                            raw_row(ui, &mut self.doc, dotted);
+                        let mut current_file: Option<usize> = None;
+                        for (file, dotted) in &raw_rows {
+                            if current_file != Some(*file) {
+                                current_file = Some(*file);
+                                ui.add_space(8.0);
+                                let label = if *file < self.includes.docs.len() {
+                                    self.includes.docs[*file].label.clone()
+                                } else {
+                                    let name = self
+                                        .path
+                                        .file_name()
+                                        .map(|name| name.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| "config".to_owned());
+                                    format!("{name} (main)")
+                                };
+                                ui.strong(label);
+                            }
+                            let doc = if *file < self.includes.docs.len() {
+                                &mut self.includes.docs[*file].doc
+                            } else {
+                                &mut self.doc
+                            };
+                            raw_row(ui, doc, dotted);
                         }
                     });
                 }
@@ -1593,6 +2052,30 @@ fn rule_field_row(
                 doc.rule_set_position(name, index, field.key, x, y, anchor.as_deref());
             }
         }
+        rules::FieldKind::List => {
+            let current = doc.rule_strings(name, index, field.key).unwrap_or_default();
+            let mut value = current.join(", ");
+            let changed = ui
+                .horizontal(|ui| {
+                    ui.label(field.label);
+                    ui.text_edit_singleline(&mut value)
+                        .on_hover_text("Comma-separated; leave empty to leave unset")
+                })
+                .inner
+                .changed();
+            if changed {
+                let items: Vec<String> = value
+                    .split(',')
+                    .map(|item| item.trim().to_owned())
+                    .filter(|item| !item.is_empty())
+                    .collect();
+                if items.is_empty() {
+                    doc.rule_unset(name, index, field.key);
+                } else {
+                    doc.rule_set_strings(name, index, field.key, &items);
+                }
+            }
+        }
     }
 }
 
@@ -1806,6 +2289,56 @@ fn store_workspaces(doc: &mut ConfigDocument, path: &[&str], text: &str) {
         if !names.is_empty() {
             doc.set_strings(path, &names);
         }
+    }
+}
+
+/// Render the schema entries of one sidebar page, grouped by dotted
+/// sub-section, writing edits through to `doc`.
+fn schema_entries_ui(
+    ui: &mut egui::Ui,
+    doc: &mut ConfigDocument,
+    entries: &[schema::Entry],
+    section: &str,
+) {
+    let mut current_group = String::new();
+    for entry in entries {
+        if entry.section != section && entry.section != current_group {
+            current_group = entry.section.clone();
+            let group = entry
+                .section
+                .strip_prefix(&format!("{section}."))
+                .unwrap_or(&entry.section);
+            ui.add_space(6.0);
+            ui.heading(schema::humanize(group));
+        }
+        entry_row(ui, doc, entry);
+    }
+}
+
+fn rules_label(name: &str) -> &'static str {
+    match name {
+        "window_rule" => "Window rules",
+        "layer_rule" => "Layer rules",
+        _ => "Security contexts",
+    }
+}
+
+/// Write one schema value into `doc` at `entry`'s path (used when a
+/// setting picked from the Available group lands in a file).
+fn set_entry_value(doc: &mut ConfigDocument, entry: &schema::Entry, value: schema::Value) {
+    let parts: Vec<&str> = entry.path.iter().map(String::as_str).collect();
+    match (&entry.kind, value) {
+        (schema::Kind::Bool, schema::Value::Bool(value)) => doc.set_bool(&parts, value),
+        (schema::Kind::Integer { .. }, schema::Value::Integer(value)) => {
+            doc.set_integer(&parts, value)
+        }
+        (schema::Kind::Float { .. }, schema::Value::Float(value)) => doc.set_float(&parts, value),
+        (
+            schema::Kind::Text | schema::Kind::Choice(_) | schema::Kind::Color,
+            schema::Value::Text(value),
+        ) => doc.set_string(&parts, &value),
+        (schema::Kind::List, schema::Value::Text(text)) => store_array(doc, &parts, &text),
+        _ => {}
     }
 }
 

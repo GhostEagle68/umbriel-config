@@ -250,7 +250,11 @@ impl ConfigDocument {
     /// Keys of the direct child tables of `path`, in file order; scalar and
     /// array-of-table entries are skipped.
     pub fn table_names(&self, path: &[&str]) -> Vec<String> {
-        let Some(table) = Self::item_at(&self.doc, path).and_then(Item::as_table) else {
+        let table = if path.is_empty() {
+            self.doc.as_table()
+        } else if let Some(table) = Self::item_at(&self.doc, path).and_then(Item::as_table) {
+            table
+        } else {
             return Vec::new();
         };
         table
@@ -440,6 +444,13 @@ impl ConfigDocument {
         let array = self.rule_item(name, index, key)?.as_value()?.as_array()?;
         array.iter().map(|value| value.as_integer()).collect()
     }
+    pub fn rule_strings(&self, name: &str, index: usize, key: &str) -> Option<Vec<String>> {
+        let array = self.rule_item(name, index, key)?.as_value()?.as_array()?;
+        array
+            .iter()
+            .map(|value| value.as_str().map(str::to_owned))
+            .collect()
+    }
 
     pub fn rule_set_string(&mut self, name: &str, index: usize, key: &str, value: &str) {
         self.rule_store(name, index, key, value.into());
@@ -461,6 +472,14 @@ impl ConfigDocument {
         let mut array = Array::new();
         for value in values {
             array.push(*value);
+        }
+        self.rule_store(name, index, key, Value::Array(array));
+    }
+
+    pub fn rule_set_strings(&mut self, name: &str, index: usize, key: &str, values: &[String]) {
+        let mut array = Array::new();
+        for value in values {
+            array.push(value.as_str());
         }
         self.rule_store(name, index, key, Value::Array(array));
     }
@@ -927,5 +946,50 @@ curve = \"easeout\"
         doc.set_strings(&["output", "DP-3", "workspaces"], &["Games".to_owned()]);
         assert_eq!(doc.get_integers(&["output", "DP-3", "workspaces"]), None);
         assert_eq!(doc.get_strings(&["general", "xwayland"]), None);
+    }
+
+    #[test]
+    fn rule_string_lists_round_trip() {
+        let mut doc = ConfigDocument::from_str("").unwrap();
+        doc.add_rule("security_context_rule");
+        doc.rule_set_string(
+            "security_context_rule",
+            0,
+            "match.sandbox_engine",
+            "org\\.flatpak",
+        );
+        assert_eq!(
+            doc.rule_string("security_context_rule", 0, "match.sandbox_engine")
+                .as_deref(),
+            Some("org\\.flatpak")
+        );
+        assert!(
+            doc.rule_strings("security_context_rule", 0, "allow_globals")
+                .is_none()
+        );
+        doc.rule_set_strings(
+            "security_context_rule",
+            0,
+            "allow_globals",
+            &["ext_data_control_manager_v1".to_owned()],
+        );
+        assert_eq!(
+            doc.rule_strings("security_context_rule", 0, "allow_globals"),
+            Some(vec!["ext_data_control_manager_v1".to_owned()])
+        );
+    }
+
+    #[test]
+    fn table_names_reads_the_root_table() {
+        let doc = ConfigDocument::from_str(
+            "[keybinds]\n\"Mod+T\" = \"window-close\"\n\n[general]\nmod_key = \"Super\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            doc.table_names(&[]),
+            vec!["keybinds".to_owned(), "general".to_owned()]
+        );
+        // Scalars aren't child tables.
+        assert_eq!(doc.table_names(&["general"]), Vec::<String>::new());
     }
 }
