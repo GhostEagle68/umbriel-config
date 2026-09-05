@@ -1466,37 +1466,35 @@ impl eframe::App for App {
                 if !sections.is_empty() {
                     ui.separator();
                 }
-                if !self.includes.docs.is_empty() {
-                    ui.separator();
-                    let n = self.includes.docs.len();
-                    let main_label = self
-                        .path
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "config".to_owned());
+                ui.separator();
+                let n = self.includes.docs.len();
+                let main_label = self
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "config".to_owned());
+                if ui
+                    .selectable_value(
+                        &mut self.page,
+                        Some(Page::File(n)),
+                        format!("{main_label} (main)"),
+                    )
+                    .on_hover_text(self.path.display().to_string())
+                    .clicked()
+                {
+                    self.search.clear();
+                }
+                for (index, inc) in self.includes.docs.iter().enumerate() {
                     if ui
                         .selectable_value(
                             &mut self.page,
-                            Some(Page::File(n)),
-                            format!("{main_label} (main)"),
+                            Some(Page::File(index)),
+                            inc.label.as_str(),
                         )
-                        .on_hover_text(self.path.display().to_string())
+                        .on_hover_text(inc.path.display().to_string())
                         .clicked()
                     {
                         self.search.clear();
-                    }
-                    for (index, inc) in self.includes.docs.iter().enumerate() {
-                        if ui
-                            .selectable_value(
-                                &mut self.page,
-                                Some(Page::File(index)),
-                                inc.label.as_str(),
-                            )
-                            .on_hover_text(inc.path.display().to_string())
-                            .clicked()
-                        {
-                            self.search.clear();
-                        }
                     }
                 }
                 if ui
@@ -1655,63 +1653,51 @@ impl eframe::App for App {
                     ui.heading(schema::humanize(&section));
                     ui.separator();
                     self.pending_add_picker(ui);
-                    let main_paths: std::collections::BTreeSet<String> =
-                        self.doc.value_paths().into_iter().collect();
-                    let include_paths: Vec<std::collections::BTreeSet<String>> = self
-                        .includes
-                        .docs
+                    let doc_paths: Vec<std::collections::BTreeSet<String>> = self
+                        .chain()
                         .iter()
-                        .map(|inc| inc.doc.value_paths().into_iter().collect())
+                        .map(|doc| doc.value_paths().into_iter().collect())
                         .collect();
-                    let mut rows: Vec<&schema::Entry> = Vec::new();
-                    let mut elsewhere: Vec<(&schema::Entry, usize)> = Vec::new();
+                    let mut pointers: Vec<(&schema::Entry, usize)> = Vec::new();
                     let mut available: Vec<&schema::Entry> = Vec::new();
                     for entry in &self.schema {
                         if top_level(&entry.section) != section {
                             continue;
                         }
                         let dotted = entry.dotted();
-                        if main_paths.contains(&dotted) {
-                            rows.push(entry);
-                        } else if let Some(home) = include_paths
-                            .iter()
-                            .position(|paths| paths.contains(&dotted))
-                        {
-                            elsewhere.push((entry, home));
-                        } else {
-                            available.push(entry);
+                        match doc_paths.iter().position(|paths| paths.contains(&dotted)) {
+                            Some(home) => pointers.push((entry, home)),
+                            None => available.push(entry),
                         }
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         let mut current_group = String::new();
-                        for entry in &rows {
+                        for (entry, home) in &pointers {
                             if entry.section != current_group {
                                 current_group = entry.section.clone();
                                 ui.add_space(6.0);
                                 ui.heading(schema::humanize(&current_group));
                             }
-                            entry_row(ui, &mut self.doc, entry);
-                        }
-                        if !elsewhere.is_empty() {
-                            ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new("Set in an included file:")
-                                    .weak()
-                                    .small(),
-                            );
-                            for (entry, home) in &elsewhere {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(&entry.label).weak());
-                                    let label = self.includes.docs[*home].label.clone();
-                                    if ui
-                                        .button(format!("in {label} — open"))
-                                        .on_hover_text(entry.dotted())
-                                        .clicked()
-                                    {
-                                        self.page = Some(Page::File(*home));
-                                    }
-                                });
-                            }
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(&entry.label).weak());
+                                let label = if *home < self.includes.docs.len() {
+                                    self.includes.docs[*home].label.clone()
+                                } else {
+                                    let name = self
+                                        .path
+                                        .file_name()
+                                        .map(|name| name.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| "config".to_owned());
+                                    format!("{name} (main)")
+                                };
+                                if ui
+                                    .button(format!("in {label} — open"))
+                                    .on_hover_text(entry.dotted())
+                                    .clicked()
+                                {
+                                    self.page = Some(Page::File(*home));
+                                }
+                            });
                         }
                         if !available.is_empty() {
                             ui.add_space(10.0);
