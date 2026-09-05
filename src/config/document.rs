@@ -250,7 +250,11 @@ impl ConfigDocument {
     /// Keys of the direct child tables of `path`, in file order; scalar and
     /// array-of-table entries are skipped.
     pub fn table_names(&self, path: &[&str]) -> Vec<String> {
-        let Some(table) = Self::item_at(&self.doc, path).and_then(Item::as_table) else {
+        let table = if path.is_empty() {
+            self.doc.as_table()
+        } else if let Some(table) = Self::item_at(&self.doc, path).and_then(Item::as_table) {
+            table
+        } else {
             return Vec::new();
         };
         table
@@ -973,5 +977,19 @@ curve = \"easeout\"
             doc.rule_strings("security_context_rule", 0, "allow_globals"),
             Some(vec!["ext_data_control_manager_v1".to_owned()])
         );
+    }
+
+    #[test]
+    fn table_names_reads_the_root_table() {
+        let doc = ConfigDocument::from_str(
+            "[keybinds]\n\"Mod+T\" = \"window-close\"\n\n[general]\nmod_key = \"Super\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            doc.table_names(&[]),
+            vec!["keybinds".to_owned(), "general".to_owned()]
+        );
+        // Scalars aren't child tables.
+        assert_eq!(doc.table_names(&["general"]), Vec::<String>::new());
     }
 }
