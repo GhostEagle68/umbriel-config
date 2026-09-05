@@ -271,6 +271,7 @@ impl App {
     /// Window/layer rules: one collapsible card per `[[section]]` entry.
     /// Every field starts unset; only what the user fills in is written.
     fn rules_page(&mut self, ui: &mut egui::Ui, name: &'static str) {
+        let target = self.rule_target(name);
         let label = match name {
             "window_rule" => "Window rules",
             "layer_rule" => "Layer rules",
@@ -281,12 +282,30 @@ impl App {
             "layer_rule" => (rules::LAYER_MATCH, rules::LAYER_SETTINGS),
             _ => (rules::SECURITY_MATCH, rules::SECURITY_SETTINGS),
         };
+        let editing = if target < self.includes.docs.len() {
+            self.includes.docs[target].label.clone()
+        } else {
+            "the main config".to_owned()
+        };
+        // One mutable borrow for the whole page: everything below touches
+        // only `doc` and `ui`, so the borrow lives to the end.
+        let doc = if target < self.includes.docs.len() {
+            &mut self.includes.docs[target].doc
+        } else {
+            &mut self.doc
+        };
         ui.heading(label);
         ui.separator();
+        ui.label(
+            egui::RichText::new(format!("Editing {editing}."))
+                .weak()
+                .small(),
+        );
         if ui.button("Add rule").clicked() {
-            self.doc.add_rule(name);
+            doc.add_rule(name);
         }
-        let count = self.doc.rule_count(name);
+
+        let count = doc.rule_count(name);
         if count == 0 {
             ui.add_space(4.0);
             ui.label(format!(
@@ -297,23 +316,23 @@ impl App {
         }
         ui.add_space(4.0);
         for index in 0..count {
-            let title = rules::rule_title(&self.doc, name, index, match_fields);
+            let title = rules::rule_title(doc, name, index, match_fields);
             egui::CollapsingHeader::new(title)
                 .default_open(count == 1)
                 .id_salt(format!("{name}-{index}"))
                 .show(ui, |ui| {
                     ui.strong("Match");
                     for field in match_fields {
-                        rule_field_row(ui, &mut self.doc, name, index, field);
+                        rule_field_row(ui, doc, name, index, field);
                     }
                     ui.add_space(4.0);
                     ui.strong("Settings");
                     for field in settings_fields {
-                        rule_field_row(ui, &mut self.doc, name, index, field);
+                        rule_field_row(ui, doc, name, index, field);
                     }
                     ui.add_space(4.0);
                     if ui.button("Remove rule").clicked() {
-                        self.doc.remove_rule(name, index);
+                        doc.remove_rule(name, index);
                     }
                 });
         }
@@ -398,6 +417,16 @@ impl App {
             .docs
             .iter()
             .position(|inc| inc.doc.value_paths().iter().any(|path| path == dotted))
+            .unwrap_or(self.includes.docs.len())
+    }
+
+    /// Which chain document owns a rule family: the first include that
+    /// has rules in it, else the main config.
+    fn rule_target(&self, name: &str) -> usize {
+        self.includes
+            .docs
+            .iter()
+            .position(|inc| inc.doc.rule_count(name) > 0)
             .unwrap_or(self.includes.docs.len())
     }
 
