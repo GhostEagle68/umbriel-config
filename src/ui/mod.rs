@@ -1655,43 +1655,63 @@ impl eframe::App for App {
                     ui.heading(schema::humanize(&section));
                     ui.separator();
                     self.pending_add_picker(ui);
-                    let n = self.includes.docs.len();
-                    let doc_paths: Vec<std::collections::BTreeSet<String>> = {
-                        let mut sets: Vec<_> = self
-                            .includes
-                            .docs
-                            .iter()
-                            .map(|inc| inc.doc.value_paths().into_iter().collect())
-                            .collect();
-                        sets.push(self.doc.value_paths().into_iter().collect());
-                        sets
-                    };
-                    let mut rows: Vec<(&schema::Entry, usize)> = Vec::new();
+                    let main_paths: std::collections::BTreeSet<String> =
+                        self.doc.value_paths().into_iter().collect();
+                    let include_paths: Vec<std::collections::BTreeSet<String>> = self
+                        .includes
+                        .docs
+                        .iter()
+                        .map(|inc| inc.doc.value_paths().into_iter().collect())
+                        .collect();
+                    let mut rows: Vec<&schema::Entry> = Vec::new();
+                    let mut elsewhere: Vec<(&schema::Entry, usize)> = Vec::new();
                     let mut available: Vec<&schema::Entry> = Vec::new();
                     for entry in &self.schema {
                         if top_level(&entry.section) != section {
                             continue;
                         }
                         let dotted = entry.dotted();
-                        match doc_paths.iter().position(|paths| paths.contains(&dotted)) {
-                            Some(home) => rows.push((entry, home)),
-                            None => available.push(entry),
+                        if main_paths.contains(&dotted) {
+                            rows.push(entry);
+                        } else if let Some(home) = include_paths
+                            .iter()
+                            .position(|paths| paths.contains(&dotted))
+                        {
+                            elsewhere.push((entry, home));
+                        } else {
+                            available.push(entry);
                         }
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         let mut current_group = String::new();
-                        for (entry, home) in &rows {
+                        for entry in &rows {
                             if entry.section != current_group {
                                 current_group = entry.section.clone();
                                 ui.add_space(6.0);
                                 ui.heading(schema::humanize(&current_group));
                             }
-                            let doc = if *home < n {
-                                &mut self.includes.docs[*home].doc
-                            } else {
-                                &mut self.doc
-                            };
-                            entry_row(ui, doc, entry);
+                            entry_row(ui, &mut self.doc, entry);
+                        }
+                        if !elsewhere.is_empty() {
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new("Set in an included file:")
+                                    .weak()
+                                    .small(),
+                            );
+                            for (entry, home) in &elsewhere {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(&entry.label).weak());
+                                    let label = self.includes.docs[*home].label.clone();
+                                    if ui
+                                        .button(format!("in {label} — open"))
+                                        .on_hover_text(entry.dotted())
+                                        .clicked()
+                                    {
+                                        self.page = Some(Page::File(*home));
+                                    }
+                                });
+                            }
                         }
                         if !available.is_empty() {
                             ui.add_space(10.0);
