@@ -80,6 +80,8 @@ struct App {
     /// The loaded `[include]` chain: files the main config lists, read
     /// like umbriel's own loader (missing or broken ones become notes).
     includes: includes::IncludeChain,
+    /// An available setting picked for adding, awaiting a destination.
+    pending_add: Option<schema::Entry>,
 }
 
 impl App {
@@ -122,6 +124,7 @@ impl App {
             kb_search: String::new(),
             kb_editor: None,
             includes,
+            pending_add: None,
         }
     }
 
@@ -1490,13 +1493,87 @@ impl eframe::App for App {
                     }
                     ui.heading(schema::humanize(&section));
                     ui.separator();
-                    let entries: Vec<&schema::Entry> = self
-                        .schema
-                        .iter()
-                        .filter(|entry| top_level(&entry.section) == *section)
-                        .collect();
+                    let n = self.includes.docs.len();
+                    let doc_paths: Vec<std::collections::BTreeSet<String>> = {
+                        let mut sets: Vec<_> = self
+                            .includes
+                            .docs
+                            .iter()
+                            .map(|inc| inc.doc.value_paths().into_iter().collect())
+                            .collect();
+                        sets.push(self.doc.value_paths().into_iter().collect());
+                        sets
+                    };
+                    let mut rows: Vec<(&schema::Entry, usize)> = Vec::new();
+                    let mut available: Vec<&schema::Entry> = Vec::new();
+                    for entry in &self.schema {
+                        if top_level(&entry.section) != section {
+                            continue;
+                        }
+                        let dotted = entry.dotted();
+                        match doc_paths.iter().position(|paths| paths.contains(&dotted)) {
+                            Some(home) => rows.push((entry, home)),
+                            None => available.push(entry),
+                        }
+                    }
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        schema_entries_ui(ui, &mut self.doc, &entries, &section);
+                        let mut current_group = String::new();
+                        for (entry, home) in &rows {
+                            if entry.section != current_group {
+                                current_group = entry.section.clone();
+                                ui.add_space(6.0);
+                                ui.heading(schema::humanize(&current_group));
+                            }
+                            let doc = if *home < n {
+                                &mut self.includes.docs[*home].doc
+                            } else {
+                                &mut self.doc
+                            };
+                            entry_row(ui, doc, entry);
+                        }
+                        if !available.is_empty() {
+                            ui.add_space(10.0);
+                            egui::CollapsingHeader::new(format!(
+                                "Available — not set anywhere ({})",
+                                available.len()
+                            ))
+                            .id_salt(format!("available-{section}"))
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "In umbriel's packaged default but commented out\n\
+                                         (or absent) in your config. Adding one writes its\n\
+                                         default value to the file you pick.",
+                                    )
+                                    .weak()
+                                    .small(),
+                                );
+                                for entry in &available {
+                                    ui.horizontal(|ui| {
+                                        ui.label(&entry.label);
+                                        let default_text = match &entry.default {
+                                            Some(schema::Value::Bool(v)) => format!("{v}"),
+                                            Some(schema::Value::Integer(v)) => format!("{v}"),
+                                            Some(schema::Value::Float(v)) => format!("{v}"),
+                                            Some(schema::Value::Text(v)) => v.clone(),
+                                            None => String::new(),
+                                        };
+                                        if !default_text.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "(default: {default_text})"
+                                                ))
+                                                .weak(),
+                                            );
+                                        }
+                                        if ui.button("Add…").clicked() {
+                                            self.pending_add = Some((*entry).clone());
+                                        }
+                                    });
+                                }
+                            });
+                        }
                     });
                 }
                 Page::File(file) => {
