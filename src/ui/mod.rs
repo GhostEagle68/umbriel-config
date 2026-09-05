@@ -82,6 +82,10 @@ struct App {
     includes: includes::IncludeChain,
     /// An available setting picked for adding, awaiting a destination.
     pending_add: Option<schema::Entry>,
+    /// Whether the destination picker is creating a new include file.
+    creating_include: bool,
+    /// Name for the include file being created.
+    new_include_name: String,
 }
 
 impl App {
@@ -125,6 +129,8 @@ impl App {
             kb_editor: None,
             includes,
             pending_add: None,
+            creating_include: false,
+            new_include_name: String::new(),
         }
     }
 
@@ -349,6 +355,123 @@ impl App {
                     }
                 });
         }
+    }
+
+    /// Where should a newly added setting live? The main config, an
+    /// existing include, or a brand-new file — which is created and
+    /// registered in `[include].files` so umbriel actually reads it.
+    fn pending_add_picker(&mut self, ui: &mut egui::Ui) {
+        let Some(entry) = self.pending_add.clone() else {
+            return;
+        };
+        let Some(default) = entry.default.clone() else {
+            ui.label(format!(
+                "{} has no known default; add it by editing a file directly.",
+                entry.dotted()
+            ));
+            if ui.button("Cancel").clicked() {
+                self.pending_add = None;
+            }
+            return;
+        };
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.label(format!(
+                "Add {} (= {})? Choose where it lives:",
+                entry.dotted(),
+                match &default {
+                    schema::Value::Bool(v) => format!("{v}"),
+                    schema::Value::Integer(v) => format!("{v}"),
+                    schema::Value::Float(v) => format!("{v}"),
+                    schema::Value::Text(v) => v.clone(),
+                }
+            ));
+            ui.horizontal(|ui| {
+                let n = self.includes.docs.len();
+                let mut chosen: Option<usize> = None;
+                let main_label = self
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "config".to_owned());
+                if ui.button(main_label).clicked() {
+                    chosen = Some(n);
+                }
+                for index in 0..n {
+                    if ui
+                        .button(self.includes.docs[index].label.as_str())
+                        .clicked()
+                    {
+                        chosen = Some(index);
+                    }
+                }
+                if let Some(home) = chosen {
+                    let doc = if home < n {
+                        &mut self.includes.docs[home].doc
+                    } else {
+                        &mut self.doc
+                    };
+                    set_entry_value(doc, &entry, default.clone());
+                    self.pending_add = None;
+                }
+                if ui.button("New file…").clicked() {
+                    self.creating_include = true;
+                }
+            });
+            if self.creating_include {
+                ui.horizontal(|ui| {
+                    ui.label("File name:");
+                    let name_field = ui.text_edit_singleline(&mut self.new_include_name);
+                    let name = self.new_include_name.trim();
+                    let valid = !name.is_empty()
+                        && !name.contains('/')
+                        && !name.contains('\\')
+                        && !name.contains("..");
+                    let submitted = ui.button("Create").clicked()
+                        || (valid
+                            && name_field.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+                    if submitted {
+                        if !valid {
+                            self.validation_note =
+                                Some("File name must be plain, e.g. media.toml".to_owned());
+                        } else {
+                            let base = name.trim_end_matches(".toml");
+                            let file_name = format!("{base}.toml");
+                            let target = self
+                                .path
+                                .parent()
+                                .map(|dir| dir.join(&file_name))
+                                .expect("config path has a parent");
+                            let mut doc = ConfigDocument::from_str("").expect("empty TOML parses");
+                            set_entry_value(&mut doc, &entry, default.clone());
+                            match doc.save(&target) {
+                                Ok(()) => {
+                                    let mut files = self
+                                        .doc
+                                        .get_strings(&["include", "files"])
+                                        .unwrap_or_default();
+                                    if !files.iter().any(|f| f == &file_name) {
+                                        files.push(file_name);
+                                    }
+                                    self.doc.set_strings(&["include", "files"], &files);
+                                    self.includes = includes::load_chain(&self.doc, &self.path);
+                                    self.pending_add = None;
+                                    self.creating_include = false;
+                                    self.new_include_name.clear();
+                                }
+                                Err(err) => {
+                                    self.validation_note = Some(err.to_string());
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            if ui.button("Cancel").clicked() {
+                self.pending_add = None;
+                self.creating_include = false;
+            }
+        });
     }
 
     /// One include file's own settings: schema entries this file actually
@@ -1493,6 +1616,7 @@ impl eframe::App for App {
                     }
                     ui.heading(schema::humanize(&section));
                     ui.separator();
+                    self.pending_add_picker(ui);
                     let n = self.includes.docs.len();
                     let doc_paths: Vec<std::collections::BTreeSet<String>> = {
                         let mut sets: Vec<_> = self
@@ -2131,6 +2255,25 @@ fn rules_label(name: &str) -> &'static str {
         "window_rule" => "Window rules",
         "layer_rule" => "Layer rules",
         _ => "Security contexts",
+    }
+}
+
+/// Write one schema value into `doc` at `entry`'s path (used when a
+/// setting picked from the Available group lands in a file).
+fn set_entry_value(doc: &mut ConfigDocument, entry: &schema::Entry, value: schema::Value) {
+    let parts: Vec<&str> = entry.path.iter().map(String::as_str).collect();
+    match (&entry.kind, value) {
+        (schema::Kind::Bool, schema::Value::Bool(value)) => doc.set_bool(&parts, value),
+        (schema::Kind::Integer { .. }, schema::Value::Integer(value)) => {
+            doc.set_integer(&parts, value)
+        }
+        (schema::Kind::Float { .. }, schema::Value::Float(value)) => doc.set_float(&parts, value),
+        (
+            schema::Kind::Text | schema::Kind::Choice(_) | schema::Kind::Color,
+            schema::Value::Text(value),
+        ) => doc.set_string(&parts, &value),
+        (schema::Kind::List, schema::Value::Text(text)) => store_array(doc, &parts, &text),
+        _ => {}
     }
 }
 
