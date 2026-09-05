@@ -18,6 +18,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0 # needed so the release-notes git log can see tags
+          ref: ${{ github.ref }}
 
       - name: Determine release channel
         id: channel
