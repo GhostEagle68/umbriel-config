@@ -496,15 +496,15 @@ impl App {
             )
         };
 
-        let mut groups: Vec<(String, Vec<&schema::Entry>)> = Vec::new();
+        let mut groups: Vec<(String, Vec<schema::Entry>)> = Vec::new();
         for entry in &self.schema {
             if !present.contains(&entry.dotted()) {
                 continue;
             }
             let top = top_level(&entry.section);
             match groups.iter_mut().find(|(name, _)| *name == top) {
-                Some((_, list)) => list.push(entry),
-                None => groups.push((top, vec![entry])),
+                Some((_, list)) => list.push(entry.clone()),
+                None => groups.push((top, vec![entry.clone()])),
             }
         }
 
@@ -533,29 +533,29 @@ impl App {
                 .weak()
                 .small(),
             );
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for (section, group) in &groups {
-                    ui.add_space(6.0);
-                    ui.strong(schema::humanize(section));
-                    let doc = if file < n {
-                        &mut self.includes.docs[file].doc
-                    } else {
-                        &mut self.doc
-                    };
-                    schema_entries_ui(ui, doc, group, section);
-                }
-            });
         }
-        if owns_keybinds {
-            ui.add_space(8.0);
-            ui.strong("Keybinds");
-            self.keybinds_content(ui);
-        }
-        for family in owned_rules {
-            ui.add_space(8.0);
-            ui.strong(rules_label(family));
-            self.rules_content(ui, family);
-        }
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for (section, group) in &groups {
+                ui.add_space(6.0);
+                ui.strong(schema::humanize(section));
+                let doc = if file < n {
+                    &mut self.includes.docs[file].doc
+                } else {
+                    &mut self.doc
+                };
+                schema_entries_ui(ui, doc, group, section);
+            }
+            if owns_keybinds {
+                ui.add_space(8.0);
+                ui.strong("Keybinds");
+                self.keybinds_content(ui);
+            }
+            for family in owned_rules {
+                ui.add_space(8.0);
+                ui.strong(rules_label(family));
+                self.rules_content(ui, family);
+            }
+        });
     }
 
     /// All documents in umbriel's precedence order: the `[include]`
@@ -2232,7 +2232,7 @@ fn store_workspaces(doc: &mut ConfigDocument, path: &[&str], text: &str) {
 fn schema_entries_ui(
     ui: &mut egui::Ui,
     doc: &mut ConfigDocument,
-    entries: &[&schema::Entry],
+    entries: &[schema::Entry],
     section: &str,
 ) {
     let mut current_group = String::new();
