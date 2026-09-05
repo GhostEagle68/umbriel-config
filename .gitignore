@@ -9,3 +9,6 @@
 
 ## OS generated files
 .DS_Store
+
+## Local tooling (owner-only, not committed)
+/local.just

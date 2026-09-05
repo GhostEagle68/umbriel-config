@@ -30,3 +30,6 @@ format-check:
 
 # Full local gate: formatting, lint, tests
 verify: format-check lint test
+
+# Owner-only workflow recipes (git-ignored; absent on other clones/CI)
+import? 'local.just'
