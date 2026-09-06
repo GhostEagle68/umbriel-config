@@ -10,7 +10,7 @@ live-reloads and the change applies immediately.
 > [Bug reports and ideas are welcome](https://github.com/GhostEagle68/umbriel-config/issues).
 
 # Disclaimer
-Zcode GLM 5.3 models were used to help plan, review code and research only. All code is looked over by me and tested locally.
+Zcode GLM 5.3 models are used to help plan, review code and research only. All code is looked over and written by me and tested locally.
 
 ## Features
 
@@ -96,10 +96,8 @@ umbriel-config outputs        # list outputs reported by the compositor
 ```
 
 ## Alpha caveats
-
-- Only the **keybinds** page follows the `[include]` chain so far; the
-  schema, rules, and raw pages edit the main config file.
-- Linux x86_64 only for now; no AUR or crates.io packaging yet.
+- Core settings work
+- Expect bugs, missing features and bare bones UI
 - Eye-candy and polish pass still pending.
 
 ## Development
