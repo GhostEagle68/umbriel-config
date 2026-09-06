@@ -21,9 +21,7 @@ Zcode GLM 5.3 models are used to help plan, review code and research only. All c
 - **Keybinds editor** — one merged list of built-in defaults and your binds,
   chord capture (press the keys), searchable pickers for keys and actions,
   submap scopes, and conflict warnings with a safe replace.
-- **Understands split configs** — follows your `[include]` chain; keybind
-  edits land in whichever file owns them, and the changes page reviews every
-  file at once.
+- **Understands split configs** — follows your `[include]` chain
 - **Changes you can audit** — every unsaved edit is one row: what changed,
   before vs after, with a per-option reset. Discard anything before saving.
 - **Outputs, window rules, layer rules** — including live monitor scanning.
