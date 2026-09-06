@@ -32,21 +32,24 @@ Zcode GLM 5.3 models are used to help plan, review code and research only. All c
 
 ## Install
 
-Prebuilt binaries are attached to every release — no compiler needed.
+Prebuilt binaries are attached to every release, no compiler needed. crates.io is reccomened for a better install, up and uninstall experience.
 
 ```sh
-mkdir -p ~/.local/bin
 curl -fLO https://github.com/GhostEagle68/umbriel-config/releases/latest/download/umbriel-config-x86_64-linux.tar.gz
-tar -xzf umbriel-config-x86_64-linux.tar.gz -C ~/.local/bin
+tar -xzf umbriel-config-x86_64-linux.tar.gz -C ~/.local
 ```
 
+Pick the tarball matching your machine (`x86_64` or `aarch64`). This installs
+the binary to `~/.local/bin` plus a launcher entry and icon under
+`~/.local/share`, most desktops show it in the app menu after next login.
 Make sure `~/.local/bin` is on your `PATH`, then run `umbriel-config`. A
-`.sha256` checksum sits next to the tarball on the release page.
+`.sha256` checksum sits next to each tarball on the release page.
 
 ### Build from source
 
 **Dependencies:**
-- Rust 1.88+ (includes cargo) — install it with [rustup](https://rustup.rs);
+
+- Rust 1.88+ (includes cargo) install it with [rustup](https://rustup.rs);
   distro-provided Rust is usually older than the edition this needs
 - Edition 2024
 
@@ -86,6 +89,8 @@ To update instead, just re-run the install command above.
 
 ```sh
 rm ~/.local/bin/umbriel-config
+rm ~/.local/share/applications/umbriel-config.desktop
+rm ~/.local/share/icons/hicolor/scalable/apps/umbriel-config.svg
 ```
 
 Uninstalling only removes the app. Your Umbriel config files. And the
@@ -102,11 +107,12 @@ umbriel-config outputs        # list outputs reported by the compositor
 ```
 
 ## Alpha caveats
+
 - Core settings work
 - Expect bugs, missing features and bare bones UI
 - Eye-candy and polish pass still pending.
-- Linux x86_64 only; installs from GitHub release tarballs or crates.io.
-  AUR packaging is planned but not started.
+- Installs from GitHub release tarballs (x86_64 and aarch64), crates.io, or
+  `cargo install --git`. AUR packaging is planned but not started.
 
 ## Development
 
