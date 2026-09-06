@@ -36,6 +36,7 @@ struct Release {
 pub fn check() -> Result<Verdict, String> {
     let releases: Vec<Release> = ureq::get(RELEASES_URL)
         .set("User-Agent", USER_AGENT)
+        .timeout(std::time::Duration::from_secs(10))
         .call()
         .map_err(|err| err.to_string())?
         .into_json()
