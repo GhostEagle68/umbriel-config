@@ -1580,6 +1580,8 @@ impl eframe::App for App {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "config".to_owned());
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Config files").weak().small());
                 if ui
                     .selectable_value(
                         &mut self.page,
@@ -1591,6 +1593,7 @@ impl eframe::App for App {
                 {
                     self.search.clear();
                 }
+                ui.label(egui::RichText::new("Include files").weak().small());
                 for (index, inc) in self.includes.docs.iter().enumerate() {
                     if ui
                         .selectable_value(
@@ -1604,6 +1607,8 @@ impl eframe::App for App {
                         self.search.clear();
                     }
                 }
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Default settings").weak().small());
                 if ui
                     .selectable_value(&mut self.page, Some(Page::Outputs), "Outputs")
                     .clicked()
@@ -1648,7 +1653,7 @@ impl eframe::App for App {
                 }
                 if self.any_modified()
                     && ui
-                        .selectable_value(&mut self.page, Some(Page::Changes), "● Unsaved changes")
+                        .selectable_value(&mut self.page, Some(Page::Changes), "• Unsaved changes")
                         .clicked()
                 {
                     self.search.clear();
@@ -1668,7 +1673,7 @@ impl eframe::App for App {
                 }
                 ui.separator();
                 let badge = match &self.update_result {
-                    Some(Ok(update::Verdict::UpdateAvailable(_))) => " ●",
+                    Some(Ok(update::Verdict::UpdateAvailable(_))) => " •",
                     _ => "",
                 };
                 if ui
@@ -2862,7 +2867,7 @@ fn drag_preview(response: egui::Response, text: String) -> egui::Response {
 /// Marks a setting that appeared in umbriel since the last recorded schema.
 fn new_badge(ui: &mut egui::Ui) {
     ui.label(
-        egui::RichText::new("●")
+        egui::RichText::new("•")
             .small()
             .color(egui::Color32::from_rgb(0x7A, 0xA3, 0xFF)),
     )
