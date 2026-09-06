@@ -63,7 +63,7 @@ source $HOME/.cargo/env
 Then build and install umbriel-config, either from crates.io:
 
 ```sh
-cargo install umbriel-config
+cargo install umbriel-config@0.1.2-alpha.3
 ```
 
 or straight from the repository (tracks `main`):
