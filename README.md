@@ -46,17 +46,24 @@ Make sure `~/.local/bin` is on your `PATH`, then run `umbriel-config`. A
 ### Build from source
 
 **Dependencies:**
-- Rust 1.88+ (includes cargo)
+- Rust 1.88+ (includes cargo) — install it with [rustup](https://rustup.rs);
+  distro-provided Rust is usually older than the edition this needs
 - Edition 2024
 
-If you don't have Rust installed, install it with [rustup](https://rustup.rs):
+If you don't have Rust installed:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 ```
 
-Then build and install umbriel-config:
+Then build and install umbriel-config, either from crates.io:
+
+```sh
+cargo install umbriel-config
+```
+
+or straight from the repository (tracks `main`):
 
 ```sh
 cargo install --git https://github.com/GhostEagle68/umbriel-config
@@ -73,7 +80,7 @@ cargo uninstall umbriel-config
 ```
 
 This removes the binary from `~/.cargo/bin` and cargo's install registry.
-To update instead, just re-run the `cargo install --git` command above.
+To update instead, just re-run the install command above.
 
 **Installed from a release tarball:**
 
@@ -98,6 +105,8 @@ umbriel-config outputs        # list outputs reported by the compositor
 - Core settings work
 - Expect bugs, missing features and bare bones UI
 - Eye-candy and polish pass still pending.
+- Linux x86_64 only; installs from GitHub release tarballs or crates.io.
+  AUR packaging is planned but not started.
 
 ## Development
 
