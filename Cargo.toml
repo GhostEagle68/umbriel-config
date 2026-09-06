@@ -13,7 +13,10 @@ categories = ["gui", "configuration"]
 [dependencies]
 anyhow = "1.0.104"
 eframe = "0.36.1"
+semver = "1.0.28"
+serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"
 toml_edit = "0.25.13"
+ureq = { version = "2", features = ["json"] }
 wayland-client = "0.31.15"
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
