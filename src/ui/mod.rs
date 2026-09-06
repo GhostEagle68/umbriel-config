@@ -343,7 +343,7 @@ impl App {
                     ui.label(format!("Version {version} available — "));
                     ui.hyperlink_to(
                         "get it here",
-                        "https://github.com/GhostEagle68/umbriel-config/releases/latest",
+                        "https://github.com/GhostEagle68/umbriel-config/releases",
                     )
                 }
                 Some(Err(err)) => ui.colored_label(

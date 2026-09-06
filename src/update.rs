@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const DAY_SECS: u64 = 24 * 60 * 60;
 const RELEASES_URL: &str =
-    "https://api.github.com/repos/GhostEagle68/umbriel-config/releases/latest";
+    "https://api.github.com/repos/GhostEagle68/umbriel-config/releases?per_page=1";
 const USER_AGENT: &str = "umbriel-config";
 
 #[derive(Debug, PartialEq)]
@@ -33,14 +33,16 @@ struct Release {
     tag_name: String,
 }
 
-/// Blocking HTTP check — call from a worker thread only.
 pub fn check() -> Result<Verdict, String> {
-    let release: Release = ureq::get(RELEASES_URL)
+    let releases: Vec<Release> = ureq::get(RELEASES_URL)
         .set("User-Agent", USER_AGENT)
         .call()
         .map_err(|err| err.to_string())?
         .into_json()
         .map_err(|err| err.to_string())?;
+    let Some(release) = releases.first() else {
+        return Err("no releases published yet".to_owned());
+    };
     compare(env!("CARGO_PKG_VERSION"), &release.tag_name)
         .ok_or_else(|| format!("unparseable version '{}'", release.tag_name))
 }
@@ -99,5 +101,9 @@ mod tests {
         assert_eq!(compare("0.1.2-alpha.1", "v0.1.1"), Some(Verdict::UpToDate));
         assert_eq!(compare("0.1.1", "v0.1.1"), Some(Verdict::UpToDate));
         assert_eq!(compare("0.1.1", "garbage"), None);
+        assert_eq!(
+            compare("0.1.1-alpha.2", "v0.1.1-alpha.3"),
+            Some(Verdict::UpdateAvailable("0.1.1-alpha.3".to_owned()))
+        );
     }
 }
