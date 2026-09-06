@@ -2447,7 +2447,10 @@ fn set_entry_value(doc: &mut ConfigDocument, entry: &schema::Entry, value: schem
         }
         (schema::Kind::Float { .. }, schema::Value::Float(value)) => doc.set_float(&parts, value),
         (
-            schema::Kind::Text | schema::Kind::Choice(_) | schema::Kind::Color,
+            schema::Kind::Text
+            | schema::Kind::Choice(_)
+            | schema::Kind::Color
+            | schema::Kind::Curve,
             schema::Value::Text(value),
         ) => doc.set_string(&parts, &value),
         (schema::Kind::List, schema::Value::Text(text)) => store_array(doc, &parts, &text),
@@ -2665,6 +2668,35 @@ fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry)
                     doc.remove_table(&parts);
                 }
             });
+        }
+        schema::Kind::Curve => {
+            let mut value = doc
+                .get_string(&parts)
+                .unwrap_or_else(|| match &entry.default {
+                    Some(schema::Value::Text(value)) => value.clone(),
+                    _ => String::new(),
+                });
+            let original = value.clone();
+            ui.horizontal(|ui| {
+                ui.label(&label);
+                if schema::BUILTIN_CURVES.contains(&value.as_str()) {
+                    egui::ComboBox::from_id_salt(entry.dotted())
+                        .selected_text(&value)
+                        .show_ui(ui, |ui| {
+                            for name in schema::BUILTIN_CURVES {
+                                ui.selectable_value(&mut value, (*name).to_owned(), *name);
+                            }
+                        });
+                } else {
+                    ui.text_edit_singleline(&mut value).on_hover_text(
+                        "Curve name, or inline \"x1,y1,x2,y2\" bezier / \
+                 \"spring: damping,stiffness\"",
+                    );
+                }
+            });
+            if value != original {
+                doc.set_string(&parts, &value);
+            }
         }
     }
 }

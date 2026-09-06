@@ -30,6 +30,9 @@ pub enum Kind {
     Choice(Vec<String>),
     /// `#RRGGBB` or `#RRGGBBAA` color string.
     Color,
+    /// `curve` under `[animation.*]`: a built-in easing name, a registered
+    /// bezier/spring name, or an inline curve string.
+    Curve,
 }
 
 /// A typed scalar value; also used for defaults.
@@ -63,6 +66,64 @@ impl Entry {
         self.path.join(".")
     }
 }
+
+/// Built-in animation curve names, verbatim from umbriel's
+/// `src/core/animation.cpp` (`populateDefaults()`). Re-sync when umbriel
+/// adds curves; user-registered `[animation.beziers]`/`[animation.springs]`
+/// names and inline curve strings are edited as free text.
+pub const BUILTIN_CURVES: &[&str] = &[
+    "linear",
+    "easeinsine",
+    "easeoutsine",
+    "easeinoutsine",
+    "easeinquad",
+    "easeoutquad",
+    "easeinoutquad",
+    "quad",
+    "easeincubic",
+    "easeoutcubic",
+    "easeinoutcubic",
+    "cubic",
+    "ease",
+    "easein",
+    "easeout",
+    "easeinout",
+    "easeinquart",
+    "easeoutquart",
+    "easeinoutquart",
+    "quart",
+    "easeinquint",
+    "easeoutquint",
+    "easeinoutquint",
+    "quint",
+    "easeinexpo",
+    "easeoutexpo",
+    "easeinoutexpo",
+    "expo",
+    "easeincirc",
+    "easeoutcirc",
+    "easeinoutcirc",
+    "circ",
+    "easeinback",
+    "easeoutback",
+    "easeinoutback",
+    "back",
+    "overshoot",
+    "easeinelastic",
+    "easeoutelastic",
+    "easeinoutelastic",
+    "elastic",
+    "easeinbounce",
+    "easeoutbounce",
+    "easeinoutbounce",
+    "bounce",
+    "snappy",
+    "default",
+    "defaultspring",
+    "bouncy",
+    "smooth",
+    "stiff",
+];
 
 /// Maintainer refinements over derived entries, keyed by dotted path.
 pub struct Overlay {
@@ -111,7 +172,10 @@ fn mine_comments(packaged: &str, entries: &mut Vec<Entry>) {
         if known.contains(&dotted) {
             continue;
         }
-        if let Some((kind, default)) = classify_value(raw.trim()) {
+        if let Some((mut kind, default)) = classify_value(raw.trim()) {
+            if key == "curve" && section.starts_with("animation") {
+                kind = Kind::Curve;
+            }
             let mut path: Vec<String> = section.split('.').map(str::to_owned).collect();
             path.push(key.to_owned());
             entries.push(Entry {
@@ -253,7 +317,11 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
         toml_edit::Value::String(v) => {
             let text = v.value();
             let suffix = v.decor().suffix().and_then(toml_edit::RawString::as_str);
-            let kind = if is_color(text) {
+            let kind = if path.last().map(String::as_str) == Some("curve")
+                && section.starts_with("animation")
+            {
+                Kind::Curve
+            } else if is_color(text) {
                 Kind::Color
             } else {
                 suffix
@@ -778,5 +846,26 @@ focus_on_activate = false
         // The output itself is not claimed wholesale — unknown fields under
         // it must stay visible.
         assert!(!claims.contains("output.DP-1"));
+    }
+
+    #[test]
+    fn curve_keys_mine_as_curve_kind() {
+        let packaged = "\
+[animation]
+enabled = true
+duration_ms = 250                       # 1-10000 ms
+curve = \"easeout\"
+
+[animation.windows_in]
+enabled = true
+duration_ms = 150
+curve = \"easeout\"
+";
+        let entries = assemble(packaged);
+        for entry in &entries {
+            if entry.dotted().ends_with("curve") {
+                assert!(matches!(entry.kind, Kind::Curve), "{}", entry.dotted());
+            }
+        }
     }
 }
