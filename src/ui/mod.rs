@@ -94,6 +94,9 @@ struct App {
     update_check: Option<std::sync::mpsc::Receiver<Result<update::Verdict, String>>>,
     /// Result of the last finished update check.
     update_result: Option<Result<update::Verdict, String>>,
+    /// Dotted keys that appeared in umbriel since the last recorded
+    /// schema; cleared together with the drift banner.
+    new_keys: std::collections::BTreeSet<String>,
 }
 
 impl App {
@@ -117,7 +120,7 @@ impl App {
         let includes = includes::load_chain(&doc, &path);
         let env = discovery::Env::from_process();
         let schema = Self::load_schema(&env);
-        let schema_note = Self::startup_note(&env, &schema);
+        let (schema_note, startup_drift) = Self::startup_drift(&env, &schema);
         let settings = settings::load(&env);
         let mut app = Self {
             path,
@@ -144,6 +147,7 @@ impl App {
             settings,
             update_check: None,
             update_result: None,
+            new_keys: startup_drift.added.into_iter().collect(),
         };
         if settings.check_updates_on_start && update::should_auto_check(&env) {
             app.start_update_check(Some(env));
@@ -159,6 +163,7 @@ impl App {
         let fresh_set = schema::key_set(&fresh);
         let drift = schema::diff(&schema::key_set(&self.schema), &fresh_set);
         let _ = state::store(&state::snapshot_path(&env), &fresh_set);
+        self.new_keys = drift.added.iter().cloned().collect();
         self.schema_note = Some(if fresh.is_empty() {
             "No packaged default found; install umbriel and sync again.".to_owned()
         } else if drift.is_empty() {
@@ -633,10 +638,10 @@ impl App {
                 egui::RichText::new(format!(
                     "Edits here write to {label}, which your main config pulls in via [include]."
                 ))
-                .weak()
-                .small(),
+                .weak(),
             );
         }
+        let new_keys = self.new_keys.clone();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (section, group) in &groups {
                 ui.add_space(6.0);
@@ -646,7 +651,7 @@ impl App {
                 } else {
                     &mut self.doc
                 };
-                schema_entries_ui(ui, doc, group, section);
+                schema_entries_ui(ui, doc, group, section, &new_keys);
             }
             if owns_keybinds {
                 ui.add_space(8.0);
@@ -821,8 +826,7 @@ impl App {
                 "Bold rows are yours, the hover says which file defines them; the rest are \
                  umbriel's built-in defaults. Click any row to edit it.",
             )
-            .weak()
-            .small(),
+            .weak(),
         );
 
         // The new-bind editor renders above the list.
@@ -1448,13 +1452,18 @@ impl App {
 
     /// Diff the fresh schema against the last run's snapshot and refresh it.
     /// Silent on the first run (no snapshot yet) and when nothing changed.
-    fn startup_note(env: &discovery::Env, entries: &[schema::Entry]) -> Option<String> {
+    /// Returns the banner text and the drift, whose added keys get badges.
+    fn startup_drift(
+        env: &discovery::Env,
+        entries: &[schema::Entry],
+    ) -> (Option<String>, schema::SchemaDiff) {
         let current = schema::key_set(entries);
         let seen = state::load(&state::snapshot_path(env));
         let drift = schema::diff(&seen, &current);
         let _ = state::store(&state::snapshot_path(env), &current);
-        (!seen.is_empty() && !drift.is_empty())
-            .then(|| format!("Umbriel changed since last run: {}.", drift.summary()))
+        let note = (!seen.is_empty() && !drift.is_empty())
+            .then(|| format!("Umbriel changed since last run: {}.", drift.summary()));
+        (note, drift)
     }
 }
 
@@ -1537,6 +1546,7 @@ impl eframe::App for App {
                     ui.colored_label(egui::Color32::from_rgb(140, 200, 140), note);
                     if ui.small_button("Dismiss").clicked() {
                         self.schema_note = None;
+                        self.new_keys.clear();
                     }
                 });
             });
@@ -1729,12 +1739,13 @@ impl eframe::App for App {
                             ui.add_space(6.0);
                             ui.heading(schema::humanize(&current_section));
                         }
+                        let is_new = self.new_keys.contains(entry.dotted().as_str());
                         let doc = if *home < self.includes.docs.len() {
                             &mut self.includes.docs[*home].doc
                         } else {
                             &mut self.doc
                         };
-                        entry_row(ui, doc, entry);
+                        entry_row(ui, doc, entry, is_new);
                     }
                 });
                 return;
@@ -1787,6 +1798,9 @@ impl eframe::App for App {
                                 ui.heading(schema::humanize(&current_group));
                             }
                             ui.horizontal(|ui| {
+                                if self.new_keys.contains(entry.dotted().as_str()) {
+                                    new_badge(ui);
+                                }
                                 ui.label(egui::RichText::new(&entry.label).weak());
                                 let label = if *home < self.includes.docs.len() {
                                     self.includes.docs[*home].label.clone()
@@ -1822,11 +1836,13 @@ impl eframe::App for App {
                                          (or absent) in your config. Adding one writes its\n\
                                          default value to the file you pick.",
                                     )
-                                    .weak()
-                                    .small(),
+                                    .weak(),
                                 );
                                 for entry in &available {
                                     ui.horizontal(|ui| {
+                                        if self.new_keys.contains(entry.dotted().as_str()) {
+                                            new_badge(ui);
+                                        }
                                         ui.label(&entry.label);
                                         let default_text = match &entry.default {
                                             Some(schema::Value::Bool(v)) => format!("{v}"),
@@ -2227,7 +2243,7 @@ enum RowClick {
 
 /// One merged keybind row: the chord (bold when yours) and the human
 /// action text; either opens the editor. Overridden defaults get ↺ reset,
-/// user-only binds ✕ remove.
+/// user-only binds × remove.
 fn keybind_display_row(
     ui: &mut egui::Ui,
     actions: &[keybinds::LiveAction],
@@ -2266,7 +2282,7 @@ fn keybind_display_row(
                     .on_hover_text("Reset to umbriel's built-in default")
                     .clicked()
             } else {
-                ui.button("✕")
+                ui.button("×")
                     .on_hover_text("Remove this keybind")
                     .clicked()
             };
@@ -2412,6 +2428,7 @@ fn schema_entries_ui(
     doc: &mut ConfigDocument,
     entries: &[schema::Entry],
     section: &str,
+    new_keys: &std::collections::BTreeSet<String>,
 ) {
     let mut current_group = String::new();
     for entry in entries {
@@ -2424,7 +2441,8 @@ fn schema_entries_ui(
             ui.add_space(6.0);
             ui.heading(schema::humanize(group));
         }
-        entry_row(ui, doc, entry);
+        let is_new = new_keys.contains(entry.dotted().as_str());
+        entry_row(ui, doc, entry, is_new);
     }
 }
 
@@ -2459,13 +2477,16 @@ fn set_entry_value(doc: &mut ConfigDocument, entry: &schema::Entry, value: schem
 }
 
 /// Render one schema entry, writing changes straight through to the document.
-fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry) {
+fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry, is_new: bool) {
     let parts: Vec<&str> = entry.path.iter().map(String::as_str).collect();
     let label = if entry.restart {
         format!("{} (restart to apply)", entry.label)
     } else {
         entry.label.clone()
     };
+    if is_new {
+        new_badge(ui);
+    }
     match &entry.kind {
         schema::Kind::Bool => {
             let mut value = doc.get_bool(&parts).unwrap_or(match entry.default {
@@ -2661,7 +2682,7 @@ fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry)
                     doc.set_string(&parts, &default_text);
                 }
                 if ui
-                    .button("✕")
+                    .button("×")
                     .on_hover_text("Remove — fall back to umbriel's default")
                     .clicked()
                 {
@@ -2814,6 +2835,16 @@ fn drag_preview(response: egui::Response, text: String) -> egui::Response {
     } else {
         response
     }
+}
+
+/// Marks a setting that appeared in umbriel since the last recorded schema.
+fn new_badge(ui: &mut egui::Ui) {
+    ui.label(
+        egui::RichText::new("●")
+            .small()
+            .color(egui::Color32::from_rgb(0x7A, 0xA3, 0xFF)),
+    )
+    .on_hover_text("New in this umbriel version");
 }
 
 /// `#RRGGBB[AA]` to an egui color.
