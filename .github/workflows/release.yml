@@ -10,7 +10,47 @@ permissions:
   contents: write
 
 jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runs-on: ubuntu-latest
+            arch: x86_64
+          - runs-on: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runs-on }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package release artifacts
+        run: |
+          mkdir -p stage/bin stage/share/applications stage/share/icons/hicolor/scalable/apps
+          cp target/release/umbriel-config stage/bin/
+          cp README.md LICENSE.md stage/
+          cp assets/umbriel-config.desktop stage/share/applications/
+          cp assets/umbriel-config.svg stage/share/icons/hicolor/scalable/apps/
+          tar -czf umbriel-config-${{ matrix.arch }}-linux.tar.gz -C stage .
+          sha256sum umbriel-config-${{ matrix.arch }}-linux.tar.gz > umbriel-config-${{ matrix.arch }}-linux.tar.gz.sha256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: umbriel-config-${{ matrix.arch }}-linux
+          path: |
+            umbriel-config-${{ matrix.arch }}-linux.tar.gz
+            umbriel-config-${{ matrix.arch }}-linux.tar.gz.sha256
+          if-no-files-found: error
+
   release:
+    needs: build
     runs-on: ubuntu-latest
 
     steps:
@@ -38,19 +78,10 @@ jobs:
           fi
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build release binary
-        run: cargo build --release --locked
-
-      - name: Package release artifacts
-        run: |
-          mkdir -p stage
-          cp target/release/umbriel-config stage/
-          cp README.md LICENSE.md stage/
-          tar -czf umbriel-config-x86_64-linux.tar.gz -C stage .
-          sha256sum umbriel-config-x86_64-linux.tar.gz > umbriel-config-x86_64-linux.tar.gz.sha256
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
 
       - name: Generate release notes
         run: |
@@ -117,7 +148,7 @@ jobs:
           for s in feat fix improve other; do
             case "$s" in
               feat)    title="Features" ;;
-              fix)     title="Bug Fixes" ;;
+              fix)      title="Bug Fixes" ;;
               improve) title="Improvements" ;;
               other)   title="Other Changes" ;;
             esac
@@ -145,7 +176,8 @@ jobs:
           files: |
             umbriel-config-x86_64-linux.tar.gz
             umbriel-config-x86_64-linux.tar.gz.sha256
+            umbriel-config-aarch64-linux.tar.gz
+            umbriel-config-aarch64-linux.tar.gz.sha256
           body_path: release_notes.md
-          clobber: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
