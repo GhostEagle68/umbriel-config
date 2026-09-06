@@ -6,10 +6,11 @@ use eframe::egui;
 use std::path::PathBuf;
 use std::str::FromStr;
 use umbriel_config::config::{
-    diff, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema, state,
-    validate,
+    diff, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema,
+    settings, state, validate,
 };
 use umbriel_config::live;
+use umbriel_config::update;
 
 /// Launch the GUI for `path`.
 pub fn run(path: PathBuf) -> anyhow::Result<()> {
@@ -43,6 +44,7 @@ enum Page {
     Changes,
     /// Keys in the config no other page claims.
     Raw,
+    Settings,
 }
 
 struct App {
@@ -86,6 +88,12 @@ struct App {
     creating_include: bool,
     /// Name for the include file being created.
     new_include_name: String,
+    /// App preferences (update-check toggle).
+    settings: settings::Settings,
+    /// Receiver for an in-flight update check; one-shot channel.
+    update_check: Option<std::sync::mpsc::Receiver<Result<update::Verdict, String>>>,
+    /// Result of the last finished update check.
+    update_result: Option<Result<update::Verdict, String>>,
 }
 
 impl App {
@@ -105,11 +113,13 @@ impl App {
                 )
             }
         };
+
         let includes = includes::load_chain(&doc, &path);
         let env = discovery::Env::from_process();
         let schema = Self::load_schema(&env);
         let schema_note = Self::startup_note(&env, &schema);
-        Self {
+        let settings = settings::load(&env);
+        let mut app = Self {
             path,
             doc,
             healthy,
@@ -131,7 +141,14 @@ impl App {
             pending_add: None,
             creating_include: false,
             new_include_name: String::new(),
+            settings,
+            update_check: None,
+            update_result: None,
+        };
+        if settings.check_updates_on_start && update::should_auto_check(&env) {
+            app.start_update_check(Some(env));
         }
+        app
     }
 
     /// Re-read the packaged default and swap in the fresh schema. Never
@@ -170,6 +187,30 @@ impl App {
                 self.live_outputs = Vec::new();
                 self.live_note = Some(err.to_string());
             }
+        }
+    }
+
+    fn start_update_check(&mut self, env: Option<discovery::Env>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.update_check = Some(rx);
+        std::thread::spawn(move || {
+            let result = update::check();
+            if result.is_ok()
+                && let Some(env) = env
+            {
+                update::mark_checked(&env);
+            }
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Poll a finished check; called once per frame.
+    fn poll_update_check(&mut self) {
+        if let Some(rx) = &self.update_check
+            && let Ok(result) = rx.try_recv()
+        {
+            self.update_result = Some(result);
+            self.update_check = None;
         }
     }
 
@@ -275,6 +316,50 @@ impl App {
                 }
             }
         });
+    }
+
+    fn settings_page(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        ui.strong("Updates");
+        if ui
+            .checkbox(
+                &mut self.settings.check_updates_on_start,
+                "Check for updates on startup",
+            )
+            .changed()
+        {
+            let _ = settings::store(&discovery::Env::from_process(), &self.settings);
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Check for update").clicked() {
+                self.start_update_check(None);
+            }
+            if self.update_check.is_some() {
+                ui.label("Checking…");
+            }
+            match &self.update_result {
+                Some(Ok(update::Verdict::UpToDate)) => ui.label("Up to date."),
+                Some(Ok(update::Verdict::UpdateAvailable(version))) => {
+                    ui.label(format!("Version {version} available — "));
+                    ui.hyperlink_to(
+                        "get it here",
+                        "https://github.com/GhostEagle68/umbriel-config/releases/latest",
+                    )
+                }
+                Some(Err(err)) => ui.colored_label(
+                    egui::Color32::from_rgb(230, 180, 80),
+                    format!("Couldn't check: {err}"),
+                ),
+                None => ui.weak("Checks against GitHub releases; one request, nothing sent."),
+            }
+        });
+        ui.add_space(12.0);
+        ui.strong("About");
+        ui.label(format!("umbriel-config v{}", env!("CARGO_PKG_VERSION")));
+        ui.hyperlink_to(
+            "Source & issue tracker",
+            "https://github.com/GhostEagle68/umbriel-config",
+        );
     }
 
     /// Window/layer rules: one collapsible card per `[[section]]` entry.
@@ -1379,6 +1464,7 @@ fn top_level(section: &str) -> String {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.poll_update_check();
         let raw_rows = self.raw_rows();
         egui::Panel::top("header").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1565,6 +1651,21 @@ impl eframe::App for App {
                     {
                         self.search.clear();
                     }
+                }
+                ui.separator();
+                let badge = match &self.update_result {
+                    Some(Ok(update::Verdict::UpdateAvailable(_))) => " ●",
+                    _ => "",
+                };
+                if ui
+                    .selectable_value(
+                        &mut self.page,
+                        Some(Page::Settings),
+                        format!("Settings{badge}"),
+                    )
+                    .clicked()
+                {
+                    self.search.clear();
                 }
             });
         });
@@ -1809,6 +1910,11 @@ impl eframe::App for App {
                             raw_row(ui, doc, dotted);
                         }
                     });
+                }
+                Page::Settings => {
+                    ui.heading("Settings");
+                    ui.separator();
+                    self.settings_page(ui);
                 }
             }
         });
