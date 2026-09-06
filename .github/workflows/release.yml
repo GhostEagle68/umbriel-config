@@ -78,6 +78,14 @@ jobs:
           fi
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
 
+      - name: Publish to crates.io
+        # Runs on the pristine checkout — before artifacts and notes dirty
+        # the tree — and before the release object exists, so a publish
+        # failure can be fixed without burning the tagged version.
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -162,11 +170,6 @@ jobs:
               echo "" >> "$NOTES"
             fi
           done
-
-      - name: Publish to crates.io
-        run: cargo publish --locked
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
