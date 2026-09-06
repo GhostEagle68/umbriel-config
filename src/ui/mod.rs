@@ -498,7 +498,14 @@ impl App {
 
         let mut groups: Vec<(String, Vec<schema::Entry>)> = Vec::new();
         for entry in &self.schema {
-            if !present.contains(&entry.dotted()) && !matches!(entry.kind, schema::Kind::Color) {
+            // Unset colors are offered only where they belong: the main config, or
+            // an include that already owns color keys (a palette include). Other
+            // split-out files (keybinds.toml, windowrules.toml) must not grow a
+            // [colors] section.
+            let owns_colors = file >= n || present.iter().any(|path| path.starts_with("colors."));
+            if !present.contains(&entry.dotted())
+                && !(owns_colors && matches!(entry.kind, schema::Kind::Color))
+            {
                 continue;
             }
             let top = top_level(&entry.section);
