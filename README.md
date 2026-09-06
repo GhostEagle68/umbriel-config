@@ -35,15 +35,17 @@ Zcode GLM 5.3 models are used to help plan, review code and research only. All c
 Prebuilt binaries are attached to every release, no compiler needed. crates.io is reccomened for a better install, update and uninstall experience.
 
 ```sh
-curl -fLO https://github.com/GhostEagle68/umbriel-config/releases/latest/download/umbriel-config-x86_64-linux.tar.gz
+curl -fLO https://github.com/GhostEagle68/umbriel-config/releases/download/v0.1.2-alpha.3/umbriel-config-x86_64-linux.tar.gz
 tar -xzf umbriel-config-x86_64-linux.tar.gz -C ~/.local
 ```
 
-Pick the tarball matching your machine (`x86_64` or `aarch64`). This installs
-the binary to `~/.local/bin` plus a launcher entry and icon under
-`~/.local/share`, most desktops show it in the app menu after next login.
-Make sure `~/.local/bin` is on your `PATH`, then run `umbriel-config`. A
-`.sha256` checksum sits next to each tarball on the release page.
+Grab the newest tag from the [releases page](https://github.com/GhostEagle68/umbriel-config/releases). The unversioned `releases/latest/download/…` link
+starts working with the first non-prerelease release. Pick the tarball
+matching your machine (`x86_64` or `aarch64`). This installs the binary to
+`~/.local/bin` plus a launcher entry and icon under `~/.local/share`, most
+desktops show it in the app menu after next login. Make sure `~/.local/bin`
+is on your `PATH`, then run `umbriel-config`. A `.sha256` checksum sits next
+to each tarball on the release page.
 
 ### Build from source
 
