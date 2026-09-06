@@ -2372,19 +2372,26 @@ fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry)
                 Some(schema::Value::Integer(value)) => value,
                 _ => 0,
             });
-            let changed = match (min, max) {
-                (Some(min), Some(max)) => ui
-                    .add(egui::Slider::new(&mut value, *min..=*max).text(&label))
-                    .changed(),
-                _ => ui
-                    .horizontal(|ui| {
+            let unit = entry.unit.as_deref();
+            let preview = match unit {
+                Some(unit) => format!("{value} {unit}"),
+                None => format!("{value}"),
+            };
+            let response = match (min, max) {
+                (Some(min), Some(max)) => ui.add(
+                    egui::Slider::new(&mut value, *min..=*max)
+                        .text(&label)
+                        .suffix(unit.unwrap_or("")),
+                ),
+                _ => {
+                    ui.horizontal(|ui| {
                         ui.label(&label);
-                        ui.add(egui::DragValue::new(&mut value))
+                        ui.add(egui::DragValue::new(&mut value).suffix(unit.unwrap_or("")))
                     })
                     .inner
-                    .changed(),
+                }
             };
-            if changed {
+            if drag_preview(response, preview).changed() {
                 doc.set_integer(&parts, value);
             }
         }
@@ -2393,19 +2400,26 @@ fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry)
                 Some(schema::Value::Float(value)) => value,
                 _ => 0.0,
             });
-            let changed = match (min, max) {
-                (Some(min), Some(max)) => ui
-                    .add(egui::Slider::new(&mut value, *min..=*max).text(&label))
-                    .changed(),
-                _ => ui
-                    .horizontal(|ui| {
+            let unit = entry.unit.as_deref();
+            let preview = match unit {
+                Some(unit) => format!("{value} {unit}"),
+                None => format!("{value}"),
+            };
+            let response = match (min, max) {
+                (Some(min), Some(max)) => ui.add(
+                    egui::Slider::new(&mut value, *min..=*max)
+                        .text(&label)
+                        .suffix(unit.unwrap_or("")),
+                ),
+                _ => {
+                    ui.horizontal(|ui| {
                         ui.label(&label);
-                        ui.add(egui::DragValue::new(&mut value).speed(0.01))
+                        ui.add(egui::DragValue::new(&mut value).suffix(unit.unwrap_or("")))
                     })
                     .inner
-                    .changed(),
+                }
             };
-            if changed {
+            if drag_preview(response, preview).changed() {
                 doc.set_float(&parts, value);
             }
         }
@@ -2650,6 +2664,17 @@ fn store_array(doc: &mut ConfigDocument, path: &[&str], text: &str) {
         doc.set_floats(path, &values);
     } else {
         doc.set_strings(path, &items);
+    }
+}
+/// While a numeric editor is being dragged, show the live value near the
+/// pointer so the exact landing value is readable mid-drag.
+fn drag_preview(response: egui::Response, text: String) -> egui::Response {
+    if response.dragged() {
+        response.on_hover_ui(|ui| {
+            ui.label(egui::RichText::new(text).monospace().size(18.0));
+        })
+    } else {
+        response
     }
 }
 
