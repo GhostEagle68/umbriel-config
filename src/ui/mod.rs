@@ -498,7 +498,7 @@ impl App {
 
         let mut groups: Vec<(String, Vec<schema::Entry>)> = Vec::new();
         for entry in &self.schema {
-            if !present.contains(&entry.dotted()) {
+            if !present.contains(&entry.dotted()) && !matches!(entry.kind, schema::Kind::Color) {
                 continue;
             }
             let top = top_level(&entry.section);
@@ -2457,22 +2457,87 @@ fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry)
             }
         }
         schema::Kind::Color => {
-            let current = doc
-                .get_string(&parts)
-                .unwrap_or_else(|| match &entry.default {
-                    Some(schema::Value::Text(value)) => value.clone(),
-                    _ => String::new(),
+            let default_text = match &entry.default {
+                Some(schema::Value::Text(value)) => value.clone(),
+                _ => String::new(),
+            };
+            let Some(current) = doc.get_string(&parts) else {
+                ui.horizontal(|ui| {
+                    ui.add_enabled(false, egui::Label::new(egui::RichText::new(&label).weak()));
+                    let swatch = parse_color(&default_text).unwrap_or(egui::Color32::WHITE);
+                    ui.add(egui::Button::new(
+                        egui::RichText::new("  ").background_color(
+                            egui::Color32::from_rgba_unmultiplied(
+                                swatch.r(),
+                                swatch.g(),
+                                swatch.b(),
+                                60,
+                            ),
+                        ),
+                    ));
+                    ui.label(
+                        egui::RichText::new("not set — umbriel default")
+                            .weak()
+                            .small(),
+                    );
+                    if !default_text.is_empty()
+                        && ui
+                            .button("Enable")
+                            .on_hover_text(format!("Set to {default_text}"))
+                            .clicked()
+                    {
+                        doc.set_string(&parts, &default_text);
+                    }
                 });
-            let mut color = parse_color(&current).unwrap_or(egui::Color32::from_rgb(255, 255, 255));
-            let changed = ui
-                .horizontal(|ui| {
-                    ui.label(&label);
-                    ui.color_edit_button_srgba(&mut color).changed()
-                })
-                .inner;
-            if changed {
-                doc.set_string(&parts, &color_to_hex(color));
-            }
+                return;
+            };
+            let had_alpha = has_alpha_hex(&current);
+            let mut color = parse_color(&current).unwrap_or(egui::Color32::WHITE);
+            let alpha_mode = if had_alpha {
+                egui::color_picker::Alpha::OnlyBlend
+            } else {
+                egui::color_picker::Alpha::Opaque
+            };
+            ui.horizontal(|ui| {
+                ui.label(&label);
+                if egui::color_picker::color_edit_button_srgba(ui, &mut color, alpha_mode).changed()
+                {
+                    doc.set_string(&parts, &color_to_hex(color, had_alpha));
+                }
+                let id = egui::Id::new((entry.dotted(), "hex"));
+                let mut buf = ui.memory_mut(|mem| {
+                    mem.data
+                        .get_temp_mut_or_insert_with(id, || current.clone())
+                        .clone()
+                });
+                let field = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(96.0));
+                let focused = field.has_focus();
+                if field.changed() {
+                    ui.memory_mut(|mem| mem.data.insert_temp(id, buf.clone()));
+                    if let Some(parsed) = parse_color(&buf) {
+                        doc.set_string(&parts, &color_to_hex(parsed, has_alpha_hex(&buf)));
+                    }
+                }
+                if !focused {
+                    ui.memory_mut(|mem| mem.data.remove::<String>(id));
+                }
+                if !default_text.is_empty()
+                    && current != default_text
+                    && ui
+                        .button("↺")
+                        .on_hover_text("Revert to umbriel default")
+                        .clicked()
+                {
+                    doc.set_string(&parts, &default_text);
+                }
+                if ui
+                    .button("✕")
+                    .on_hover_text("Remove — fall back to umbriel's default")
+                    .clicked()
+                {
+                    doc.remove_table(&parts);
+                }
+            });
         }
     }
 }
@@ -2592,18 +2657,28 @@ fn parse_color(text: &str) -> Option<egui::Color32> {
         channel(0..2)?,
         channel(2..4)?,
         channel(4..6)?,
-        channel(6..8).unwrap_or(255),
+        if hex.len() == 8 { channel(6..8)? } else { 255 },
     ))
 }
 
-fn color_to_hex(color: egui::Color32) -> String {
-    format!(
-        "#{:02X}{:02X}{:02X}{:02X}",
-        color.r(),
-        color.g(),
-        color.b(),
-        color.a()
-    )
+fn color_to_hex(color: egui::Color32, had_alpha: bool) -> String {
+    if had_alpha {
+        format!(
+            "#{:02X}{:02X}{:02X}{:02X}",
+            color.r(),
+            color.g(),
+            color.b(),
+            color.a()
+        )
+    } else {
+        format!("#{:-02X}{:02X}{:02X}", color.r(), color.g(), color.b())
+    }
+}
+
+/// Does the user's existing value spell out alpha (`#RRGGBBAA`)? Drives
+/// which format a color edit writes back in.
+fn has_alpha_hex(text: &str) -> bool {
+    text.strip_prefix('#').is_some_and(|hex| hex.len() == 8)
 }
 
 /// The per-dropdown search buffer, persisted in egui's memory under `id`
@@ -2680,4 +2755,25 @@ fn key_name(key: egui::Key) -> Option<String> {
         _ => return None,
     };
     Some(name.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn color_hex_matches_previous_format() {
+        let color = parse_color("#141419FF").unwrap();
+        assert_eq!(color_to_hex(color, true), "#141419FF");
+        assert_eq!(color_to_hex(color, false), "#141419");
+        assert_eq!(parse_color(&color_to_hex(color, false)), Some(color));
+    }
+
+    #[test]
+    fn has_alpha_hex_detects_width() {
+        assert!(has_alpha_hex("#141419FF"));
+        assert!(!has_alpha_hex("#141419"));
+        assert!(!has_alpha_hex("141419"));
+        assert!(!has_alpha_hex("#14141"));
+    }
 }
