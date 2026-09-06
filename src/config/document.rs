@@ -264,8 +264,9 @@ impl ConfigDocument {
             .collect()
     }
 
-    /// Delete the table at `path` (e.g. an `[output."name"]` block).
-    /// Returns whether anything was removed.
+    /// Delete the item at `path` — a table (e.g. an `[output."name"]`
+    /// block) or a plain key-value leaf. Returns whether anything was
+    /// removed.
     pub fn remove_table(&mut self, path: &[&str]) -> bool {
         let Some((last, parents)) = path.split_last() else {
             return false;
@@ -697,6 +698,29 @@ curve = \"easeout\"
         assert!(text.contains("[colors]"));
         assert!(text.contains("background = \"#141419FF\""));
         assert!(text.contains("xwayland = true"));
+    }
+
+    #[test]
+    fn color_set_keeps_six_digit_format() {
+        let mut doc = ConfigDocument::from_str(SAMPLE).unwrap();
+        doc.set_string(&["colors", "background"], "#FF6B6B");
+        let text = doc.text();
+        assert!(text.contains("background = \"#FF6B6B\""));
+        assert!(!text.contains("background = \"#FF6B6BFF\""));
+    }
+
+    #[test]
+    fn color_remove_leaves_other_bytes_untouched() {
+        let mut doc = ConfigDocument::from_str(SAMPLE).unwrap();
+        let _before = doc.text();
+        doc.set_string(&["colors", "background"], "#141419FF");
+        assert!(doc.remove_table(&["colors", "background"]));
+        let _after = doc.text();
+        assert_eq!(doc.get_string(&["colors", "background"]), None);
+        // The emptied [colors] header stays behind — accepted cosmetic for now;
+        // umbriel treats it identically.
+        assert_eq!(doc.text(), format!("{SAMPLE}\n[colors]\n"));
+        assert!(doc.is_modified());
     }
 
     #[test]

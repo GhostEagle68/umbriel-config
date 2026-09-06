@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Umbriel Config
+GenericName=Compositor configuration
+Comment=GUI configurator for the Umbriel Wayland compositor
+Exec=umbriel-config
+Icon=umbriel-config
+Categories=Settings;DesktopSettings;
+Keywords=wayland;umbriel;config;settings;
+Terminal=false

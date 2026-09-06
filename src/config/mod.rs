@@ -6,5 +6,6 @@ pub mod keybinds;
 pub mod outputs;
 pub mod rules;
 pub mod schema;
+pub mod settings;
 pub mod state;
 pub mod validate;

@@ -30,6 +30,9 @@ pub enum Kind {
     Choice(Vec<String>),
     /// `#RRGGBB` or `#RRGGBBAA` color string.
     Color,
+    /// `curve` under `[animation.*]`: a built-in easing name, a registered
+    /// bezier/spring name, or an inline curve string.
+    Curve,
 }
 
 /// A typed scalar value; also used for defaults.
@@ -54,6 +57,7 @@ pub struct Entry {
     pub label: String,
     /// Changing this key requires a compositor restart.
     pub restart: bool,
+    pub unit: Option<String>,
 }
 
 impl Entry {
@@ -62,6 +66,64 @@ impl Entry {
         self.path.join(".")
     }
 }
+
+/// Built-in animation curve names, verbatim from umbriel's
+/// `src/core/animation.cpp` (`populateDefaults()`). Re-sync when umbriel
+/// adds curves; user-registered `[animation.beziers]`/`[animation.springs]`
+/// names and inline curve strings are edited as free text.
+pub const BUILTIN_CURVES: &[&str] = &[
+    "linear",
+    "easeinsine",
+    "easeoutsine",
+    "easeinoutsine",
+    "easeinquad",
+    "easeoutquad",
+    "easeinoutquad",
+    "quad",
+    "easeincubic",
+    "easeoutcubic",
+    "easeinoutcubic",
+    "cubic",
+    "ease",
+    "easein",
+    "easeout",
+    "easeinout",
+    "easeinquart",
+    "easeoutquart",
+    "easeinoutquart",
+    "quart",
+    "easeinquint",
+    "easeoutquint",
+    "easeinoutquint",
+    "quint",
+    "easeinexpo",
+    "easeoutexpo",
+    "easeinoutexpo",
+    "expo",
+    "easeincirc",
+    "easeoutcirc",
+    "easeinoutcirc",
+    "circ",
+    "easeinback",
+    "easeoutback",
+    "easeinoutback",
+    "back",
+    "overshoot",
+    "easeinelastic",
+    "easeoutelastic",
+    "easeinoutelastic",
+    "elastic",
+    "easeinbounce",
+    "easeoutbounce",
+    "easeinoutbounce",
+    "bounce",
+    "snappy",
+    "default",
+    "defaultspring",
+    "bouncy",
+    "smooth",
+    "stiff",
+];
 
 /// Maintainer refinements over derived entries, keyed by dotted path.
 pub struct Overlay {
@@ -110,7 +172,10 @@ fn mine_comments(packaged: &str, entries: &mut Vec<Entry>) {
         if known.contains(&dotted) {
             continue;
         }
-        if let Some((kind, default)) = classify_value(raw.trim()) {
+        if let Some((mut kind, default)) = classify_value(raw.trim()) {
+            if key == "curve" && section.starts_with("animation") {
+                kind = Kind::Curve;
+            }
             let mut path: Vec<String> = section.split('.').map(str::to_owned).collect();
             path.push(key.to_owned());
             entries.push(Entry {
@@ -120,6 +185,7 @@ fn mine_comments(packaged: &str, entries: &mut Vec<Entry>) {
                 section: section.clone(),
                 kind,
                 default: Some(default),
+                unit: None,
             });
         }
     }
@@ -214,8 +280,8 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
     if OVERLAY.skip_sections.contains(&path[0].as_str()) {
         return None;
     }
-    let (kind, default) = match value {
-        toml_edit::Value::Boolean(v) => (Kind::Bool, Some(Value::Bool(*v.value()))),
+    let (kind, default, unit) = match value {
+        toml_edit::Value::Boolean(v) => (Kind::Bool, Some(Value::Bool(*v.value())), None),
         toml_edit::Value::Integer(v) => {
             let raw = *v.value();
             let range = v
@@ -225,10 +291,11 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
                 .and_then(mine_range);
             (
                 Kind::Integer {
-                    min: range.map(|r| r.0 as i64),
-                    max: range.map(|r| r.1 as i64),
+                    min: range.as_ref().map(|r| r.0 as i64),
+                    max: range.as_ref().map(|r| r.1 as i64),
                 },
                 Some(Value::Integer(raw)),
+                range.and_then(|r| r.2),
             )
         }
         toml_edit::Value::Float(v) => {
@@ -240,25 +307,30 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
                 .and_then(mine_range);
             (
                 Kind::Float {
-                    min: range.map(|r| r.0),
-                    max: range.map(|r| r.1),
+                    min: range.as_ref().map(|r| r.0),
+                    max: range.as_ref().map(|r| r.1),
                 },
                 Some(Value::Float(raw)),
+                range.and_then(|r| r.2),
             )
         }
         toml_edit::Value::String(v) => {
             let text = v.value();
             let suffix = v.decor().suffix().and_then(toml_edit::RawString::as_str);
-            let kind = if is_color(text) {
+            let kind = if path.last().map(String::as_str) == Some("curve")
+                && section.starts_with("animation")
+            {
+                Kind::Curve
+            } else if is_color(text) {
                 Kind::Color
             } else {
                 suffix
                     .and_then(mine_choices)
                     .map_or(Kind::Text, Kind::Choice)
             };
-            (kind, Some(Value::Text(text.to_owned())))
+            (kind, Some(Value::Text(text.to_owned())), None)
         }
-        toml_edit::Value::Array(_) => (Kind::List, None),
+        toml_edit::Value::Array(_) => (Kind::List, None, None),
         _ => return None,
     };
     let dotted = path.join(".");
@@ -269,14 +341,16 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
         section: section.to_owned(),
         kind,
         default,
+        unit,
     })
 }
 
 /// Best-effort numeric range from a value's trailing decor comment
-/// (`# 0-10000`, `# -200 to 200`, `# 0.0-1.0`). Returns (min, max).
-fn mine_range(decor: &str) -> Option<(f64, f64)> {
+/// (`# 0-10000 ms`, `# -200 to 200`, `# 0.0-1.0`). Returns
+/// (min, max, unit) — the unit is a word after the max number, if any.
+fn mine_range(decor: &str) -> Option<(f64, f64, Option<String>)> {
     let comment = decor.split('#').nth(1)?;
-    let body = comment.trim().trim_end_matches(" ms").trim();
+    let body = comment.trim();
     let (a, b) = if let Some((min, max)) = body.split_once(" to ") {
         (min.trim().to_owned(), max.trim().to_owned())
     } else if let Some(rest) = body.strip_prefix('-') {
@@ -288,7 +362,14 @@ fn mine_range(decor: &str) -> Option<(f64, f64)> {
     };
     let min: f64 = a.split_whitespace().next().unwrap_or(&a).parse().ok()?;
     let max: f64 = b.split_whitespace().next().unwrap_or(&b).parse().ok()?;
-    (max >= min).then_some((min, max))
+    // A unit is a word after the max number ("# 1-10000 ms"); a trailing
+    // token that starts non-alphabetic is prose, not a unit.
+    let unit = b
+        .split_whitespace()
+        .nth(1)
+        .filter(|word| word.chars().next().is_some_and(|c| c.is_alphabetic()))
+        .map(str::to_owned);
+    (max >= min).then_some((min, max, unit))
 }
 
 /// Best-effort vocabulary from a value's trailing comment: comma-separated
@@ -687,6 +768,7 @@ focus_on_activate = false
             default: Some(Value::Bool(true)),
             label: "Xwayland".to_owned(),
             restart: false,
+            unit: None,
         }];
         assert_eq!(
             key_set(&entries),
@@ -764,5 +846,26 @@ focus_on_activate = false
         // The output itself is not claimed wholesale — unknown fields under
         // it must stay visible.
         assert!(!claims.contains("output.DP-1"));
+    }
+
+    #[test]
+    fn curve_keys_mine_as_curve_kind() {
+        let packaged = "\
+[animation]
+enabled = true
+duration_ms = 250                       # 1-10000 ms
+curve = \"easeout\"
+
+[animation.windows_in]
+enabled = true
+duration_ms = 150
+curve = \"easeout\"
+";
+        let entries = assemble(packaged);
+        for entry in &entries {
+            if entry.dotted().ends_with("curve") {
+                assert!(matches!(entry.kind, Kind::Curve), "{}", entry.dotted());
+            }
+        }
     }
 }

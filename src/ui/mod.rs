@@ -6,10 +6,11 @@ use eframe::egui;
 use std::path::PathBuf;
 use std::str::FromStr;
 use umbriel_config::config::{
-    diff, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema, state,
-    validate,
+    diff, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema,
+    settings, state, validate,
 };
 use umbriel_config::live;
+use umbriel_config::update;
 
 /// Launch the GUI for `path`.
 pub fn run(path: PathBuf) -> anyhow::Result<()> {
@@ -43,6 +44,7 @@ enum Page {
     Changes,
     /// Keys in the config no other page claims.
     Raw,
+    Settings,
 }
 
 struct App {
@@ -86,6 +88,18 @@ struct App {
     creating_include: bool,
     /// Name for the include file being created.
     new_include_name: String,
+    /// App preferences (update-check toggle).
+    settings: settings::Settings,
+    /// Receiver for an in-flight update check; one-shot channel.
+    update_check: Option<std::sync::mpsc::Receiver<Result<update::Verdict, String>>>,
+    /// Result of the last finished update check.
+    update_result: Option<Result<update::Verdict, String>>,
+    /// Dotted keys that appeared in umbriel since the last recorded
+    /// schema; cleared together with the drift banner.
+    new_keys: std::collections::BTreeSet<String>,
+    /// Set when Exit was clicked with unsaved changes; shows the
+    /// quit confirmation until answered.
+    confirm_exit: bool,
 }
 
 impl App {
@@ -105,11 +119,13 @@ impl App {
                 )
             }
         };
+
         let includes = includes::load_chain(&doc, &path);
         let env = discovery::Env::from_process();
         let schema = Self::load_schema(&env);
-        let schema_note = Self::startup_note(&env, &schema);
-        Self {
+        let (schema_note, startup_drift) = Self::startup_drift(&env, &schema);
+        let settings = settings::load(&env);
+        let mut app = Self {
             path,
             doc,
             healthy,
@@ -131,7 +147,16 @@ impl App {
             pending_add: None,
             creating_include: false,
             new_include_name: String::new(),
+            settings,
+            update_check: None,
+            update_result: None,
+            new_keys: startup_drift.added.into_iter().collect(),
+            confirm_exit: false,
+        };
+        if settings.check_updates_on_start && update::should_auto_check(&env) {
+            app.start_update_check(Some(env));
         }
+        app
     }
 
     /// Re-read the packaged default and swap in the fresh schema. Never
@@ -142,6 +167,7 @@ impl App {
         let fresh_set = schema::key_set(&fresh);
         let drift = schema::diff(&schema::key_set(&self.schema), &fresh_set);
         let _ = state::store(&state::snapshot_path(&env), &fresh_set);
+        self.new_keys = drift.added.iter().cloned().collect();
         self.schema_note = Some(if fresh.is_empty() {
             "No packaged default found; install umbriel and sync again.".to_owned()
         } else if drift.is_empty() {
@@ -170,6 +196,30 @@ impl App {
                 self.live_outputs = Vec::new();
                 self.live_note = Some(err.to_string());
             }
+        }
+    }
+
+    fn start_update_check(&mut self, env: Option<discovery::Env>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.update_check = Some(rx);
+        std::thread::spawn(move || {
+            let result = update::check();
+            if result.is_ok()
+                && let Some(env) = env
+            {
+                update::mark_checked(&env);
+            }
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Poll a finished check; called once per frame.
+    fn poll_update_check(&mut self) {
+        if let Some(rx) = &self.update_check
+            && let Ok(result) = rx.try_recv()
+        {
+            self.update_result = Some(result);
+            self.update_check = None;
         }
     }
 
@@ -275,6 +325,50 @@ impl App {
                 }
             }
         });
+    }
+
+    fn settings_page(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        ui.strong("Updates");
+        if ui
+            .checkbox(
+                &mut self.settings.check_updates_on_start,
+                "Check for updates on startup",
+            )
+            .changed()
+        {
+            let _ = settings::store(&discovery::Env::from_process(), &self.settings);
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Check for update").clicked() {
+                self.start_update_check(None);
+            }
+            if self.update_check.is_some() {
+                ui.label("Checking…");
+            }
+            match &self.update_result {
+                Some(Ok(update::Verdict::UpToDate)) => ui.label("Up to date."),
+                Some(Ok(update::Verdict::UpdateAvailable(version))) => {
+                    ui.label(format!("Version {version} available — "));
+                    ui.hyperlink_to(
+                        "get it here",
+                        "https://github.com/GhostEagle68/umbriel-config/releases",
+                    )
+                }
+                Some(Err(err)) => ui.colored_label(
+                    egui::Color32::from_rgb(230, 180, 80),
+                    format!("Couldn't check: {err}"),
+                ),
+                None => ui.weak("Checks against GitHub releases; one request, nothing sent."),
+            }
+        });
+        ui.add_space(12.0);
+        ui.strong("About");
+        ui.label(format!("umbriel-config v{}", env!("CARGO_PKG_VERSION")));
+        ui.hyperlink_to(
+            "Source & issue tracker",
+            "https://github.com/GhostEagle68/umbriel-config",
+        );
     }
 
     /// Window/layer rules: one collapsible card per `[[section]]` entry.
@@ -498,7 +592,14 @@ impl App {
 
         let mut groups: Vec<(String, Vec<schema::Entry>)> = Vec::new();
         for entry in &self.schema {
-            if !present.contains(&entry.dotted()) {
+            // Unset colors are offered only where they belong: the main config, or
+            // an include that already owns color keys (a palette include). Other
+            // split-out files (keybinds.toml, windowrules.toml) must not grow a
+            // [colors] section.
+            let owns_colors = file >= n || present.iter().any(|path| path.starts_with("colors."));
+            if !present.contains(&entry.dotted())
+                && !(owns_colors && matches!(entry.kind, schema::Kind::Color))
+            {
                 continue;
             }
             let top = top_level(&entry.section);
@@ -541,10 +642,10 @@ impl App {
                 egui::RichText::new(format!(
                     "Edits here write to {label}, which your main config pulls in via [include]."
                 ))
-                .weak()
-                .small(),
+                .weak(),
             );
         }
+        let new_keys = self.new_keys.clone();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (section, group) in &groups {
                 ui.add_space(6.0);
@@ -554,7 +655,7 @@ impl App {
                 } else {
                     &mut self.doc
                 };
-                schema_entries_ui(ui, doc, group, section);
+                schema_entries_ui(ui, doc, group, section, &new_keys);
             }
             if owns_keybinds {
                 ui.add_space(8.0);
@@ -729,8 +830,7 @@ impl App {
                 "Bold rows are yours, the hover says which file defines them; the rest are \
                  umbriel's built-in defaults. Click any row to edit it.",
             )
-            .weak()
-            .small(),
+            .weak(),
         );
 
         // The new-bind editor renders above the list.
@@ -1356,13 +1456,18 @@ impl App {
 
     /// Diff the fresh schema against the last run's snapshot and refresh it.
     /// Silent on the first run (no snapshot yet) and when nothing changed.
-    fn startup_note(env: &discovery::Env, entries: &[schema::Entry]) -> Option<String> {
+    /// Returns the banner text and the drift, whose added keys get badges.
+    fn startup_drift(
+        env: &discovery::Env,
+        entries: &[schema::Entry],
+    ) -> (Option<String>, schema::SchemaDiff) {
         let current = schema::key_set(entries);
         let seen = state::load(&state::snapshot_path(env));
         let drift = schema::diff(&seen, &current);
         let _ = state::store(&state::snapshot_path(env), &current);
-        (!seen.is_empty() && !drift.is_empty())
-            .then(|| format!("Umbriel changed since last run: {}.", drift.summary()))
+        let note = (!seen.is_empty() && !drift.is_empty())
+            .then(|| format!("Umbriel changed since last run: {}.", drift.summary()));
+        (note, drift)
     }
 }
 
@@ -1372,6 +1477,7 @@ fn top_level(section: &str) -> String {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.poll_update_check();
         let raw_rows = self.raw_rows();
         egui::Panel::top("header").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1444,6 +1550,7 @@ impl eframe::App for App {
                     ui.colored_label(egui::Color32::from_rgb(140, 200, 140), note);
                     if ui.small_button("Dismiss").clicked() {
                         self.schema_note = None;
+                        self.new_keys.clear();
                     }
                 });
             });
@@ -1473,6 +1580,8 @@ impl eframe::App for App {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "config".to_owned());
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Config files").weak().strong());
                 if ui
                     .selectable_value(
                         &mut self.page,
@@ -1484,6 +1593,7 @@ impl eframe::App for App {
                 {
                     self.search.clear();
                 }
+                ui.label(egui::RichText::new("Include files").weak().strong());
                 for (index, inc) in self.includes.docs.iter().enumerate() {
                     if ui
                         .selectable_value(
@@ -1497,6 +1607,8 @@ impl eframe::App for App {
                         self.search.clear();
                     }
                 }
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Default settings").weak().strong());
                 if ui
                     .selectable_value(&mut self.page, Some(Page::Outputs), "Outputs")
                     .clicked()
@@ -1541,7 +1653,7 @@ impl eframe::App for App {
                 }
                 if self.any_modified()
                     && ui
-                        .selectable_value(&mut self.page, Some(Page::Changes), "● Unsaved changes")
+                        .selectable_value(&mut self.page, Some(Page::Changes), "• Unsaved changes")
                         .clicked()
                 {
                     self.search.clear();
@@ -1558,6 +1670,39 @@ impl eframe::App for App {
                     {
                         self.search.clear();
                     }
+                }
+                ui.separator();
+                let badge = match &self.update_result {
+                    Some(Ok(update::Verdict::UpdateAvailable(_))) => " •",
+                    _ => "",
+                };
+                if ui
+                    .selectable_value(
+                        &mut self.page,
+                        Some(Page::Settings),
+                        format!("Settings{badge}"),
+                    )
+                    .clicked()
+                {
+                    self.search.clear();
+                }
+                if ui.small_button("Exit").clicked() {
+                    if self.any_modified() {
+                        self.confirm_exit = true;
+                    } else {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+                if self.confirm_exit {
+                    ui.colored_label(egui::Color32::from_rgb(240, 100, 100), "Unsaved changes!");
+                    ui.horizontal(|ui| {
+                        if ui.small_button("Quit anyway").clicked() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        if ui.small_button("Keep editing").clicked() {
+                            self.confirm_exit = false;
+                        }
+                    });
                 }
             });
         });
@@ -1621,12 +1766,13 @@ impl eframe::App for App {
                             ui.add_space(6.0);
                             ui.heading(schema::humanize(&current_section));
                         }
+                        let is_new = self.new_keys.contains(entry.dotted().as_str());
                         let doc = if *home < self.includes.docs.len() {
                             &mut self.includes.docs[*home].doc
                         } else {
                             &mut self.doc
                         };
-                        entry_row(ui, doc, entry);
+                        entry_row(ui, doc, entry, is_new);
                     }
                 });
                 return;
@@ -1679,6 +1825,9 @@ impl eframe::App for App {
                                 ui.heading(schema::humanize(&current_group));
                             }
                             ui.horizontal(|ui| {
+                                if self.new_keys.contains(entry.dotted().as_str()) {
+                                    new_badge(ui);
+                                }
                                 ui.label(egui::RichText::new(&entry.label).weak());
                                 let label = if *home < self.includes.docs.len() {
                                     self.includes.docs[*home].label.clone()
@@ -1714,11 +1863,13 @@ impl eframe::App for App {
                                          (or absent) in your config. Adding one writes its\n\
                                          default value to the file you pick.",
                                     )
-                                    .weak()
-                                    .small(),
+                                    .weak(),
                                 );
                                 for entry in &available {
                                     ui.horizontal(|ui| {
+                                        if self.new_keys.contains(entry.dotted().as_str()) {
+                                            new_badge(ui);
+                                        }
                                         ui.label(&entry.label);
                                         let default_text = match &entry.default {
                                             Some(schema::Value::Bool(v)) => format!("{v}"),
@@ -1802,6 +1953,11 @@ impl eframe::App for App {
                             raw_row(ui, doc, dotted);
                         }
                     });
+                }
+                Page::Settings => {
+                    ui.heading("Settings");
+                    ui.separator();
+                    self.settings_page(ui);
                 }
             }
         });
@@ -2114,7 +2270,7 @@ enum RowClick {
 
 /// One merged keybind row: the chord (bold when yours) and the human
 /// action text; either opens the editor. Overridden defaults get ↺ reset,
-/// user-only binds ✕ remove.
+/// user-only binds × remove.
 fn keybind_display_row(
     ui: &mut egui::Ui,
     actions: &[keybinds::LiveAction],
@@ -2153,7 +2309,7 @@ fn keybind_display_row(
                     .on_hover_text("Reset to umbriel's built-in default")
                     .clicked()
             } else {
-                ui.button("✕")
+                ui.button("×")
                     .on_hover_text("Remove this keybind")
                     .clicked()
             };
@@ -2299,6 +2455,7 @@ fn schema_entries_ui(
     doc: &mut ConfigDocument,
     entries: &[schema::Entry],
     section: &str,
+    new_keys: &std::collections::BTreeSet<String>,
 ) {
     let mut current_group = String::new();
     for entry in entries {
@@ -2311,7 +2468,8 @@ fn schema_entries_ui(
             ui.add_space(6.0);
             ui.heading(schema::humanize(group));
         }
-        entry_row(ui, doc, entry);
+        let is_new = new_keys.contains(entry.dotted().as_str());
+        entry_row(ui, doc, entry, is_new);
     }
 }
 
@@ -2334,7 +2492,10 @@ fn set_entry_value(doc: &mut ConfigDocument, entry: &schema::Entry, value: schem
         }
         (schema::Kind::Float { .. }, schema::Value::Float(value)) => doc.set_float(&parts, value),
         (
-            schema::Kind::Text | schema::Kind::Choice(_) | schema::Kind::Color,
+            schema::Kind::Text
+            | schema::Kind::Choice(_)
+            | schema::Kind::Color
+            | schema::Kind::Curve,
             schema::Value::Text(value),
         ) => doc.set_string(&parts, &value),
         (schema::Kind::List, schema::Value::Text(text)) => store_array(doc, &parts, &text),
@@ -2343,13 +2504,16 @@ fn set_entry_value(doc: &mut ConfigDocument, entry: &schema::Entry, value: schem
 }
 
 /// Render one schema entry, writing changes straight through to the document.
-fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry) {
+fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry, is_new: bool) {
     let parts: Vec<&str> = entry.path.iter().map(String::as_str).collect();
     let label = if entry.restart {
         format!("{} (restart to apply)", entry.label)
     } else {
         entry.label.clone()
     };
+    if is_new {
+        new_badge(ui);
+    }
     match &entry.kind {
         schema::Kind::Bool => {
             let mut value = doc.get_bool(&parts).unwrap_or(match entry.default {
@@ -2365,19 +2529,26 @@ fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry)
                 Some(schema::Value::Integer(value)) => value,
                 _ => 0,
             });
-            let changed = match (min, max) {
-                (Some(min), Some(max)) => ui
-                    .add(egui::Slider::new(&mut value, *min..=*max).text(&label))
-                    .changed(),
-                _ => ui
-                    .horizontal(|ui| {
+            let unit = entry.unit.as_deref();
+            let preview = match unit {
+                Some(unit) => format!("{value} {unit}"),
+                None => format!("{value}"),
+            };
+            let response = match (min, max) {
+                (Some(min), Some(max)) => ui.add(
+                    egui::Slider::new(&mut value, *min..=*max)
+                        .text(&label)
+                        .suffix(unit.unwrap_or("")),
+                ),
+                _ => {
+                    ui.horizontal(|ui| {
                         ui.label(&label);
-                        ui.add(egui::DragValue::new(&mut value))
+                        ui.add(egui::DragValue::new(&mut value).suffix(unit.unwrap_or("")))
                     })
                     .inner
-                    .changed(),
+                }
             };
-            if changed {
+            if drag_preview(response, preview).changed() {
                 doc.set_integer(&parts, value);
             }
         }
@@ -2386,19 +2557,26 @@ fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry)
                 Some(schema::Value::Float(value)) => value,
                 _ => 0.0,
             });
-            let changed = match (min, max) {
-                (Some(min), Some(max)) => ui
-                    .add(egui::Slider::new(&mut value, *min..=*max).text(&label))
-                    .changed(),
-                _ => ui
-                    .horizontal(|ui| {
+            let unit = entry.unit.as_deref();
+            let preview = match unit {
+                Some(unit) => format!("{value} {unit}"),
+                None => format!("{value}"),
+            };
+            let response = match (min, max) {
+                (Some(min), Some(max)) => ui.add(
+                    egui::Slider::new(&mut value, *min..=*max)
+                        .text(&label)
+                        .suffix(unit.unwrap_or("")),
+                ),
+                _ => {
+                    ui.horizontal(|ui| {
                         ui.label(&label);
-                        ui.add(egui::DragValue::new(&mut value).speed(0.01))
+                        ui.add(egui::DragValue::new(&mut value).suffix(unit.unwrap_or("")))
                     })
                     .inner
-                    .changed(),
+                }
             };
-            if changed {
+            if drag_preview(response, preview).changed() {
                 doc.set_float(&parts, value);
             }
         }
@@ -2457,21 +2635,115 @@ fn entry_row(ui: &mut egui::Ui, doc: &mut ConfigDocument, entry: &schema::Entry)
             }
         }
         schema::Kind::Color => {
-            let current = doc
+            let default_text = match &entry.default {
+                Some(schema::Value::Text(value)) => value.clone(),
+                _ => String::new(),
+            };
+            let Some(current) = doc.get_string(&parts) else {
+                ui.horizontal(|ui| {
+                    ui.add_enabled(false, egui::Label::new(egui::RichText::new(&label).weak()));
+                    let swatch = parse_color(&default_text).unwrap_or(egui::Color32::WHITE);
+                    ui.add(egui::Button::new(
+                        egui::RichText::new("  ").background_color(
+                            egui::Color32::from_rgba_unmultiplied(
+                                swatch.r(),
+                                swatch.g(),
+                                swatch.b(),
+                                60,
+                            ),
+                        ),
+                    ));
+                    ui.label(
+                        egui::RichText::new("not set — umbriel default")
+                            .weak()
+                            .small(),
+                    );
+                    if !default_text.is_empty()
+                        && ui
+                            .button("Enable")
+                            .on_hover_text(format!("Set to {default_text}"))
+                            .clicked()
+                    {
+                        doc.set_string(&parts, &default_text);
+                    }
+                });
+                return;
+            };
+            let had_alpha = has_alpha_hex(&current);
+            let mut color = parse_color(&current).unwrap_or(egui::Color32::WHITE);
+            let alpha_mode = if had_alpha {
+                egui::color_picker::Alpha::OnlyBlend
+            } else {
+                egui::color_picker::Alpha::Opaque
+            };
+            ui.horizontal(|ui| {
+                ui.label(&label);
+                if egui::color_picker::color_edit_button_srgba(ui, &mut color, alpha_mode).changed()
+                {
+                    doc.set_string(&parts, &color_to_hex(color, had_alpha));
+                }
+                let id = egui::Id::new((entry.dotted(), "hex"));
+                let mut buf = ui.memory_mut(|mem| {
+                    mem.data
+                        .get_temp_mut_or_insert_with(id, || current.clone())
+                        .clone()
+                });
+                let field = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(96.0));
+                let focused = field.has_focus();
+                if field.changed() {
+                    ui.memory_mut(|mem| mem.data.insert_temp(id, buf.clone()));
+                    if let Some(parsed) = parse_color(&buf) {
+                        doc.set_string(&parts, &color_to_hex(parsed, has_alpha_hex(&buf)));
+                    }
+                }
+                if !focused {
+                    ui.memory_mut(|mem| mem.data.remove::<String>(id));
+                }
+                if !default_text.is_empty()
+                    && current != default_text
+                    && ui
+                        .button("↺")
+                        .on_hover_text("Revert to umbriel default")
+                        .clicked()
+                {
+                    doc.set_string(&parts, &default_text);
+                }
+                if ui
+                    .button("×")
+                    .on_hover_text("Remove — fall back to umbriel's default")
+                    .clicked()
+                {
+                    doc.remove_table(&parts);
+                }
+            });
+        }
+        schema::Kind::Curve => {
+            let mut value = doc
                 .get_string(&parts)
                 .unwrap_or_else(|| match &entry.default {
                     Some(schema::Value::Text(value)) => value.clone(),
                     _ => String::new(),
                 });
-            let mut color = parse_color(&current).unwrap_or(egui::Color32::from_rgb(255, 255, 255));
-            let changed = ui
-                .horizontal(|ui| {
-                    ui.label(&label);
-                    ui.color_edit_button_srgba(&mut color).changed()
-                })
-                .inner;
-            if changed {
-                doc.set_string(&parts, &color_to_hex(color));
+            let original = value.clone();
+            ui.horizontal(|ui| {
+                ui.label(&label);
+                if schema::BUILTIN_CURVES.contains(&value.as_str()) {
+                    egui::ComboBox::from_id_salt(entry.dotted())
+                        .selected_text(&value)
+                        .show_ui(ui, |ui| {
+                            for name in schema::BUILTIN_CURVES {
+                                ui.selectable_value(&mut value, (*name).to_owned(), *name);
+                            }
+                        });
+                } else {
+                    ui.text_edit_singleline(&mut value).on_hover_text(
+                        "Curve name, or inline \"x1,y1,x2,y2\" bezier / \
+                 \"spring: damping,stiffness\"",
+                    );
+                }
+            });
+            if value != original {
+                doc.set_string(&parts, &value);
             }
         }
     }
@@ -2580,6 +2852,27 @@ fn store_array(doc: &mut ConfigDocument, path: &[&str], text: &str) {
         doc.set_strings(path, &items);
     }
 }
+/// While a numeric editor is being dragged, show the live value near the
+/// pointer so the exact landing value is readable mid-drag.
+fn drag_preview(response: egui::Response, text: String) -> egui::Response {
+    if response.dragged() {
+        response.on_hover_ui(|ui| {
+            ui.label(egui::RichText::new(text).monospace().size(18.0));
+        })
+    } else {
+        response
+    }
+}
+
+/// Marks a setting that appeared in umbriel since the last recorded schema.
+fn new_badge(ui: &mut egui::Ui) {
+    ui.label(
+        egui::RichText::new("•")
+            .small()
+            .color(egui::Color32::from_rgb(0x7A, 0xA3, 0xFF)),
+    )
+    .on_hover_text("New in this umbriel version");
+}
 
 /// `#RRGGBB[AA]` to an egui color.
 fn parse_color(text: &str) -> Option<egui::Color32> {
@@ -2592,18 +2885,28 @@ fn parse_color(text: &str) -> Option<egui::Color32> {
         channel(0..2)?,
         channel(2..4)?,
         channel(4..6)?,
-        channel(6..8).unwrap_or(255),
+        if hex.len() == 8 { channel(6..8)? } else { 255 },
     ))
 }
 
-fn color_to_hex(color: egui::Color32) -> String {
-    format!(
-        "#{:02X}{:02X}{:02X}{:02X}",
-        color.r(),
-        color.g(),
-        color.b(),
-        color.a()
-    )
+fn color_to_hex(color: egui::Color32, had_alpha: bool) -> String {
+    if had_alpha {
+        format!(
+            "#{:02X}{:02X}{:02X}{:02X}",
+            color.r(),
+            color.g(),
+            color.b(),
+            color.a()
+        )
+    } else {
+        format!("#{:-02X}{:02X}{:02X}", color.r(), color.g(), color.b())
+    }
+}
+
+/// Does the user's existing value spell out alpha (`#RRGGBBAA`)? Drives
+/// which format a color edit writes back in.
+fn has_alpha_hex(text: &str) -> bool {
+    text.strip_prefix('#').is_some_and(|hex| hex.len() == 8)
 }
 
 /// The per-dropdown search buffer, persisted in egui's memory under `id`
@@ -2680,4 +2983,25 @@ fn key_name(key: egui::Key) -> Option<String> {
         _ => return None,
     };
     Some(name.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn color_hex_matches_previous_format() {
+        let color = parse_color("#141419FF").unwrap();
+        assert_eq!(color_to_hex(color, true), "#141419FF");
+        assert_eq!(color_to_hex(color, false), "#141419");
+        assert_eq!(parse_color(&color_to_hex(color, false)), Some(color));
+    }
+
+    #[test]
+    fn has_alpha_hex_detects_width() {
+        assert!(has_alpha_hex("#141419FF"));
+        assert!(!has_alpha_hex("#141419"));
+        assert!(!has_alpha_hex("141419"));
+        assert!(!has_alpha_hex("#14141"));
+    }
 }
