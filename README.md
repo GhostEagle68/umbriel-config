@@ -32,7 +32,7 @@ Zcode GLM 5.3 models are used to help plan, review code and research only. All c
 
 ## Install
 
-Prebuilt binaries are attached to every release, no compiler needed. crates.io is reccomened for a better install, update and uninstall experience.
+Prebuilt binaries are attached to every release, no compiler needed.
 
 ```sh
 curl -fLO https://github.com/GhostEagle68/umbriel-config/releases/download/v0.1.2-alpha.3/umbriel-config-x86_64-linux.tar.gz
