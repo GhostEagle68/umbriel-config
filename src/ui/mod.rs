@@ -1581,7 +1581,7 @@ impl eframe::App for App {
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "config".to_owned());
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("Config files").weak().small());
+                ui.label(egui::RichText::new("Config files").weak().strong());
                 if ui
                     .selectable_value(
                         &mut self.page,
@@ -1593,7 +1593,7 @@ impl eframe::App for App {
                 {
                     self.search.clear();
                 }
-                ui.label(egui::RichText::new("Include files").weak().small());
+                ui.label(egui::RichText::new("Include files").weak().strong());
                 for (index, inc) in self.includes.docs.iter().enumerate() {
                     if ui
                         .selectable_value(
@@ -1608,7 +1608,7 @@ impl eframe::App for App {
                     }
                 }
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("Default settings").weak().small());
+                ui.label(egui::RichText::new("Default settings").weak().strong());
                 if ui
                     .selectable_value(&mut self.page, Some(Page::Outputs), "Outputs")
                     .clicked()
