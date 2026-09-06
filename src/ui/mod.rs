@@ -97,6 +97,9 @@ struct App {
     /// Dotted keys that appeared in umbriel since the last recorded
     /// schema; cleared together with the drift banner.
     new_keys: std::collections::BTreeSet<String>,
+    /// Set when Exit was clicked with unsaved changes; shows the
+    /// quit confirmation until answered.
+    confirm_exit: bool,
 }
 
 impl App {
@@ -148,6 +151,7 @@ impl App {
             update_check: None,
             update_result: None,
             new_keys: startup_drift.added.into_iter().collect(),
+            confirm_exit: false,
         };
         if settings.check_updates_on_start && update::should_auto_check(&env) {
             app.start_update_check(Some(env));
@@ -1676,6 +1680,24 @@ impl eframe::App for App {
                     .clicked()
                 {
                     self.search.clear();
+                }
+                if ui.small_button("Exit").clicked() {
+                    if self.any_modified() {
+                        self.confirm_exit = true;
+                    } else {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+                if self.confirm_exit {
+                    ui.colored_label(egui::Color32::from_rgb(240, 100, 100), "Unsaved changes!");
+                    ui.horizontal(|ui| {
+                        if ui.small_button("Quit anyway").clicked() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        if ui.small_button("Keep editing").clicked() {
+                            self.confirm_exit = false;
+                        }
+                    });
                 }
             });
         });
