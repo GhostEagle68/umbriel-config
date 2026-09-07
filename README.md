@@ -68,7 +68,10 @@ Then build and install umbriel-config, either from crates.io:
 cargo install umbriel-config@0.1.2-alpha.3
 ```
 
-or straight from the repository (tracks `main`):
+While every release is a prerelease, the version must be named since cargo's
+plain `cargo install umbriel-config` skips prerelease versions by rule.
+From the first stable release on, the unversioned command works. Or go
+straight from the repository (tracks `main`):
 
 ```sh
 cargo install --git https://github.com/GhostEagle68/umbriel-config
