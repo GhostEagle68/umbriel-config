@@ -1,0 +1,277 @@
+// Main window shell for the Slint UI. Phase 0: chrome + navigation + a
+// read-only content placeholder. Pages replace the placeholder in Phases 1–3;
+// everything visual reads tokens from theme.slint.
+
+import { Theme } from "theme.slint";
+
+// Embedded fonts (compiler bakes these into the binary). Family names are
+// the fonts' internal names, verified with fc-scan.
+import "../assets/fonts/Inter-Regular.ttf";
+import "../assets/fonts/Inter-Bold.ttf";
+import "../assets/fonts/JetBrainsMono-Regular.ttf";
+
+// Small token-driven button; std-widgets are avoided until the styled-page
+// pass so the whole shell carries one identity from day one.
+component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 28px;
+    width: label.width + 24px;
+    border-radius: Theme.radius-s;
+    background: !root.enabled ? Theme.bg-2
+        : ta.has-hover ? (root.primary ? Theme.accent-hover : Theme.border)
+        : (root.primary ? Theme.accent : Theme.bg-2);
+    opacity: root.enabled ? 1.0 : 0.5;
+
+    label := Text {
+        text: root.text;
+        color: root.primary ? white : Theme.text-1;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// One sidebar navigation row (section or file).
+component NavRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    callback selected-fired();
+
+    height: 30px;
+    border-radius: Theme.radius-s;
+    background: root.selected ? Theme.bg-2
+        : ta.has-hover ? Theme.bg-2
+        : transparent;
+
+    Text {
+        x: Theme.space-m;
+        text: root.label;
+        color: root.selected ? Theme.text-1 : Theme.text-2;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        clicked => { root.selected-fired(); }
+    }
+}
+
+export component AppWindow inherits Window {
+    preferred-width: 960px;
+    preferred-height: 640px;
+    min-width: 720px;
+    min-height: 480px;
+    title: "Umbriel Config";
+    background: Theme.bg-0;
+    default-font-family: "Inter";
+    default-font-size: Theme.font-body;
+
+    in property <string> config-path;
+    in property <int> include-count;
+    in property <string> include-note;
+    in property <bool> dirty;
+    in property <[string]> sections;
+    in property <[string]> files;
+    in property <string> page-title;
+    in property <string> status;
+    in-out property <string> current-section;
+    in-out property <bool> show-exit-confirm: false;
+
+    callback section-selected(string);
+    callback file-selected(int);
+    callback save-requested();
+    callback sync-schema-requested();
+    callback exit-requested();
+
+    VerticalLayout {
+        // ── header ─────────────────────────────────────────────
+        Rectangle {
+            height: 44px;
+            background: Theme.bg-1;
+
+            HorizontalLayout {
+                padding-left: Theme.space-l;
+                padding-right: Theme.space-l;
+                spacing: Theme.space-m;
+                alignment: start;
+
+                Text {
+                    text: "Umbriel Config";
+                    color: Theme.text-1;
+                    font-size: Theme.font-large;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.config-path;
+                    color: Theme.text-2;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "+" + root.include-count + " included";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                    visible: root.include-count > 0;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                ActionButton {
+                    text: "Sync schema";
+                    clicked => { root.sync-schema-requested(); }
+                }
+                ActionButton {
+                    text: "Save";
+                    primary: true;
+                    enabled: root.dirty;
+                    clicked => { root.save-requested(); }
+                }
+            }
+        }
+
+        // include warning strip (only when notes exist)
+        if root.include-note != "": Rectangle {
+            height: 24px;
+            background: Theme.bg-1;
+            Text {
+                x: Theme.space-l;
+                text: "⚠ " + root.include-note;
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalLayout {
+            // ── sidebar ─────────────────────────────────────────
+            Rectangle {
+                width: 208px;
+                background: Theme.bg-1;
+
+                VerticalLayout {
+                    padding: Theme.space-s;
+                    spacing: Theme.space-xs;
+                    alignment: start;
+
+                    Text {
+                        text: "SECTIONS";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                    }
+                    for section in root.sections: NavRow {
+                        label: section;
+                        selected: section == root.current-section;
+                        selected-fired => { root.section-selected(section); }
+                    }
+
+                    Rectangle { height: Theme.space-l; }
+                    Text {
+                        text: "FILES";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                    }
+                    for file in root.files: NavRow {
+                        label: file;
+                        selected-fired => { }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                    ActionButton {
+                        text: "Exit";
+                        clicked => {
+                            if (root.dirty) {
+                                root.show-exit-confirm = true;
+                            } else {
+                                root.exit-requested();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── content ─────────────────────────────────────────
+            Rectangle {
+                background: Theme.bg-0;
+                VerticalLayout {
+                    padding: Theme.space-l;
+                    spacing: Theme.space-m;
+                    alignment: start;
+
+                    Text {
+                        text: root.page-title;
+                        color: Theme.text-1;
+                        font-size: Theme.font-title;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: root.status;
+                        color: Theme.text-2;
+                        font-size: Theme.font-body;
+                    }
+                    Text {
+                        text: "Pages land in Phases 1–2 — see .design/ui-plan.md";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        opacity: 0.6;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── unsaved-changes confirm overlay ──────────────────────
+    if root.show-exit-confirm: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+
+        Rectangle {
+            width: 340px;
+            height: 150px;
+            border-radius: Theme.radius-l;
+            background: Theme.bg-1;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: "Unsaved changes";
+                    color: Theme.danger;
+                    font-size: Theme.font-large;
+                    font-weight: 700;
+                }
+                Text {
+                    text: "Quit without saving?";
+                    color: Theme.text-2;
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-s;
+                    ActionButton {
+                        text: "Keep editing";
+                        clicked => { root.show-exit-confirm = false; }
+                    }
+                    ActionButton {
+                        text: "Quit anyway";
+                        primary: true;
+                        clicked => { root.exit-requested(); }
+                    }
+                }
+            }
+        }
+    }
+}

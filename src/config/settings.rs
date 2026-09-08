@@ -1,5 +1,5 @@
 //! App preferences — umbriel-config's own settings, never umbriel's config.
-//! One key for now; a missing or unreadable file reads as defaults.
+//! Simple `key = value` lines; a missing or unreadable file reads as defaults.
 
 use super::discovery;
 use std::ffi::OsStr;
@@ -8,10 +8,14 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Settings {
     pub check_updates_on_start: bool,
+    pub window_width: u32,
+    pub window_height: u32,
 }
 
 pub const DEFAULT: Settings = Settings {
     check_updates_on_start: true,
+    window_width: 960,
+    window_height: 640,
 };
 
 pub fn path(env: &discovery::Env) -> PathBuf {
@@ -28,11 +32,28 @@ pub fn load(env: &discovery::Env) -> Settings {
     let Ok(text) = std::fs::read_to_string(path(env)) else {
         return DEFAULT;
     };
-    Settings {
-        check_updates_on_start: text
-            .lines()
-            .any(|line| line.trim() == "check_updates_on_start = true"),
+    parse(&text)
+}
+
+/// Parse `key = value` lines; unknown keys and malformed values fall back
+/// field-by-field to the defaults.
+fn parse(text: &str) -> Settings {
+    let mut settings = DEFAULT;
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let (key, value) = (key.trim(), value.trim());
+        match key {
+            "check_updates_on_start" => settings.check_updates_on_start = value == "true",
+            "window_width" => settings.window_width = value.parse().unwrap_or(DEFAULT.window_width),
+            "window_height" => {
+                settings.window_height = value.parse().unwrap_or(DEFAULT.window_height)
+            }
+            _ => {}
+        }
     }
+    settings
 }
 
 pub fn store(env: &discovery::Env, settings: &Settings) -> std::io::Result<()> {
@@ -43,8 +64,8 @@ pub fn store(env: &discovery::Env, settings: &Settings) -> std::io::Result<()> {
     std::fs::write(
         path,
         format!(
-            "check_updates_on_start = {}\n",
-            settings.check_updates_on_start
+            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\n",
+            settings.check_updates_on_start, settings.window_width, settings.window_height
         ),
     )
 }
@@ -71,12 +92,31 @@ mod tests {
             &e,
             &Settings {
                 check_updates_on_start: false,
+                window_width: 1280,
+                window_height: 800,
             },
         )
         .unwrap();
-        assert!(!load(&e).check_updates_on_start);
+        assert_eq!(
+            load(&e),
+            Settings {
+                check_updates_on_start: false,
+                window_width: 1280,
+                window_height: 800,
+            }
+        );
         store(&e, &DEFAULT).unwrap();
         assert_eq!(load(&e), DEFAULT);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn parse_ignores_unknown_keys_and_bad_values() {
+        let settings = parse(
+            "unknown = 1\ncheck_updates_on_start = false\nwindow_width = oops\nwindow_height = 700\n",
+        );
+        assert!(!settings.check_updates_on_start);
+        assert_eq!(settings.window_width, DEFAULT.window_width);
+        assert_eq!(settings.window_height, 700);
     }
 }
