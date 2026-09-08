@@ -27,6 +27,9 @@ struct Shell {
     load_error: Option<String>,
     schema: Vec<schema::Entry>,
     includes: includes::IncludeChain,
+    // Per chain index: each doc's leaf values as last saved on disk. A row
+    // whose current value differs from this snapshot is "changed".
+    saved: Vec<BTreeMap<String, String>>,
 }
 
 impl Shell {
@@ -51,14 +54,26 @@ impl Shell {
             .map(|text| schema::assemble(&text))
             .unwrap_or_default();
         let includes = includes::load_chain(&doc, path);
-        Shell {
+        let mut shell = Shell {
             path: path.to_path_buf(),
             doc,
             healthy,
             load_error,
             schema,
             includes,
-        }
+            saved: Vec::new(),
+        };
+        shell.reset_saved();
+        shell
+    }
+
+    /// Re-capture the on-disk baselines; a save resets the "changed" marks.
+    #[allow(dead_code)] // wired when the save flow lands
+    fn reset_saved(&mut self) {
+        let main = self.includes.docs.len();
+        self.saved = (0..=main)
+            .map(|i| doc_at(self, i).leaf_values().into_iter().collect())
+            .collect();
     }
 
     fn any_modified(&self) -> bool {
@@ -153,6 +168,42 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             app.set_raw_groups(Rc::new(VecModel::from(groups)).into());
             app.set_page(Page::Raw);
             app.set_page_title("Other settings".into());
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_view_file(move |index| {
+            let Some(app) = weak.upgrade() else { return };
+            if index < 0 {
+                return;
+            }
+            let index = index as usize;
+            let shell = shell.borrow();
+            let main = shell.includes.docs.len();
+            if index > main {
+                return;
+            }
+            let label = file_labels(&shell)
+                .get(index)
+                .cloned()
+                .unwrap_or_default()
+                .to_string();
+            let path = if index == main {
+                shell.path.display().to_string()
+            } else {
+                shell.includes.docs[index].path.display().to_string()
+            };
+            let doc = doc_at(&shell, index);
+            let modified = if doc.is_modified() {
+                " · unsaved edits included"
+            } else {
+                ""
+            };
+            app.set_popup_file_title(format!("{label}{modified}").into());
+            app.set_popup_file_path(path.into());
+            app.set_popup_file_text(doc.text().into());
+            app.set_show_file_popup(true);
         });
     }
     {
@@ -275,6 +326,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             let shell = shell.borrow();
             app.set_dirty(shell.any_modified());
             refresh_row(app, &shell, key);
+            app.set_changed_count(changed_count(&shell));
         }
     }
 
@@ -388,29 +440,40 @@ fn doc_at(shell: &Shell, file_index: usize) -> &ConfigDocument {
     }
 }
 
-/// Append the owning-file badge to a row's hint ("in file.toml").
-fn badge_home(mut row: FileRow, label: &SharedString) -> FileRow {
-    row.hint = if row.hint.is_empty() {
-        format!("in {label}").into()
-    } else {
-        format!("{} • in {}", row.hint, label).into()
-    };
-    row
+/// Number of chain keys whose current value differs from the saved
+/// snapshot (newly created keys count too).
+fn changed_count(shell: &Shell) -> i32 {
+    let main = shell.includes.docs.len();
+    let mut count = 0;
+    for i in 0..=main {
+        let saved = shell.saved.get(i);
+        let current: BTreeMap<String, String> =
+            doc_at(shell, i).leaf_values().into_iter().collect();
+        for (key, value) in &current {
+            if saved.and_then(|values| values.get(key)) != Some(value) {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 /// Refill the section page: every setting of `section` across the chain.
 fn refill_section(app: &AppWindow, shell: &Shell, section: &str) {
     app.set_file_groups(Rc::new(VecModel::from(section_groups(shell, section))).into());
+    app.set_changed_count(changed_count(shell));
 }
 
 /// One section page: every schema entry of the top-level `section` across
-/// the whole include chain, grouped by sub-section. Settled keys carry
-/// their owning file in the hint; unset keys read "—" and commit to main
-/// (the inline destination picker is a fast-follow).
+/// the whole include chain, grouped by sub-section. Unset keys read "—"
+/// and commit to main (the inline destination picker is a fast-follow).
 fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
     let sets = chain_path_sets(shell);
     let labels = file_labels(shell);
     let main = shell.includes.docs.len();
+    let current: Vec<BTreeMap<String, String>> = (0..=main)
+        .map(|i| doc_at(shell, i).leaf_values().into_iter().collect())
+        .collect();
 
     let mut groups: BTreeMap<String, Vec<FileRow>> = BTreeMap::new();
     for entry in &shell.schema {
@@ -420,9 +483,17 @@ fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
         let dotted = entry.path.join(".");
         let home = entry_home(&sets, &dotted);
         let mut row = file_row(doc_at(shell, home.unwrap_or(main)), entry);
+        row.home = home.map_or(-1, |home| home as i32);
         if let Some(label) = home.and_then(|home| labels.get(home)) {
-            row = badge_home(row, label);
+            row.home_label = label.clone();
         }
+        row.changed = match home {
+            Some(home) => {
+                current.get(home).and_then(|values| values.get(&dotted))
+                    != shell.saved.get(home).and_then(|values| values.get(&dotted))
+            }
+            None => false,
+        };
         groups.entry(entry.section.clone()).or_default().push(row);
     }
 
@@ -455,6 +526,9 @@ fn file_row(doc: &ConfigDocument, entry: &schema::Entry) -> FileRow {
         hint: entry_hint(entry).into(),
         min,
         max,
+        home: -1,
+        home_label: String::new().into(),
+        changed: false,
     }
 }
 
@@ -469,10 +543,13 @@ fn refresh_row(app: &AppWindow, shell: &Shell, key: &str) {
         return;
     };
     let home = entry_home(&sets, key).unwrap_or(shell.includes.docs.len());
+    let current: BTreeMap<String, String> = doc_at(shell, home).leaf_values().into_iter().collect();
     let mut row = file_row(doc_at(shell, home), entry);
+    row.home = home as i32;
     if let Some(label) = labels.get(home) {
-        row = badge_home(row, label);
+        row.home_label = label.clone();
     }
+    row.changed = current.get(key) != shell.saved.get(home).and_then(|values| values.get(key));
 
     let groups = app.get_file_groups();
     let Some(groups) = groups.as_any().downcast_ref::<VecModel<FileGroup>>() else {
@@ -537,6 +614,9 @@ fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
                         hint: String::new().into(),
                         min: 0.0,
                         max: 0.0,
+                        home: -1,
+                        home_label: String::new().into(),
+                        changed: false,
                     }
                 })
                 .collect();

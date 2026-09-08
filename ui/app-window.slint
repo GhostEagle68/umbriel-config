@@ -35,6 +35,11 @@ export  struct FileRow {
     hint: string,
     min: float,
     max: float,
+    // Chain index of the file that owns this key (-1 = not set anywhere).
+    home: int,
+    home-label: string,
+    // Differs from the on-disk saved value.
+    changed: bool,
 }
 
 export struct FileGroup {
@@ -165,6 +170,7 @@ component FilePage inherits Rectangle {
     callback set-value(string, string);
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
+    callback view-file(int);
 
     // Click-away focus: empty page space falls through to the TouchArea,
     // which hands focus to the sink and thereby blurs (committing) any
@@ -223,6 +229,20 @@ component FilePage inherits Rectangle {
                         HorizontalLayout {
                             min-height: 32px;
                             spacing: Theme.space-m;
+
+                            if row.changed: Rectangle {
+                                width: 7px;
+                                VerticalLayout {
+                                    alignment: center;
+
+                                    Rectangle {
+                                        width: 7px;
+                                        height: 7px;
+                                        border-radius: 4px;
+                                        background: Theme.accent;
+                                    }
+                                }
+                            }
 
                             Text {
                                 text: row.label;
@@ -305,11 +325,38 @@ component FilePage inherits Rectangle {
                             }
                         }
 
-                        if row.hint != "": Text {
-                            text: row.hint;
-                            color: Theme.text-2;
-                            font-size: Theme.font-small;
-                            opacity: 0.7;
+                        HorizontalLayout {
+                            spacing: Theme.space-s;
+                            alignment: start;
+
+                            if row.hint != "": Text {
+                                text: row.hint;
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                opacity: 0.7;
+                                vertical-alignment: center;
+                            }
+
+                            // Ownership badge: click to view the file that
+                            // owns this key (read-only).
+                            if row.home >= 0: Rectangle {
+                                width: badge-text.preferred-width + 10px;
+                                height: badge-text.preferred-height + 4px;
+                                border-radius: Theme.radius-s;
+
+                                badge-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.view-file(row.home); }
+                                }
+
+                                badge-text := Text {
+                                    text: "in " + row.home-label;
+                                    color: badge-ta.has-hover ? Theme.accent : Theme.text-2;
+                                    font-size: Theme.font-small;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: center;
+                                }
+                            }
                         }
                     }
                 }
@@ -388,6 +435,13 @@ export component AppWindow inherits Window {
     in property <[FileGroup]> raw-groups;
     // Never filled; keeps FilePage's Other-keys section empty on other pages.
     in property <[FileRow]> no-rows;
+    // Keys whose current value differs from the on-disk snapshot.
+    in property <int> changed-count;
+    // Read-only file view popup (opened from a row's "in <file>" badge).
+    in-out property <bool> show-file-popup: false;
+    in property <string> popup-file-title;
+    in property <string> popup-file-path;
+    in property <string> popup-file-text;
 
     callback search-edited(string);
     callback raw-requested();
@@ -395,6 +449,7 @@ export component AppWindow inherits Window {
     callback set-value(string, string);
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
+    callback view-file(int);
     callback save-requested();
     callback sync-schema-requested();
     callback exit-requested();
@@ -451,7 +506,7 @@ export component AppWindow inherits Window {
                 }
 
                 ActionButton {
-                    text: "Save";
+                    text: "Save" + (root.changed-count > 0 ? " · " + root.changed-count : "");
                     primary: true;
                     enabled: root.dirty;
                     clicked => { root.save-requested(); }
@@ -545,6 +600,7 @@ export component AppWindow inherits Window {
                         set-value(k, v) => { root.set-value(k, v); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
                     }
                 }
 
@@ -632,6 +688,87 @@ export component AppWindow inherits Window {
                         text: "Quit anyway";
                         primary: true;
                         clicked => { root.exit-requested(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── read-only file view popup (opened from a row's "in <file>" badge) ──
+    if root.show-file-popup: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+
+        // Clicking the scrim closes the popup…
+        TouchArea {
+            clicked => { root.show-file-popup = false; }
+        }
+
+        Rectangle {
+            width: min(parent.width - 96px, 760px);
+            height: parent.height - 96px;
+            border-radius: Theme.radius-l;
+            background: Theme.bg-1;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            // …the card absorbs its own clicks so it stays open.
+            TouchArea { }
+
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-m;
+
+                HorizontalLayout {
+                    spacing: Theme.space-m;
+
+                    VerticalLayout {
+                        spacing: 2px;
+
+                        Text {
+                            text: root.popup-file-title;
+                            color: Theme.text-1;
+                            font-size: Theme.font-large;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.popup-file-path;
+                            color: Theme.text-2;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    ActionButton {
+                        text: "Close";
+                        clicked => { root.show-file-popup = false; }
+                    }
+                }
+
+                ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    // Non-layout child: the viewport must be pinned to the
+                    // content's natural size or nothing ever scrolls.
+                    viewport-width: file-text.preferred-width;
+                    viewport-height: file-text.preferred-height;
+
+                    file-text := Text {
+                        text: root.popup-file-text;
+                        color: Theme.text-1;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-small;
+                        wrap: no-wrap;
+                        width: self.preferred-width;
+                        height: self.preferred-height;
                     }
                 }
             }
