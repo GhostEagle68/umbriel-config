@@ -40,11 +40,22 @@ export  struct FileRow {
     home-label: string,
     // Differs from the on-disk saved value.
     changed: bool,
+    // True while the key isn't set in any file yet.
+    available: bool,
 }
 
 export struct FileGroup {
     title: string,
     rows: [FileRow],
+}
+
+// One changed key, as shown in the save popup.
+export struct SaveEntry {
+    key: string,
+    label: string,
+    value: string,
+    dest-label: string,
+    dest-index: int,
 }
 
 export enum Page { section, search, raw }
@@ -183,69 +194,217 @@ component FilePage inherits Rectangle {
         clicked => { sink.focus(); }
     }
 
-    VerticalLayout {
-        // Referencing parent.width here feeds the layout's intrinsic width
-        // back into its own padding calculation.
-        padding-left: Theme.space-l;
-        padding-right: Theme.space-l;
-        padding-top: Theme.space-l;
-        padding-bottom: Theme.space-l;
-        spacing: Theme.space-l;
-        alignment: start;
-
-        Text {
-            text: root.title;
-            color: Theme.text-1;
-            font-size: Theme.font-title;
-            font-weight: 700;
+    // Gutters center the column; the column caps at max-width. No
+    // parent.width references — those create intrinsic-size cycles.
+    HorizontalLayout {
+        Rectangle {
+            horizontal-stretch: 1;
         }
 
-        if root.status != "": Text {
-            text: root.status;
-            color: Theme.text-2;
-            font-size: Theme.font-small;
-        }
-
-        for group in root.groups: VerticalLayout {
-            spacing: Theme.space-xs;
+        VerticalLayout {
+            max-width: 720px;
+            padding-top: Theme.space-l;
+            padding-bottom: Theme.space-l;
+            spacing: Theme.space-l;
+            alignment: start;
 
             Text {
-                text: group.title;
-                color: Theme.text-2;
-                font-size: Theme.font-small;
+                text: root.title;
+                color: Theme.text-1;
+                font-size: Theme.font-title;
                 font-weight: 700;
             }
 
-            Rectangle {
-                background: Theme.bg-1;
-                border-radius: Theme.radius-m;
+            if root.status != "": Text {
+                text: root.status;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+            }
 
-                VerticalLayout {
-                    padding: Theme.space-m;
+            for group in root.groups: VerticalLayout {
+                spacing: Theme.space-xs;
 
-                    for row in group.rows: VerticalLayout {
-                        spacing: 2px;
+                Text {
+                    text: group.title;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    font-weight: 700;
+                }
 
-                        HorizontalLayout {
-                            min-height: 32px;
-                            spacing: Theme.space-m;
+                Rectangle {
+                    background: Theme.bg-1;
+                    border-radius: Theme.radius-m;
 
-                            if row.changed: Rectangle {
-                                width: 7px;
-                                VerticalLayout {
-                                    alignment: center;
+                    VerticalLayout {
+                        padding: Theme.space-m;
+
+                        for row in group.rows: VerticalLayout {
+                            spacing: 2px;
+                            opacity: row.available ? 0.55 : 1.0;
+
+                            HorizontalLayout {
+                                min-height: 32px;
+                                spacing: Theme.space-m;
+
+                                if row.changed: Rectangle {
+                                    width: 7px;
+                                    VerticalLayout {
+                                        alignment: center;
+
+                                        Rectangle {
+                                            width: 7px;
+                                            height: 7px;
+                                            border-radius: 4px;
+                                            background: Theme.accent;
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: row.label;
+                                    vertical-alignment: center;
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
+
+                                if row.kind == ValueKind.boolean: CheckBox {
+                                    checked: row.checked;
+                                    toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
+                                }
+                                if row.kind == ValueKind.integer || row.kind == ValueKind.float: HorizontalLayout {
+                                    spacing: Theme.space-s;
+                                    alignment: start;
+
+                                    if row.max > row.min && row.value.to-float() == row.value.to-float(): Slider {
+                                        width: 160px;
+                                        minimum: row.min;
+                                        maximum: row.max;
+                                        value: row.value.to-float();
+                                        changed(v) => { root.slider-preview(row.key, v); }
+                                        released(v) => { root.set-slider-value(row.key, v); }
+                                    }
+
+                                    DraftEdit {
+                                        width: 140px;
+                                        value: row.value;
+                                        commit(t) => { root.set-value(row.key, t); }
+                                    }
+                                }
+                                if row.kind == ValueKind.color: HorizontalLayout {
+                                    spacing: Theme.space-s;
+                                    alignment: start;
 
                                     Rectangle {
-                                        width: 7px;
-                                        height: 7px;
-                                        border-radius: 4px;
-                                        background: Theme.accent;
+                                        width: 28px;
+                                        border-radius: Theme.radius-s;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        background: row.swatch;
                                     }
+
+                                    DraftEdit {
+                                        width: 140px;
+                                        value: row.value;
+                                        commit(t) => { root.set-value(row.key, t); }
+                                    }
+                                }
+                                if row.kind == ValueKind.curve: ComboBox {
+                                    width: 180px;
+                                    model: row.choices;
+                                    current-value: row.value;
+                                    selected(v) => { root.set-value(row.key, v); }
+                                }
+                                if row.kind == ValueKind.list: DraftEdit {
+                                    width: 220px;
+                                    value: row.value;
+                                    commit(t) => { root.set-value(row.key, t); }
+                                }
+                                if row.kind == ValueKind.text: DraftEdit {
+                                    width: 220px;
+                                    value: row.value;
+                                    commit(t) => { root.set-value(row.key, t); }
+                                }
+                                if row.kind == ValueKind.choice: ComboBox {
+                                    width: 180px;
+                                    model: row.choices;
+                                    current-value: row.value;
+                                    selected(v) => { root.set-value(row.key, v); }
+                                }
+                                if row.kind == ValueKind.unset: Text {
+                                    text: row.value;
+                                    color: Theme.text-2;
+                                    font-family: Theme.font-mono;
+                                    font-size: Theme.font-small;
+                                    vertical-alignment: center;
                                 }
                             }
 
+                            HorizontalLayout {
+                                spacing: Theme.space-s;
+                                alignment: start;
+
+                                if row.hint != "": Text {
+                                    text: row.hint;
+                                    color: Theme.text-2;
+                                    font-size: Theme.font-small;
+                                    opacity: 0.7;
+                                    vertical-alignment: center;
+                                }
+
+                                // Ownership badge: click to view the file that
+                            // owns this key (read-only).
+                            if row.home >= 0: Rectangle {
+                                    width: badge-text.preferred-width + 10px;
+                                    height: badge-text.preferred-height + 4px;
+                                    border-radius: Theme.radius-s;
+
+                                    badge-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.view-file(row.home); }
+                                    }
+
+                                    badge-text := Text {
+                                        text: "in " + row.home-label;
+                                        color: badge-ta.has-hover ? Theme.accent : Theme.text-2;
+                                        font-size: Theme.font-small;
+                                        vertical-alignment: center;
+                                        horizontal-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.others.length > 0: VerticalLayout {
+                spacing: Theme.space-xs;
+
+                Text {
+                    text: "OTHER KEYS IN THIS FILE";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    font-weight: 700;
+                }
+
+                Rectangle {
+                    background: Theme.bg-1;
+                    border-radius: Theme.radius-m;
+
+                    VerticalLayout {
+                        padding: Theme.space-m;
+
+                        for row in root.others: HorizontalLayout {
+                            min-height: 28px;
+                            spacing: Theme.space-m;
+
                             Text {
                                 text: row.label;
+                                color: Theme.text-2;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
                                 vertical-alignment: center;
                             }
 
@@ -253,70 +412,7 @@ component FilePage inherits Rectangle {
                                 horizontal-stretch: 1;
                             }
 
-                            if row.kind == ValueKind.boolean: CheckBox {
-                                checked: row.checked;
-                                toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
-                            }
-                            if row.kind == ValueKind.integer || row.kind == ValueKind.float: HorizontalLayout {
-                                spacing: Theme.space-s;
-                                alignment: start;
-
-                                if row.max > row.min && row.value.to-float() == row.value.to-float(): Slider {
-                                    width: 160px;
-                                    minimum: row.min;
-                                    maximum: row.max;
-                                    value: row.value.to-float();
-                                    changed(v) => { root.slider-preview(row.key, v); }
-                                    released(v) => { root.set-slider-value(row.key, v); }
-                                }
-
-                                DraftEdit {
-                                    width: 140px;
-                                    value: row.value;
-                                    commit(t) => { root.set-value(row.key, t); }
-                                }
-                            }
-                            if row.kind == ValueKind.color: HorizontalLayout {
-                                spacing: Theme.space-s;
-                                alignment: start;
-
-                                Rectangle {
-                                    width: 28px;
-                                    border-radius: Theme.radius-s;
-                                    border-width: 1px;
-                                    border-color: Theme.border;
-                                    background: row.swatch;
-                                }
-
-                                DraftEdit {
-                                    width: 140px;
-                                    value: row.value;
-                                    commit(t) => { root.set-value(row.key, t); }
-                                }
-                            }
-                            if row.kind == ValueKind.curve: ComboBox {
-                                width: 180px;
-                                model: row.choices;
-                                current-value: row.value;
-                                selected(v) => { root.set-value(row.key, v); }
-                            }
-                            if row.kind == ValueKind.list: DraftEdit {
-                                width: 220px;
-                                value: row.value;
-                                commit(t) => { root.set-value(row.key, t); }
-                            }
-                            if row.kind == ValueKind.text: DraftEdit {
-                                width: 220px;
-                                value: row.value;
-                                commit(t) => { root.set-value(row.key, t); }
-                            }
-                            if row.kind == ValueKind.choice: ComboBox {
-                                width: 180px;
-                                model: row.choices;
-                                current-value: row.value;
-                                selected(v) => { root.set-value(row.key, v); }
-                            }
-                            if row.kind == ValueKind.unset: Text {
+                            Text {
                                 text: row.value;
                                 color: Theme.text-2;
                                 font-family: Theme.font-mono;
@@ -324,88 +420,13 @@ component FilePage inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
-
-                        HorizontalLayout {
-                            spacing: Theme.space-s;
-                            alignment: start;
-
-                            if row.hint != "": Text {
-                                text: row.hint;
-                                color: Theme.text-2;
-                                font-size: Theme.font-small;
-                                opacity: 0.7;
-                                vertical-alignment: center;
-                            }
-
-                            // Ownership badge: click to view the file that
-                            // owns this key (read-only).
-                            if row.home >= 0: Rectangle {
-                                width: badge-text.preferred-width + 10px;
-                                height: badge-text.preferred-height + 4px;
-                                border-radius: Theme.radius-s;
-
-                                badge-ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.view-file(row.home); }
-                                }
-
-                                badge-text := Text {
-                                    text: "in " + row.home-label;
-                                    color: badge-ta.has-hover ? Theme.accent : Theme.text-2;
-                                    font-size: Theme.font-small;
-                                    vertical-alignment: center;
-                                    horizontal-alignment: center;
-                                }
-                            }
-                        }
                     }
                 }
             }
         }
 
-        if root.others.length > 0: VerticalLayout {
-            spacing: Theme.space-xs;
-
-            Text {
-                text: "OTHER KEYS IN THIS FILE";
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                font-weight: 700;
-            }
-
-            Rectangle {
-                background: Theme.bg-1;
-                border-radius: Theme.radius-m;
-
-                VerticalLayout {
-                    padding: Theme.space-m;
-
-                    for row in root.others: HorizontalLayout {
-                        min-height: 28px;
-                        spacing: Theme.space-m;
-
-                        Text {
-                            text: row.label;
-                            color: Theme.text-2;
-                            font-family: Theme.font-mono;
-                            font-size: Theme.font-small;
-                            vertical-alignment: center;
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                        }
-
-                        Text {
-                            text: row.value;
-                            color: Theme.text-2;
-                            font-family: Theme.font-mono;
-                            font-size: Theme.font-small;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
+        Rectangle {
+            horizontal-stretch: 1;
         }
     }
 }
@@ -437,7 +458,9 @@ export component AppWindow inherits Window {
     in property <[FileRow]> no-rows;
     // Keys whose current value differs from the on-disk snapshot.
     in property <int> changed-count;
-    // Read-only file view popup (opened from a row's "in <file>" badge).
+    in property <[string]> destinations;
+    in-out property <bool> show-save-popup: false;
+    in property <[SaveEntry]> save-entries;
     in-out property <bool> show-file-popup: false;
     in property <string> popup-file-title;
     in property <string> popup-file-path;
@@ -450,6 +473,8 @@ export component AppWindow inherits Window {
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
     callback view-file(int);
+    callback save-dest-chosen(string, string);
+    callback save-confirmed();
     callback save-requested();
     callback sync-schema-requested();
     callback exit-requested();
@@ -636,6 +661,93 @@ export component AppWindow inherits Window {
                         title: "Other settings";
                         groups: root.raw-groups;
                         others: root.no-rows;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── save popup: per-key destinations + confirm ──────────
+    if root.show-save-popup: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+
+        // Scrim click cancels; the card absorbs its own clicks.
+        TouchArea {
+            clicked => { root.show-save-popup = false; }
+        }
+
+        Rectangle {
+            width: min(parent.width - 96px, 640px);
+            height: min(parent.height - 96px, 480px);
+            border-radius: Theme.radius-l;
+            background: Theme.bg-1;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            TouchArea { }
+
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: "Save changes";
+                    color: Theme.text-1;
+                    font-size: Theme.font-large;
+                    font-weight: 700;
+                }
+
+                ScrollView {
+                    VerticalLayout {
+                        spacing: Theme.space-s;
+                        alignment: start;
+
+                        for entry in root.save-entries: HorizontalLayout {
+                            spacing: Theme.space-m;
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+
+                                Text {
+                                    text: entry.label;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: entry.value;
+                                    color: Theme.text-2;
+                                    font-family: Theme.font-mono;
+                                    font-size: Theme.font-small;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            ComboBox {
+                                width: 200px;
+                                model: root.destinations;
+                                current-index: entry.dest-index;
+                                selected(v) => { root.save-dest-chosen(entry.key, v); }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-s;
+
+                    ActionButton {
+                        text: "Cancel";
+                        clicked => { root.show-save-popup = false; }
+                    }
+
+                    ActionButton {
+                        text: "Save";
+                        primary: true;
+                        clicked => { root.save-confirmed(); }
                     }
                 }
             }

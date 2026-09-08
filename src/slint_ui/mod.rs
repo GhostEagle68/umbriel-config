@@ -13,7 +13,7 @@ use slint::{
     CloseRequestResponse, ComponentHandle, LogicalSize, Model, SharedString, VecModel, WindowSize,
 };
 use umbriel_config::config::{
-    discovery, document::ConfigDocument, includes, schema, settings as app_settings,
+    discovery, document::ConfigDocument, includes, schema, settings as app_settings, validate,
 };
 
 slint::include_modules!();
@@ -104,6 +104,15 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
     app.set_sections(model(sections));
     app.set_status(status_line(&shell.borrow()));
+    {
+        // Destination picker model, main first: index 0 = main, i = include i-1.
+        let shell = shell.borrow();
+        let labels = file_labels(&shell);
+        let main = labels.len() - 1;
+        let mut destinations = vec![labels[main].clone()];
+        destinations.extend(labels[..main].iter().cloned());
+        app.set_destinations(Rc::new(VecModel::from(destinations)).into());
+    }
 
     app.window().set_size(WindowSize::Logical(LogicalSize::new(
         settings.window_width as f32,
@@ -208,10 +217,166 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
     {
         let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
         app.on_save_requested(move || {
-            if let Some(app) = weak.upgrade() {
-                app.set_status("Nothing unsaved yet — editing lands in Phase 2".into());
+            let Some(app) = weak.upgrade() else { return };
+            let shell = shell.borrow();
+            // Every changed key across the chain, in save-popup form.
+            let main = shell.includes.docs.len();
+            let labels = file_labels(&shell);
+            let mut entries: Vec<SaveEntry> = Vec::new();
+            for i in 0..=main {
+                let saved = shell.saved.get(i);
+                let current: BTreeMap<String, String> =
+                    doc_at(&shell, i).leaf_values().into_iter().collect();
+                for (key, value) in &current {
+                    if saved.and_then(|values| values.get(key)) == Some(value) {
+                        continue;
+                    }
+                    let label = shell
+                        .schema
+                        .iter()
+                        .find(|entry| entry.path.join(".") == key.as_str())
+                        .map(|entry| entry.label.clone())
+                        .unwrap_or_else(|| key.clone());
+                    entries.push(SaveEntry {
+                        key: key.clone().into(),
+                        label: label.into(),
+                        value: value.clone().into(),
+                        dest_label: labels.get(i).cloned().unwrap_or_default(),
+                        dest_index: i as i32,
+                    });
+                }
             }
+            if entries.is_empty() {
+                app.set_status("Nothing to save.".into());
+                return;
+            }
+            app.set_save_entries(Rc::new(VecModel::from(entries)).into());
+            app.set_show_save_popup(true);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_save_dest_chosen(move |key, destination| {
+            let Some(app) = weak.upgrade() else { return };
+            let entries = app.get_save_entries();
+            let Some(entries) = entries.as_any().downcast_ref::<VecModel<SaveEntry>>() else {
+                return;
+            };
+            for i in 0..entries.row_count() {
+                if let Some(mut entry) = entries.row_data(i)
+                    && entry.key.as_str() == key.as_str()
+                {
+                    entry.dest_label = destination.to_string().into();
+                    entries.set_row_data(i, entry);
+                    break;
+                }
+            }
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_save_confirmed(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let mut shell = shell.borrow_mut();
+
+            // The popup's entries, with each key's chosen destination.
+            let model = app.get_save_entries();
+            let Some(model) = model.as_any().downcast_ref::<VecModel<SaveEntry>>() else {
+                return;
+            };
+            let entries: Vec<SaveEntry> = (0..model.row_count())
+                .filter_map(|i| model.row_data(i))
+                .collect();
+            if entries.is_empty() {
+                return;
+            }
+
+            let labels = file_labels(&shell);
+            let sets = chain_path_sets(&shell);
+            let main = shell.includes.docs.len();
+
+            // Apply per-key destinations. Moving a key = write the value
+            // into the target file first, then remove it from the old one —
+            // a value is never lost mid-move.
+            for entry in &entries {
+                let Some(dest) = labels
+                    .iter()
+                    .position(|label| label.as_str() == entry.dest_label.as_str())
+                else {
+                    continue;
+                };
+                let Some(home) = entry_home(&sets, &entry.key) else {
+                    continue;
+                };
+                if home == dest {
+                    continue;
+                }
+                let parts: Vec<&str> = entry.key.split('.').collect();
+                let target = if dest == main {
+                    &mut shell.doc
+                } else {
+                    &mut shell.includes.docs[dest].doc
+                };
+                if target.set_leaf_text(&entry.key, &entry.value) {
+                    let source = if home == main {
+                        &mut shell.doc
+                    } else {
+                        &mut shell.includes.docs[home].doc
+                    };
+                    source.remove_table(&parts);
+                }
+            }
+
+            // Write every modified doc, then validate through umbriel.
+            let mut saved_files = 0;
+            for inc in &mut shell.includes.docs {
+                if inc.doc.is_modified() {
+                    if let Err(err) = inc.doc.save(&inc.path) {
+                        app.set_status(format!("save failed: {err}").into());
+                        return;
+                    }
+                    saved_files += 1;
+                }
+            }
+            if shell.doc.is_modified() {
+                let path = shell.path.clone();
+                if let Err(err) = shell.doc.save(&path) {
+                    app.set_status(format!("save failed: {err}").into());
+                    return;
+                }
+                saved_files += 1;
+            }
+            let report = validate::validate(&shell.path);
+            shell.reset_saved();
+
+            app.set_dirty(false);
+            app.set_changed_count(0);
+            match report {
+                Ok(report) if report.is_ok() => {
+                    app.set_status(
+                        format!("Saved {saved_files} file(s); umbriel has validated the config.")
+                            .into(),
+                    );
+                }
+                Ok(report) => {
+                    let messages: Vec<String> = report
+                        .diagnostics
+                        .iter()
+                        .map(|d| d.message().to_owned())
+                        .collect();
+                    app.set_status(
+                        format!("Saved, but umbriel reported: {}.", messages.join("; ")).into(),
+                    );
+                }
+                Err(err) => {
+                    app.set_status(format!("Saved, but umbriel could not be run: {err}.").into());
+                }
+            }
+            let section = app.get_current_section().to_string();
+            refill_section(&app, &shell, &section);
         });
     }
     {
@@ -304,7 +469,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 let shell = shell.borrow();
                 let sets = chain_path_sets(&shell);
                 // Writes follow ownership: an existing key is edited where
-                // it lives; unset keys default to main.
+                // it lives. Where a brand-new key goes is chosen in the
+                // save popup.
                 entry_home(&sets, key).unwrap_or(shell.includes.docs.len())
             };
             let accepted = {
@@ -483,6 +649,7 @@ fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
         let dotted = entry.path.join(".");
         let home = entry_home(&sets, &dotted);
         let mut row = file_row(doc_at(shell, home.unwrap_or(main)), entry);
+        row.available = home.is_none();
         row.home = home.map_or(-1, |home| home as i32);
         if let Some(label) = home.and_then(|home| labels.get(home)) {
             row.home_label = label.clone();
@@ -529,6 +696,7 @@ fn file_row(doc: &ConfigDocument, entry: &schema::Entry) -> FileRow {
         home: -1,
         home_label: String::new().into(),
         changed: false,
+        available: false,
     }
 }
 
@@ -617,6 +785,7 @@ fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
                         home: -1,
                         home_label: String::new().into(),
                         changed: false,
+                        available: false,
                     }
                 })
                 .collect();
