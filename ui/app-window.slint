@@ -3,7 +3,7 @@
 // everything visual reads tokens from theme.slint.
 
 import { Theme } from "theme.slint";
-import {LineEdit, ScrollView} from "std-widgets.slint";
+import {CheckBox, LineEdit, ScrollView} from "std-widgets.slint";
 
 // Embedded fonts (compiler bakes these into the binary). Family names are
 // the fonts' internal names, verified with fc-scan.
@@ -17,9 +17,13 @@ export struct SectionRow {
     home-index: int,
 }
 
+export enum ValueKind {unset,boolean,integer,float,text,list,choice,color,curve}
+
 export  struct FileRow {
     label: string,
     value: string,
+    key: string,
+    kind: ValueKind,
 }
 
 export struct FileGroup {
@@ -121,6 +125,7 @@ component FilePage inherits Rectangle {
     in property <string> title;
     in property <[FileGroup]> groups;
     in property <[FileRow]> others;
+    callback set-value(string, string);
 
     VerticalLayout {
         padding: Theme.space-l;
@@ -144,7 +149,7 @@ component FilePage inherits Rectangle {
                 font-size: Theme.font-small;
                 font-weight: 700;
             }
-            for row in group.rows: HorizontalLayout {
+                        for row in group.rows: HorizontalLayout {
                 height: 28px;
                 spacing: Theme.space-m;
 
@@ -153,7 +158,11 @@ component FilePage inherits Rectangle {
                     vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; }
-                Text {
+                if row.kind == ValueKind.boolean: CheckBox {
+                    checked: row.value == "true";
+                    toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
+                }
+                if row.kind != ValueKind.boolean: Text {
                     text: row.value;
                     color: Theme.text-2;
                     font-family: Theme.font-mono;
@@ -162,7 +171,6 @@ component FilePage inherits Rectangle {
                 }
             }
         }
-
         if root.others.length > 0: VerticalLayout {
             spacing: Theme.space-xs;
             alignment: start;
@@ -205,12 +213,9 @@ export component AppWindow inherits Window {
     min-width: 720px;
     min-height: 480px;
     title: "Umbriel Config";
-    visible: true;
-    always-on-top: false;
     background: Theme.bg-0;
     default-font-family: "Inter";
     default-font-size: Theme.font-body;
-    dirty: false;
 
     in property <string> config-path;
     in property <int> include-count;
@@ -237,6 +242,7 @@ export component AppWindow inherits Window {
     callback raw-requested();
     callback section-selected(string);
     callback open-file(int);
+    callback set-value(string, string);
     callback save-requested();
     callback sync-schema-requested();
     callback exit-requested();
@@ -405,6 +411,8 @@ export component AppWindow inherits Window {
                         title: root.page-title;
                         groups: root.file-groups;
                         others: root.other-rows;
+                        set-value(k, v) => { root.set-value(k, v); }
+
                     }
                 }
                 

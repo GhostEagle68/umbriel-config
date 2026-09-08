@@ -60,6 +60,10 @@ impl Shell {
             includes,
         }
     }
+
+    fn any_modified(&self) -> bool {
+        self.doc.is_modified() || self.includes.docs.iter().any(|inc| inc.doc.is_modified())
+    }
 }
 
 pub fn run(path: PathBuf) -> anyhow::Result<()> {
@@ -213,6 +217,39 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 store_window_settings(&app, &env, check_updates);
                 CloseRequestResponse::HideWindow
             }
+        });
+    }
+
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_set_value(move |key, value| {
+            let Some(app) = weak.upgrade() else { return };
+            let file_index = app.get_current_file();
+            if file_index < 0 {
+                return;
+            }
+            let file_index = file_index as usize;
+            let accepted = {
+                let mut shell = shell.borrow_mut();
+                let doc: &mut ConfigDocument = if file_index == shell.includes.docs.len() {
+                    &mut shell.doc
+                } else if let Some(inc) = shell.includes.docs.get_mut(file_index) {
+                    &mut inc.doc
+                } else {
+                    return;
+                };
+                doc.set_leaf_text(&key, &value)
+            };
+            if !accepted {
+                app.set_status(format!("umbriel would reject {key} = {value}").into());
+                return;
+            }
+            let shell = shell.borrow();
+            app.set_dirty(shell.any_modified());
+            let (groups, others) = file_groups(&shell, file_index);
+            app.set_file_groups(Rc::new(VecModel::from(groups)).into());
+            app.set_other_rows(Rc::new(VecModel::from(others)).into());
         });
     }
 
@@ -382,6 +419,8 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
             .push(FileRow {
                 label: entry.label.clone().into(),
                 value: value.into(),
+                key: dotted.clone().into(),
+                kind: value_kind(&entry.kind),
             });
     }
     let groups = groups
@@ -402,6 +441,8 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
                 .cloned()
                 .unwrap_or_else(|| "—".to_owned())
                 .into(),
+            key: path.clone().into(),
+            kind: ValueKind::Unset,
         })
         .collect();
 
@@ -436,6 +477,8 @@ fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
                         .cloned()
                         .unwrap_or_else(|| "—".to_owned())
                         .into(),
+                    key: path.clone().into(),
+                    kind: ValueKind::Unset,
                 })
                 .collect();
             FileGroup {
@@ -444,4 +487,17 @@ fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
             }
         })
         .collect()
+}
+
+fn value_kind(kind: &schema::Kind) -> ValueKind {
+    match kind {
+        schema::Kind::Bool => ValueKind::Boolean,
+        schema::Kind::Integer { .. } => ValueKind::Integer,
+        schema::Kind::Float { .. } => ValueKind::Float,
+        schema::Kind::Text => ValueKind::Text,
+        schema::Kind::List => ValueKind::List,
+        schema::Kind::Choice(_) => ValueKind::Choice,
+        schema::Kind::Color => ValueKind::Color,
+        schema::Kind::Curve => ValueKind::Curve,
+    }
 }
