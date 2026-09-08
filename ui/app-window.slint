@@ -129,6 +129,24 @@ component PointerRow inherits Rectangle {
     }
 }
 
+// LineEdit that commits on Enter or when focus leaves with edits pending.
+// `draft` holds the working text so blur can compare against the stored
+// value and only commits real changes.
+component DraftEdit inherits LineEdit {
+    in property <string> value;
+    callback commit(string);
+
+    property <string> draft: root.value;
+    text <=> draft;
+    changed value => { self.draft = self.value; }
+    accepted(t) => { root.commit(t); }
+    changed has-focus => {
+        if (!self.has-focus && self.draft != root.value) {
+            root.commit(self.draft);
+        }
+    }
+}
+
 // One file page: schema groups + everything the file holds beyond the
 // schema — laid out like a settings page: a centered column of group
 // cards, label left / editor right, mined hints under the label.
@@ -137,6 +155,17 @@ component FilePage inherits Rectangle {
     in property <[FileGroup]> groups;
     in property <[FileRow]> others;
     callback set-value(string, string);
+
+    // Click-away focus: empty page space falls through to the TouchArea,
+    // which hands focus to the sink and thereby blurs (committing) any
+    // open editor. Declared first so real widgets stay on top.
+    sink := FocusScope { }
+
+    ta := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { sink.focus(); }
+    }
 
     VerticalLayout {
         padding-left: max(Theme.space-l, (parent.width - 680px) / 2);
@@ -190,10 +219,10 @@ component FilePage inherits Rectangle {
                                 checked: row.checked;
                                 toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
                             }
-                            if row.kind == ValueKind.integer || row.kind == ValueKind.float: LineEdit {
+                            if row.kind == ValueKind.integer || row.kind == ValueKind.float: DraftEdit {
                                 width: 140px;
-                                text: row.value;
-                                accepted(t) => { root.set-value(row.key, t); }
+                                value: row.value;
+                                commit(t) => { root.set-value(row.key, t); }
                             }
                             if row.kind == ValueKind.color: HorizontalLayout {
                                 spacing: Theme.space-s;
@@ -207,10 +236,10 @@ component FilePage inherits Rectangle {
                                     background: row.swatch;
                                 }
 
-                                LineEdit {
+                                DraftEdit {
                                     width: 140px;
-                                    text: row.value;
-                                    accepted(t) => { root.set-value(row.key, t); }
+                                    value: row.value;
+                                    commit(t) => { root.set-value(row.key, t); }
                                 }
                             }
                             if row.kind == ValueKind.curve: ComboBox {
@@ -219,15 +248,15 @@ component FilePage inherits Rectangle {
                                 current-value: row.value;
                                 selected(v) => { root.set-value(row.key, v); }
                             }
-                            if row.kind == ValueKind.list: LineEdit {
+                            if row.kind == ValueKind.list: DraftEdit {
                                 width: 220px;
-                                text: row.value;
-                                accepted(t) => { root.set-value(row.key, t); }
+                                value: row.value;
+                                commit(t) => { root.set-value(row.key, t); }
                             }
-                            if row.kind == ValueKind.text: LineEdit {
+                            if row.kind == ValueKind.text: DraftEdit {
                                 width: 220px;
-                                text: row.value;
-                                accepted(t) => { root.set-value(row.key, t); }
+                                value: row.value;
+                                commit(t) => { root.set-value(row.key, t); }
                             }
                             if row.kind == ValueKind.choice: ComboBox {
                                 width: 180px;
@@ -417,58 +446,70 @@ export component AppWindow inherits Window {
 
         HorizontalLayout {
             // ── sidebar ─────────────────────────────────────────
-            Rectangle {
+                        Rectangle {
                 width: 208px;
                 background: Theme.bg-1;
 
                 VerticalLayout {
-                    padding: Theme.space-s;
                     spacing: Theme.space-xs;
-                    alignment: start;
 
-                    Text {
-                        text: "SECTIONS";
-                        color: Theme.text-2;
-                        font-size: Theme.font-small;
-                    }
-
-                    for section in root.sections: NavRow {
-                        label: section;
-                        selected: section == root.current-section;
-                        selected-fired => { root.section-selected(section); }
-                    }
-
-                    Rectangle {
-                        height: Theme.space-l;
-                    }
-
-                    Text {
-                        text: "FILES";
-                        color: Theme.text-2;
-                        font-size: Theme.font-small;
-                    }
-
-                    for file[i] in root.files: NavRow {
-                        label: file;
-                        selected-fired => { root.open-file(i); }
-                    }
-
-                    Rectangle {
+                    ScrollView {
                         vertical-stretch: 1;
+
+                        VerticalLayout {
+                            padding: Theme.space-s;
+                            spacing: Theme.space-xs;
+                            alignment: start;
+
+                            Text {
+                                text: "SECTIONS";
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                            }
+
+                            for section in root.sections: NavRow {
+                                label: section;
+                                selected: root.page == Page.section && section == root.current-section;
+                                selected-fired => { root.section-selected(section); }
+                            }
+
+                            Rectangle {
+                                height: Theme.space-l;
+                            }
+
+                            Text {
+                                text: "FILES";
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                            }
+
+                            for file[i] in root.files: NavRow {
+                                label: file;
+                                selected: root.page == Page.file && i == root.current-file;
+                                selected-fired => { root.open-file(i); }
+                            }
+                        }
                     }
 
-                    NavRow {
-                        label: "Other Settings";
-                        selected-fired => { root.raw-requested(); }
-                    }
+                    VerticalLayout {
+                        vertical-stretch: 0;
+                        padding: Theme.space-s;
+                        spacing: Theme.space-xs;
 
-                    ActionButton {
-                        text: "Exit";
-                        clicked => {
-                            if (root.dirty) {
-                                root.show-exit-confirm = true;
-                            } else {
-                                root.exit-requested();
+                        NavRow {
+                            label: "Other Settings";
+                            selected: root.page == Page.raw;
+                            selected-fired => { root.raw-requested(); }
+                        }
+
+                        ActionButton {
+                            text: "Exit";
+                            clicked => {
+                                if (root.dirty) {
+                                    root.show-exit-confirm = true;
+                                } else {
+                                    root.exit-requested();
+                                }
                             }
                         }
                     }

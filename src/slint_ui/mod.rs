@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 
 use slint::{
-    CloseRequestResponse, ComponentHandle, LogicalSize, SharedString, VecModel, WindowSize,
+    CloseRequestResponse, ComponentHandle, LogicalSize, Model, SharedString, VecModel, WindowSize,
 };
 use umbriel_config::config::{
     discovery, document::ConfigDocument, includes, schema, settings as app_settings,
@@ -263,9 +263,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             }
             let shell = shell.borrow();
             app.set_dirty(shell.any_modified());
-            let (groups, others) = file_groups(&shell, file_index);
-            app.set_file_groups(Rc::new(VecModel::from(groups)).into());
-            app.set_other_rows(Rc::new(VecModel::from(others)).into());
+            refresh_row(&app, &shell, file_index, &key);
         });
     }
 
@@ -425,27 +423,10 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
         if !owned.contains(&dotted) {
             continue;
         }
-        let parts: Vec<&str> = entry.path.iter().map(String::as_str).collect();
-        let value = typed_value(doc, entry).unwrap_or_else(|| "—".to_owned());
-        let checked = doc.get_bool(&parts).unwrap_or(false);
-        let swatch = if matches!(entry.kind, schema::Kind::Color) {
-            swatch_for(&value)
-        } else {
-            slint::Color::from_argb_u8(0, 0, 0, 0).into()
-        };
         groups
             .entry(entry.section.clone())
             .or_default()
-            .push(FileRow {
-                label: entry.label.clone().into(),
-                value: value.into(),
-                key: dotted.clone().into(),
-                kind: value_kind(&entry.kind),
-                choices: choice_model(&entry.kind),
-                swatch,
-                checked,
-                hint: entry_hint(entry).into(),
-            });
+            .push(file_row(doc, entry));
     }
     let groups = groups
         .into_iter()
@@ -477,6 +458,76 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
         .collect();
 
     (groups, others)
+}
+
+/// One schema row, editor-ready: typed value, checked state, swatch, hint.
+fn file_row(doc: &ConfigDocument, entry: &schema::Entry) -> FileRow {
+    let value = typed_value(doc, entry).unwrap_or_else(|| "—".to_owned());
+    let parts: Vec<&str> = entry.path.iter().map(String::as_str).collect();
+    FileRow {
+        label: entry.label.clone().into(),
+        value: value.clone().into(),
+        key: entry.path.join(".").into(),
+        kind: value_kind(&entry.kind),
+        choices: choice_model(&entry.kind),
+        swatch: if matches!(entry.kind, schema::Kind::Color) {
+            swatch_for(&value)
+        } else {
+            slint::Color::from_argb_u8(0, 0, 0, 0).into()
+        },
+        checked: doc.get_bool(&parts).unwrap_or(false),
+        hint: entry_hint(entry).into(),
+    }
+}
+
+/// Re-render one schema row in place after a commit. Swapping the whole
+/// groups model would rebuild every editor and drop the user's focus.
+fn refresh_row(app: &AppWindow, shell: &Shell, file_index: usize, key: &str) {
+    let sets = chain_path_sets(shell);
+    let Some(owned) = sets.get(file_index) else {
+        return;
+    };
+    let Some(entry) = shell
+        .schema
+        .iter()
+        .find(|entry| entry.path.join(".") == key)
+    else {
+        return;
+    };
+    if !owned.contains(key) {
+        return;
+    }
+    let doc: &ConfigDocument = if file_index == shell.includes.docs.len() {
+        &shell.doc
+    } else {
+        &shell.includes.docs[file_index].doc
+    };
+    let row = file_row(doc, entry);
+
+    let groups = app.get_file_groups();
+    let Some(groups) = groups.as_any().downcast_ref::<VecModel<FileGroup>>() else {
+        return;
+    };
+    for gi in 0..groups.row_count() {
+        let Some(group) = groups.row_data(gi) else {
+            continue;
+        };
+        let Some(rows) = group.rows.as_any().downcast_ref::<VecModel<FileRow>>() else {
+            continue;
+        };
+        for ri in 0..rows.row_count() {
+            let Some(old) = rows.row_data(ri) else {
+                continue;
+            };
+            if old.key.as_str() == key {
+                // Same text = nothing to re-render; keeps the editor's focus.
+                if old.value != row.value {
+                    rows.set_row_data(ri, row);
+                }
+                return;
+            }
+        }
+    }
 }
 
 /// Chain-wide sweep of keys beyond the schema and the dedicated editors,
