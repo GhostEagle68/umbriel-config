@@ -122,6 +122,54 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
     {
         let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_search_edited(move |query| {
+            let Some(app) = weak.upgrade() else { return };
+            let shell = shell.borrow();
+            let needle = query.trim().to_owned();
+            if needle.is_empty() {
+                // Empty box = leave search; restore the section overview.
+                let section = app.get_current_section().to_string();
+                app.set_page(Page::Section);
+                app.set_page_title(section.clone().into());
+                refill_section(&app, &shell, &section);
+                return;
+            }
+            let sets = chain_path_sets(&shell);
+            let labels = file_labels(&shell);
+            let rows: Vec<SectionRow> = shell
+                .schema
+                .iter()
+                .filter(|entry| schema::matches(entry, &needle))
+                .map(|entry| {
+                    let dotted = entry.path.join(".");
+                    let home = entry_home(&sets, &dotted).unwrap_or(sets.len() - 1);
+                    SectionRow {
+                        label: entry.label.clone().into(),
+                        home_label: labels.get(home).cloned().unwrap_or_default(),
+                        home_index: home as i32,
+                    }
+                })
+                .collect();
+            app.set_search_rows(Rc::new(VecModel::from(rows)).into());
+            app.set_page(Page::Search);
+            app.set_page_title(SharedString::from(needle));
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_raw_requested(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let shell = shell.borrow();
+            let groups = raw_groups(&shell);
+            app.set_raw_groups(Rc::new(VecModel::from(groups)).into());
+            app.set_page(Page::Raw);
+            app.set_page_title("Other settings".into());
+        });
+    }
+    {
+        let weak = app.as_weak();
         app.on_save_requested(move || {
             if let Some(app) = weak.upgrade() {
                 app.set_status("Nothing unsaved yet — editing lands in Phase 2".into());
@@ -358,4 +406,42 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
         .collect();
 
     (groups, others)
+}
+
+/// Chain-wide sweep of keys beyond the schema and the dedicated editors,
+/// grouped per file (mirrors egui's raw_rows + Raw page).
+fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
+    let mut docs: Vec<&ConfigDocument> = shell.includes.docs.iter().map(|inc| &inc.doc).collect();
+    docs.push(&shell.doc);
+    let claims = schema::managed_claims(&docs);
+    let schema_keys = schema::key_set(&shell.schema);
+    let sets = chain_path_sets(shell);
+    shell
+        .includes
+        .docs
+        .iter()
+        .map(|inc| inc.label.as_str())
+        .chain(std::iter::once("Other settings"))
+        .zip(docs)
+        .zip(sets)
+        .map(|((title, doc), set)| {
+            let values: BTreeMap<String, String> = doc.leaf_values().into_iter().collect();
+            let paths: Vec<String> = set.iter().cloned().collect();
+            let rows: Vec<FileRow> = schema::uncovered(&paths, &schema_keys, &claims)
+                .into_iter()
+                .map(|path| FileRow {
+                    label: path.clone().into(),
+                    value: values
+                        .get(&path)
+                        .cloned()
+                        .unwrap_or_else(|| "—".to_owned())
+                        .into(),
+                })
+                .collect();
+            FileGroup {
+                title: title.into(),
+                rows: Rc::new(VecModel::from(rows)).into(),
+            }
+        })
+        .collect()
 }
