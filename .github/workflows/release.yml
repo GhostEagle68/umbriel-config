@@ -101,10 +101,8 @@ jobs:
           fi
           if [ -z "${PREV_TAG:-}" ]; then
             RANGE="$(git rev-list --max-parents=0 HEAD)..${GITHUB_REF_NAME}"
-            SINCE_LABEL="project start"
           else
             RANGE="${PREV_TAG}..${GITHUB_REF_NAME}"
-            SINCE_LABEL="${PREV_TAG}"
           fi
 
           VERSION="${GITHUB_REF_NAME#v}"
@@ -125,9 +123,31 @@ jobs:
               echo "**Channel:** ${CHANNEL} (pre-release — expect rough edges)"
             fi
             echo ""
-            echo "## Changes since ${SINCE_LABEL}"
-            echo ""
           } > "$NOTES"
+
+          # Curated, user-facing notes: the tagged version's section from
+          # CHANGELOG.md (maintained per plan-changelog.md; draft with
+          # `just changelog-draft`). The section header itself is dropped.
+          awk -v version="$VERSION" '
+            /^## \[/ { keep = (index($0, "## [" version "]") == 1) ? 1 : 0; next }
+            keep { print }
+          ' CHANGELOG.md > changelog_section.md
+          if [ -s changelog_section.md ]; then
+            cat changelog_section.md >> "$NOTES"
+          else
+            {
+              echo "No curated notes for this version — see the full commit list below."
+              echo ""
+            } >> "$NOTES"
+          fi
+          rm -f changelog_section.md
+
+          # The every-commit list survives, collapsed, for power users.
+          {
+            echo "<details>"
+            echo "<summary>Full commit list since ${PREV_TAG:-the start of the project}</summary>"
+            echo ""
+          } >> "$NOTES"
 
           # Group commits by conventional-commit type; sections appear only when non-empty.
           declare -A BODIES
@@ -170,6 +190,12 @@ jobs:
               echo "" >> "$NOTES"
             fi
           done
+
+          {
+            echo ""
+            echo "</details>"
+            echo ""
+          } >> "$NOTES"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

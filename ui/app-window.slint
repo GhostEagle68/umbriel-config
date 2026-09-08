@@ -1,0 +1,1073 @@
+// Main window shell for the Slint UI. Phase 0: chrome + navigation + a
+// read-only content placeholder. Pages replace the placeholder in Phases 1–3;
+// everything visual reads tokens from theme.slint.
+
+import { Theme } from "theme.slint";
+import {
+    AboutSlint,
+    CheckBox,
+    ComboBox,
+    LineEdit,
+    ScrollView,
+    Slider,
+} from "std-widgets.slint";
+
+// Embedded fonts (compiler bakes these into the binary). Family names are
+// the fonts' internal names, verified with fc-scan.
+import "../assets/fonts/Inter-Regular.ttf";
+import "../assets/fonts/Inter-Bold.ttf";
+import "../assets/fonts/JetBrainsMono-Regular.ttf";
+
+export struct SectionRow {
+    label: string,
+    home-label: string,
+    home-section: string,
+}
+export enum ValueKind { unset, boolean, integer, float, text, list, choice, color, curve }
+
+export  struct FileRow {
+    label: string,
+    value: string,
+    key: string,
+    kind: ValueKind,
+    choices: [string],
+    swatch: brush,
+    checked: bool,
+    hint: string,
+    min: float,
+    max: float,
+    // Chain index of the file that owns this key (-1 = not set anywhere).
+    home: int,
+    home-label: string,
+    // Differs from the on-disk saved value.
+    changed: bool,
+    // True while the key isn't set in any file yet.
+    available: bool,
+}
+
+export struct FileGroup {
+    title: string,
+    rows: [FileRow],
+}
+
+// One changed key, as shown in the save popup.
+export struct SaveEntry {
+    key: string,
+    label: string,
+    value: string,
+    dest-label: string,
+    dest-index: int,
+}
+
+export enum Page { section, search, raw, settings }
+
+// Small token-driven button; std-widgets are avoided until the styled-page
+// pass so the whole shell carries one identity from day one.
+component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 28px;
+    width: label.width + 24px;
+    border-radius: Theme.radius-s;
+    background: !root.enabled ? Theme.bg-2
+        : ta.has-hover ? (root.primary ? Theme.accent-hover : Theme.border)
+        : (root.primary ? Theme.accent : Theme.bg-2);
+    opacity: root.enabled ? 1.0 : 0.5;
+
+    label := Text {
+        text: root.text;
+        color: root.primary ? white : Theme.text-1;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// One sidebar navigation row (section or file).
+component NavRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    callback selected-fired();
+
+    height: 30px;
+    border-radius: Theme.radius-s;
+    background: root.selected ? Theme.bg-2
+        : ta.has-hover ? Theme.bg-2
+        : transparent;
+
+    Text {
+        x: Theme.space-m;
+        text: root.label;
+        color: root.selected ? Theme.text-1 : Theme.text-2;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        clicked => { root.selected-fired(); }
+    }
+}
+
+// A "setting lives in file X" pointer row used by section and search pages.
+component PointerRow inherits Rectangle {
+    in property <string> label;
+    in property <string> home-label;
+    callback open();
+
+    height: 32px;
+    border-radius: Theme.radius-s;
+    background: ta.has-hover ? Theme.bg-2 : transparent;
+
+    ta := TouchArea {
+        clicked => { root.open(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-m;
+        padding-right: Theme.space-m;
+        spacing: Theme.space-m;
+
+        Text {
+            text: root.label;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        Text {
+            text: "in " + root.home-label + " — open";
+            color: Theme.accent;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// LineEdit that commits on Enter or when focus leaves with edits pending.
+// `draft` holds the working text so blur can compare against the stored
+// value and only commits real changes.
+component DraftEdit inherits LineEdit {
+    in property <string> value;
+    callback commit(string);
+
+    property <string> draft: root.value;
+    text <=> draft;
+    changed value => { self.draft = self.value; }
+    accepted(t) => { root.commit(t); }
+    changed has-focus => {
+        if (!self.has-focus && self.draft != root.value) {
+            root.commit(self.draft);
+        }
+    }
+}
+
+// One file page: schema groups + everything the file holds beyond the
+// schema — laid out like a settings page: a centered column of group
+// cards, label left / editor right, mined hints under the label.
+component FilePage inherits Rectangle {
+    in property <string> title;
+    in property <string> status;
+    in property <[FileGroup]> groups;
+    in property <[FileRow]> others;
+    callback set-value(string, string);
+    callback set-slider-value(string, float);
+    callback slider-preview(string, float);
+    callback view-file(int);
+
+    // Click-away focus: empty page space falls through to the TouchArea,
+    // which hands focus to the sink and thereby blurs (committing) any
+    // open editor. Declared first so real widgets stay on top.
+    sink := FocusScope { }
+
+    ta := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { sink.focus(); }
+    }
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        if root.status != "": Text {
+            text: root.status;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+        }
+
+        for group in root.groups: VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: group.title;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+
+                    for row in group.rows: VerticalLayout {
+                        spacing: 2px;
+                        opacity: row.available ? 0.55 : 1.0;
+
+                        HorizontalLayout {
+                            min-height: 32px;
+                            spacing: Theme.space-m;
+
+                            if row.changed: Rectangle {
+                                width: 7px;
+                                VerticalLayout {
+                                    alignment: center;
+
+                                    Rectangle {
+                                        width: 7px;
+                                        height: 7px;
+                                        border-radius: 4px;
+                                        background: Theme.accent;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: row.label;
+                                width: 260px;
+                                wrap: TextWrap.word-wrap;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            if row.kind == ValueKind.boolean: CheckBox {
+                                checked: row.checked;
+                                toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
+                            }
+                            if row.kind == ValueKind.integer || row.kind == ValueKind.float: HorizontalLayout {
+                                spacing: Theme.space-s;
+                                alignment: start;
+
+                                if row.max > row.min && row.value.to-float() == row.value.to-float(): Slider {
+                                    width: 160px;
+                                    minimum: row.min;
+                                    maximum: row.max;
+                                    value: row.value.to-float();
+                                    changed(v) => { root.slider-preview(row.key, v); }
+                                    released(v) => { root.set-slider-value(row.key, v); }
+                                }
+
+                                DraftEdit {
+                                    width: 140px;
+                                    value: row.value;
+                                    commit(t) => { root.set-value(row.key, t); }
+                                }
+                            }
+                            if row.kind == ValueKind.color: HorizontalLayout {
+                                spacing: Theme.space-s;
+                                alignment: start;
+
+                                Rectangle {
+                                    width: 28px;
+                                    border-radius: Theme.radius-s;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    background: row.swatch;
+                                }
+
+                                DraftEdit {
+                                    width: 140px;
+                                    value: row.value;
+                                    commit(t) => { root.set-value(row.key, t); }
+                                }
+                            }
+                            if row.kind == ValueKind.curve: ComboBox {
+                                width: 180px;
+                                model: row.choices;
+                                current-value: row.value;
+                                selected(v) => { root.set-value(row.key, v); }
+                            }
+                            if row.kind == ValueKind.list: DraftEdit {
+                                width: 220px;
+                                value: row.value;
+                                commit(t) => { root.set-value(row.key, t); }
+                            }
+                            if row.kind == ValueKind.text: DraftEdit {
+                                width: 220px;
+                                value: row.value;
+                                commit(t) => { root.set-value(row.key, t); }
+                            }
+                            if row.kind == ValueKind.choice: ComboBox {
+                                width: 180px;
+                                model: row.choices;
+                                current-value: row.value;
+                                selected(v) => { root.set-value(row.key, v); }
+                            }
+                            if row.kind == ValueKind.unset: Text {
+                                text: row.value;
+                                color: Theme.text-2;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: Theme.space-s;
+                            alignment: start;
+
+                            if row.hint != "": Text {
+                                text: row.hint;
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                opacity: 0.7;
+                                vertical-alignment: center;
+                            }
+
+                            // Ownership badge: click to view the file that
+                            // owns this key (read-only).
+                            if row.home >= 0: Rectangle {
+                                width: badge-text.preferred-width + 10px;
+                                height: badge-text.preferred-height + 4px;
+                                border-radius: Theme.radius-s;
+
+                                badge-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.view-file(row.home); }
+                                }
+
+                                badge-text := Text {
+                                    text: "in " + row.home-label;
+                                    color: badge-ta.has-hover ? Theme.accent : Theme.text-2;
+                                    font-size: Theme.font-small;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.others.length > 0: VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "OTHER KEYS IN THIS FILE";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+
+                    for row in root.others: HorizontalLayout {
+                        min-height: 28px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: row.label;
+                            color: Theme.text-2;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        Text {
+                            text: row.value;
+                            color: Theme.text-2;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Settings page: app updates, the compositor's latest commit, about.
+component SettingsPage inherits Rectangle {
+    in property <string> app-version;
+    in property <bool> check-updates-on-start;
+    in property <string> update-note;
+    in property <bool> update-available;
+    in property <string> upstream-note;
+    callback check-now();
+    callback toggled(bool);
+    callback open-url(string);
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: "Settings";
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        // ── updates ─────────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+
+            Text {
+                text: "Updates";
+                color: Theme.text-1;
+                font-size: Theme.font-large;
+                font-weight: 700;
+            }
+
+            CheckBox {
+                text: "Check for updates on startup";
+                checked: root.check-updates-on-start;
+                toggled => { root.toggled(self.checked); }
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-m;
+
+                ActionButton {
+                    text: "Check for update";
+                    clicked => { root.check-now(); }
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.update-note == ""
+                        ? "Checks against GitHub releases; one request, nothing sent."
+                        : root.update-note;
+                    color: root.update-available ? Theme.success : Theme.text-2;
+                    vertical-alignment: center;
+                    wrap: TextWrap.word-wrap;
+                }
+            }
+        }
+
+        // ── Umbriel (the compositor) ────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+
+            Text {
+                text: "Umbriel Latest Commit";
+                color: Theme.text-1;
+                font-size: Theme.font-large;
+                font-weight: 700;
+            }
+
+            Text {
+                text: root.upstream-note == ""
+                    ? "The compositor's latest commit loads while you're here."
+                    : root.upstream-note;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                wrap: TextWrap.word-wrap;
+            }
+
+            ActionButton {
+                text: "Open repository";
+                clicked => { root.open-url("https://github.com/noctalia-dev/umbriel"); }
+            }
+        }
+
+        // ── about ───────────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+
+            Text {
+                text: "About";
+                color: Theme.text-1;
+                font-size: Theme.font-large;
+                font-weight: 700;
+            }
+
+            Text {
+                text: "umbriel-config v" + root.app-version;
+                color: Theme.text-1;
+            }
+
+            ActionButton {
+                text: "Source & issue tracker";
+                clicked => { root.open-url("https://github.com/GhostEagle68/umbriel-config"); }
+            }
+
+            // The widget asks for 100% of its parent — pin it to badge
+            // size (logo 256px wide + padding + version text) or it
+            // swallows the whole page.
+            AboutSlint {
+                width: 200px;
+                height: 100px;
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    preferred-width: 960px;
+    preferred-height: 640px;
+    min-width: 720px;
+    min-height: 480px;
+    title: "Umbriel Config";
+    background: Theme.bg-0;
+    default-font-family: "Inter";
+    default-font-size: Theme.font-body;
+
+    in property <string> config-path;
+    in property <int> include-count;
+    in property <string> include-note;
+    in property <bool> dirty;
+    in property <[string]> sections;
+    in property <string> page-title;
+    in property <string> status;
+    in-out property <string> current-section;
+    in-out property <bool> show-exit-confirm: false;
+    in-out property <Page> page: Page.section;
+    in property <[FileGroup]> file-groups;
+    in property <[SectionRow]> search-rows;
+    in property <[FileGroup]> raw-groups;
+    // Never filled; keeps FilePage's Other-keys section empty on other pages.
+    in property <[FileRow]> no-rows;
+    // Keys whose current value differs from the on-disk snapshot.
+    in property <int> changed-count;
+    in property <[string]> destinations;
+    in-out property <bool> show-save-popup: false;
+    in property <[SaveEntry]> save-entries;
+    // Validation result of the last save (empty = nothing to report).
+    in-out property <string> validate-note;
+    in-out property <bool> show-file-popup: false;
+    in property <string> popup-file-title;
+    in property <string> popup-file-path;
+    in property <string> popup-file-text;
+
+    callback search-edited(string);
+    callback raw-requested();
+    callback section-selected(string);
+    callback set-value(string, string);
+    callback set-slider-value(string, float);
+    callback slider-preview(string, float);
+    callback view-file(int);
+    callback save-dest-chosen(string, string);
+    callback save-confirmed();
+    callback reset-entry(string);
+    callback discard-all();
+    callback save-requested();
+    callback sync-schema-requested();
+    callback exit-requested();
+
+    // Settings page
+    in property <string> app-version;
+    in-out property <bool> check-updates-on-start: true;
+    in property <string> update-note;
+    in property <bool> update-available: false;
+    in property <string> upstream-note;
+    callback settings-requested();
+    callback check-updates-requested();
+    callback check-updates-toggled(bool);
+    callback open-url(string);
+
+    VerticalLayout {
+        // ── header ─────────────────────────────────────────────
+        Rectangle {
+            height: 44px;
+            background: Theme.bg-1;
+
+            HorizontalLayout {
+                padding-left: Theme.space-l;
+                padding-right: Theme.space-l;
+                spacing: Theme.space-m;
+                alignment: start;
+
+                Text {
+                    text: "Umbriel Config";
+                    color: Theme.text-1;
+                    font-size: Theme.font-large;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.config-path;
+                    color: Theme.text-2;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "+" + root.include-count + " included";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                    visible: root.include-count > 0;
+                }
+
+                LineEdit {
+                    width: 200px;
+                    placeholder-text: "Search Settings";
+                    edited(t) => { root.search-edited(t); }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                ActionButton {
+                    text: "Sync schema";
+                    clicked => { root.sync-schema-requested(); }
+                }
+
+                ActionButton {
+                    text: "Save" + (root.changed-count > 0 ? " · " + root.changed-count : "");
+                    primary: true;
+                    enabled: root.dirty;
+                    clicked => { root.save-requested(); }
+                }
+            }
+        }
+
+        // include warning strip (only when notes exist)
+        if root.include-note != "": Rectangle {
+            height: 24px;
+            background: Theme.bg-1;
+            Text {
+                x: Theme.space-l;
+                text: "⚠ " + root.include-note;
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+        }
+
+        // validation result of the last save (errors and warnings)
+        if root.validate-note != "": Rectangle {
+            height: 24px;
+            background: Theme.bg-1;
+            Text {
+                x: Theme.space-l;
+                text: "⚠ " + root.validate-note;
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalLayout {
+            // ── sidebar ─────────────────────────────────────────
+                        Rectangle {
+                width: 208px;
+                background: Theme.bg-1;
+
+                VerticalLayout {
+                    spacing: Theme.space-xs;
+
+                    ScrollView {
+                        vertical-stretch: 1;
+
+                        VerticalLayout {
+                            padding: Theme.space-s;
+                            spacing: Theme.space-xs;
+                            alignment: start;
+
+                            Text {
+                                text: "SECTIONS";
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                            }
+
+                            for section in root.sections: NavRow {
+                                label: section;
+                                selected: root.page == Page.section && section == root.current-section;
+                                selected-fired => { root.section-selected(section); }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        vertical-stretch: 0;
+                        padding: Theme.space-s;
+                        spacing: Theme.space-xs;
+
+                        NavRow {
+                            label: "Other Settings";
+                            selected: root.page == Page.raw;
+                            selected-fired => { root.raw-requested(); }
+                        }
+
+                        NavRow {
+                            label: "Settings" + (root.update-available ? " •" : "");
+                            selected: root.page == Page.settings;
+                            selected-fired => { root.settings-requested(); }
+                        }
+
+                        ActionButton {
+                            text: "Exit";
+                            clicked => {
+                                if (root.dirty) {
+                                    root.show-exit-confirm = true;
+                                } else {
+                                    root.exit-requested();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── content ─────────────────────────────────────────
+            Rectangle {
+                background: Theme.bg-0;
+
+                if root.page == Page.section: svs := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: section-page.preferred-height;
+
+                    // Full content width; the page's own layout padding
+                    // insets the cards. Width depends only on the
+                    // ScrollView's visible width, so no intrinsic-size
+                    // feedback cycles.
+                    section-page := FilePage {
+                        width: svs.visible-width;
+                        title: root.page-title;
+                        groups: root.file-groups;
+                        others: root.no-rows;
+                        status: root.status;
+                        set-value(k, v) => { root.set-value(k, v); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
+                    }
+                }
+
+                if root.page == Page.search: ScrollView {
+                    VerticalLayout {
+                        padding: Theme.space-l;
+                        spacing: Theme.space-m;
+                        alignment: start;
+                        Text {
+                            text: root.page-title;
+                            color: Theme.text-1;
+                            font-size: Theme.font-title;
+                            font-weight: 700;
+                        }
+
+                        for row in root.search-rows: PointerRow {
+                            label: row.label;
+                            home-label: row.home-label;
+                            open => { root.section-selected(row.home-section); }
+                        }
+                        if root.search-rows.length == 0: Text {
+                            text: "No matches.";
+                            color: Theme.text-2;
+                        }
+                    }
+                }
+                if root.page == Page.raw: srv := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: fp.preferred-height;
+
+                    fp := FilePage {
+                        width: srv.visible-width;
+                        title: "Other settings";
+                        groups: root.raw-groups;
+                        others: root.no-rows;
+                    }
+                }
+
+                if root.page == Page.settings: stv := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: settings-page.preferred-height;
+
+                    settings-page := SettingsPage {
+                        width: stv.visible-width;
+                        app-version: root.app-version;
+                        check-updates-on-start: root.check-updates-on-start;
+                        update-note: root.update-note;
+                        update-available: root.update-available;
+                        upstream-note: root.upstream-note;
+                        check-now => { root.check-updates-requested(); }
+                        toggled(v) => { root.check-updates-toggled(v); }
+                        open-url(u) => { root.open-url(u); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── save popup: per-key destinations + confirm ──────────
+    if root.show-save-popup: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+
+        // Scrim click cancels; the card absorbs its own clicks.
+        TouchArea {
+            clicked => { root.show-save-popup = false; }
+        }
+
+        Rectangle {
+            width: min(parent.width - 96px, 640px);
+            height: min(parent.height - 96px, 480px);
+            border-radius: Theme.radius-l;
+            background: Theme.bg-1;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            TouchArea { }
+
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: "Save changes";
+                    color: Theme.text-1;
+                    font-size: Theme.font-large;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "Pick where each changed setting should live, or reset it.";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                }
+
+                ScrollView {
+                    VerticalLayout {
+                        spacing: Theme.space-s;
+                        alignment: start;
+
+                        for entry in root.save-entries: HorizontalLayout {
+                            spacing: Theme.space-m;
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+
+                                Text {
+                                    text: entry.label;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: entry.value;
+                                    color: Theme.text-2;
+                                    font-family: Theme.font-mono;
+                                    font-size: Theme.font-small;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            ComboBox {
+                                width: 200px;
+                                model: root.destinations;
+                                current-index: entry.dest-index;
+                                selected(v) => { root.save-dest-chosen(entry.key, v); }
+                            }
+
+                            ActionButton {
+                                text: "Reset";
+                                clicked => { root.reset-entry(entry.key); }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-s;
+
+                    ActionButton {
+                        text: "Discard all";
+                        clicked => { root.discard-all(); }
+                    }
+
+                    ActionButton {
+                        text: "Cancel";
+                        clicked => { root.show-save-popup = false; }
+                    }
+
+                    ActionButton {
+                        text: "Save";
+                        primary: true;
+                        clicked => { root.save-confirmed(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── unsaved-changes confirm overlay ──────────────────────
+    if root.show-exit-confirm: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+
+        Rectangle {
+            width: 340px;
+            height: 150px;
+            border-radius: Theme.radius-l;
+            background: Theme.bg-1;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: "Unsaved changes";
+                    color: Theme.danger;
+                    font-size: Theme.font-large;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "Quit without saving?";
+                    color: Theme.text-2;
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-s;
+                    ActionButton {
+                        text: "Keep editing";
+                        clicked => { root.show-exit-confirm = false; }
+                    }
+
+                    ActionButton {
+                        text: "Quit anyway";
+                        primary: true;
+                        clicked => { root.exit-requested(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── read-only file view popup (opened from a row's "in <file>" badge) ──
+    if root.show-file-popup: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+
+        // Clicking the scrim closes the popup…
+        TouchArea {
+            clicked => { root.show-file-popup = false; }
+        }
+
+        Rectangle {
+            width: min(parent.width - 96px, 760px);
+            height: parent.height - 96px;
+            border-radius: Theme.radius-l;
+            background: Theme.bg-1;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            // …the card absorbs its own clicks so it stays open.
+            TouchArea { }
+
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-m;
+
+                HorizontalLayout {
+                    spacing: Theme.space-m;
+
+                    VerticalLayout {
+                        spacing: 2px;
+
+                        Text {
+                            text: root.popup-file-title;
+                            color: Theme.text-1;
+                            font-size: Theme.font-large;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.popup-file-path;
+                            color: Theme.text-2;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    ActionButton {
+                        text: "Close";
+                        clicked => { root.show-file-popup = false; }
+                    }
+                }
+
+                ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    // Non-layout child: the viewport must be pinned to the
+                    // content's natural size or nothing ever scrolls.
+                    viewport-width: file-text.preferred-width;
+                    viewport-height: file-text.preferred-height;
+
+                    file-text := Text {
+                        text: root.popup-file-text;
+                        color: Theme.text-1;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-small;
+                        wrap: no-wrap;
+                        width: self.preferred-width;
+                        height: self.preferred-height;
+                    }
+                }
+            }
+        }
+    }
+}
