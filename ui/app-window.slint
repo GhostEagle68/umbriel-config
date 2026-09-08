@@ -3,7 +3,7 @@
 // everything visual reads tokens from theme.slint.
 
 import { Theme } from "theme.slint";
-import {CheckBox, LineEdit, ScrollView} from "std-widgets.slint";
+import {CheckBox, ComboBox, LineEdit, ScrollView} from "std-widgets.slint";
 
 // Embedded fonts (compiler bakes these into the binary). Family names are
 // the fonts' internal names, verified with fc-scan.
@@ -24,6 +24,7 @@ export  struct FileRow {
     value: string,
     key: string,
     kind: ValueKind,
+    choices: [string],
 }
 
 export struct FileGroup {
@@ -162,7 +163,24 @@ component FilePage inherits Rectangle {
                     checked: row.value == "true";
                     toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
                 }
-                if row.kind != ValueKind.boolean: Text {
+                if row.kind == ValueKind.integer || row.kind == ValueKind.float: LineEdit {
+                    width: 140px;
+                    text: row.value;
+                    accepted(t) => { root.set-value(row.key, t); }
+                }
+                if row.kind == ValueKind.text || row.kind == ValueKind.curve
+                    || row.kind == ValueKind.color || row.kind == ValueKind.list: LineEdit {
+                    width: 220px;
+                    text: row.value;
+                    accepted(t) => { root.set-value(row.key, t); }
+                }
+                if row.kind == ValueKind.choice: ComboBox {
+                    width: 180px;
+                    model: row.choices;
+                    current-value: row.value;
+                    selected(v) => { root.set-value(row.key, v); }
+                }
+                if row.kind == ValueKind.unset: Text {
                     text: row.value;
                     color: Theme.text-2;
                     font-family: Theme.font-mono;
@@ -406,7 +424,6 @@ export component AppWindow inherits Window {
                 }
 
                 if root.page == Page.file: ScrollView {
-                    padding: Theme.space-l;
                     FilePage {
                         title: root.page-title;
                         groups: root.file-groups;

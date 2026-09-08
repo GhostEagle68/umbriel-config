@@ -230,6 +230,22 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 return;
             }
             let file_index = file_index as usize;
+            let formatted = {
+                let shell = shell.borrow();
+                let kind = shell
+                    .schema
+                    .iter()
+                    .find(|entry| entry.path.join(".") == key.as_str())
+                    .map(|entry| &entry.kind);
+                commit_value(kind, &value)
+            };
+            let value_text = match formatted {
+                Ok(value_text) => value_text,
+                Err(err) => {
+                    app.set_status(err.into());
+                    return;
+                }
+            };
             let accepted = {
                 let mut shell = shell.borrow_mut();
                 let doc: &mut ConfigDocument = if file_index == shell.includes.docs.len() {
@@ -239,10 +255,10 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 } else {
                     return;
                 };
-                doc.set_leaf_text(&key, &value)
+                doc.set_leaf_text(&key, &value_text)
             };
             if !accepted {
-                app.set_status(format!("umbriel would reject {key} = {value}").into());
+                app.set_status(format!("umbriel would reject {key} = {value_text}").into());
                 return;
             }
             let shell = shell.borrow();
@@ -411,7 +427,7 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
         }
         let value = values
             .get(&dotted)
-            .cloned()
+            .map(|raw| display_value(raw))
             .unwrap_or_else(|| "—".to_owned());
         groups
             .entry(entry.section.clone())
@@ -421,6 +437,7 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
                 value: value.into(),
                 key: dotted.clone().into(),
                 kind: value_kind(&entry.kind),
+                choices: choice_model(&entry.kind),
             });
     }
     let groups = groups
@@ -443,6 +460,7 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
                 .into(),
             key: path.clone().into(),
             kind: ValueKind::Unset,
+            choices: choice_model(&schema::Kind::Text),
         })
         .collect();
 
@@ -479,6 +497,7 @@ fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
                         .into(),
                     key: path.clone().into(),
                     kind: ValueKind::Unset,
+                    choices: choice_model(&schema::Kind::Text),
                 })
                 .collect();
             FileGroup {
@@ -487,6 +506,15 @@ fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
             }
         })
         .collect()
+}
+
+/// Dropdown vocabulary for Choice kinds; empty for everything else.
+fn choice_model(kind: &schema::Kind) -> slint::ModelRc<SharedString> {
+    let choices: Vec<SharedString> = match kind {
+        schema::Kind::Choice(values) => values.iter().map(SharedString::from).collect(),
+        _ => Vec::new(),
+    };
+    Rc::new(VecModel::from(choices)).into()
 }
 
 fn value_kind(kind: &schema::Kind) -> ValueKind {
@@ -499,5 +527,62 @@ fn value_kind(kind: &schema::Kind) -> ValueKind {
         schema::Kind::Choice(_) => ValueKind::Choice,
         schema::Kind::Color => ValueKind::Color,
         schema::Kind::Curve => ValueKind::Curve,
+    }
+}
+
+/// Display form: strip the TOML repr's surrounding quotes for editing.
+fn display_value(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let trimmed = trimmed
+        .strip_prefix('"')
+        .and_then(|t| t.strip_suffix('"'))
+        .or_else(|| {
+            trimmed
+                .strip_prefix('\'')
+                .and_then(|t| t.strip_suffix('\''))
+        })
+        .unwrap_or(trimmed);
+    trimmed.to_owned()
+}
+
+/// Commit form: turn editor input into the value text `set_leaf_text`
+/// expects, validating/clamping per Kind. `Err` = user-facing rejection.
+fn commit_value(kind: Option<&schema::Kind>, raw: &str) -> Result<String, String> {
+    let raw = raw.trim();
+    match kind {
+        Some(schema::Kind::Bool) => Ok(raw.to_owned()),
+        Some(schema::Kind::Integer { min, max }) => {
+            let mut value: i64 = raw
+                .parse()
+                .map_err(|_| format!("'{raw}' is not a whole number"))?;
+            if let Some(min) = min {
+                value = value.max(*min);
+            }
+            if let Some(max) = max {
+                value = value.min(*max);
+            }
+            Ok(value.to_string())
+        }
+        Some(schema::Kind::Float { min, max }) => {
+            let mut value: f64 = raw
+                .parse()
+                .map_err(|_| format!("'{raw}' is not a number"))?;
+            if let Some(min) = min {
+                value = value.max(*min);
+            }
+            if let Some(max) = max {
+                value = value.min(*max);
+            }
+            Ok(value.to_string())
+        }
+        // Strings in the file are quoted; Debug-format escapes the same way
+        // TOML basic strings do for the ASCII values configs use.
+        Some(
+            schema::Kind::Text
+            | schema::Kind::Choice(_)
+            | schema::Kind::Color
+            | schema::Kind::Curve,
+        ) => Ok(format!("{raw:?}")),
+        _ => Ok(raw.to_owned()),
     }
 }
