@@ -20,13 +20,25 @@ test:
 lint:
     cargo clippy --all-targets -- -D warnings
 
-# Format all source files
-format:
+# Format all source files (Rust + Slint; slint-lsp: cargo install slint-lsp)
+format: format-slint
     cargo fmt
 
-# Check formatting without writing
-format-check:
+# Check formatting without writing (Rust + Slint)
+format-check: format-slint-check
     cargo fmt --check
+
+# Format .slint files in place
+format-slint:
+    #!/usr/bin/env sh
+    for f in ui/*.slint; do slint-lsp format -i "$f"; done
+
+# Check .slint formatting without writing
+format-slint-check:
+    #!/usr/bin/env sh
+    for f in ui/*.slint; do
+        slint-lsp format "$f" | diff -u "$f" - || exit 1
+    done
 
 # Full local gate: formatting, lint, tests
 verify: format-check lint test

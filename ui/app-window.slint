@@ -26,6 +26,8 @@ export  struct FileRow {
     kind: ValueKind,
     choices: [string],
     swatch: brush,
+    checked: bool,
+    hint: string,
 }
 
 export struct FileGroup {
@@ -161,7 +163,7 @@ component FilePage inherits Rectangle {
                 }
                 Rectangle { horizontal-stretch: 1; }
                 if row.kind == ValueKind.boolean: CheckBox {
-                    checked: row.value == "true";
+                    checked: row.checked;
                     toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
                 }
                 if row.kind == ValueKind.integer || row.kind == ValueKind.float: LineEdit {
@@ -213,6 +215,13 @@ component FilePage inherits Rectangle {
                     color: Theme.text-2;
                     font-family: Theme.font-mono;
                     font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+                if row.hint != "": Text {
+                    text: row.hint;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    opacity: 0.7;
                     vertical-alignment: center;
                 }
             }

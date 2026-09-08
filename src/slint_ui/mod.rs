@@ -425,10 +425,9 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
         if !owned.contains(&dotted) {
             continue;
         }
-        let value = values
-            .get(&dotted)
-            .map(|raw| display_value(&entry.kind, raw))
-            .unwrap_or_else(|| "—".to_owned());
+        let parts: Vec<&str> = entry.path.iter().map(String::as_str).collect();
+        let value = typed_value(doc, entry).unwrap_or_else(|| "—".to_owned());
+        let checked = doc.get_bool(&parts).unwrap_or(false);
         let swatch = if matches!(entry.kind, schema::Kind::Color) {
             swatch_for(&value)
         } else {
@@ -444,6 +443,8 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
                 kind: value_kind(&entry.kind),
                 choices: choice_model(&entry.kind),
                 swatch,
+                checked,
+                hint: entry_hint(entry).into(),
             });
     }
     let groups = groups
@@ -457,17 +458,21 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
     let others: Vec<FileRow> = owned
         .iter()
         .filter(|path| !schema_paths.contains(*path))
-        .map(|path| FileRow {
-            label: path.clone().into(),
-            value: values
+        .map(|path| {
+            let value = values
                 .get(path)
-                .cloned()
-                .unwrap_or_else(|| "—".to_owned())
-                .into(),
-            key: path.clone().into(),
-            kind: ValueKind::Unset,
-            choices: choice_model(&schema::Kind::Text),
-            swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
+                .map(|raw| strip_decor(raw))
+                .unwrap_or_else(|| "—".to_owned());
+            FileRow {
+                label: path.clone().into(),
+                value: value.into(),
+                key: path.clone().into(),
+                kind: ValueKind::Unset,
+                choices: choice_model(&schema::Kind::Text),
+                swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
+                checked: false,
+                hint: String::new().into(),
+            }
         })
         .collect();
 
@@ -495,17 +500,21 @@ fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
             let paths: Vec<String> = set.iter().cloned().collect();
             let rows: Vec<FileRow> = schema::uncovered(&paths, &schema_keys, &claims)
                 .into_iter()
-                .map(|path| FileRow {
-                    label: path.clone().into(),
-                    value: values
+                .map(|path| {
+                    let value = values
                         .get(&path)
-                        .cloned()
-                        .unwrap_or_else(|| "—".to_owned())
-                        .into(),
-                    key: path.clone().into(),
-                    kind: ValueKind::Unset,
-                    choices: choice_model(&schema::Kind::Text),
-                    swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
+                        .map(|raw| strip_decor(raw))
+                        .unwrap_or_else(|| "—".to_owned());
+                    FileRow {
+                        label: path.clone().into(),
+                        value: value.into(),
+                        key: path.clone().into(),
+                        kind: ValueKind::Unset,
+                        choices: choice_model(&schema::Kind::Text),
+                        swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
+                        checked: false,
+                        hint: String::new().into(),
+                    }
                 })
                 .collect();
             FileGroup {
@@ -540,29 +549,6 @@ fn value_kind(kind: &schema::Kind) -> ValueKind {
         schema::Kind::Color => ValueKind::Color,
         schema::Kind::Curve => ValueKind::Curve,
     }
-}
-
-/// Display form: strip the TOML repr — brackets for lists, quotes for
-/// strings — so editors see bare content.
-fn display_value(kind: &schema::Kind, raw: &str) -> String {
-    let mut text = raw.trim().to_owned();
-    if matches!(kind, schema::Kind::List)
-        && let Some(inner) = text.strip_prefix('[')
-        && let Some(inner) = inner.strip_suffix(']')
-    {
-        text = inner.to_owned();
-    }
-    if let Some(unquoted) = text.strip_prefix('"')
-        && let Some(unquoted) = unquoted.strip_suffix('"')
-    {
-        return unquoted.to_owned();
-    }
-    if let Some(unquoted) = text.strip_prefix('\'')
-        && let Some(unquoted) = unquoted.strip_suffix('\'')
-    {
-        return unquoted.to_owned();
-    }
-    text
 }
 
 /// Commit form: turn editor input into the value text `set_leaf_text`
@@ -624,4 +610,82 @@ fn swatch_for(value: &str) -> slint::Brush {
         channel(2..4),
         channel(4..6),
     ))
+}
+
+/// Clean, editor-ready text for a schema key, read through the typed
+/// getters — never the TOML repr, which carries trailing comments.
+fn typed_value(doc: &ConfigDocument, entry: &schema::Entry) -> Option<String> {
+    let parts: Vec<&str> = entry.path.iter().map(String::as_str).collect();
+    match &entry.kind {
+        schema::Kind::Bool => doc.get_bool(&parts).map(|v| v.to_string()),
+        schema::Kind::Integer { .. } => doc.get_integer(&parts).map(|v| v.to_string()),
+        schema::Kind::Float { .. } => doc.get_float(&parts).map(|v| v.to_string()),
+        schema::Kind::List => list_text(doc, &parts),
+        schema::Kind::Text
+        | schema::Kind::Choice(_)
+        | schema::Kind::Color
+        | schema::Kind::Curve => doc.get_string(&parts),
+    }
+}
+
+/// Comma-joined list display, mirroring egui's array_text.
+fn list_text(doc: &ConfigDocument, parts: &[&str]) -> Option<String> {
+    if let Some(values) = doc.get_integers(parts) {
+        return Some(
+            values
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
+    if let Some(values) = doc.get_floats(parts) {
+        return Some(
+            values
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
+    doc.get_strings(parts).map(|values| values.join(", "))
+}
+
+/// Mined metadata shown beside the editor: range from the Kind payload,
+/// then the mined unit. Empty when the key carries neither.
+fn entry_hint(entry: &schema::Entry) -> String {
+    let range = match &entry.kind {
+        schema::Kind::Integer { min, max } => Some(range_text(
+            min.map(|v| v.to_string()),
+            max.map(|v| v.to_string()),
+        )),
+        schema::Kind::Float { min, max } => Some(range_text(
+            min.map(|v| v.to_string()),
+            max.map(|v| v.to_string()),
+        )),
+        _ => None,
+    };
+    let mut hints: Vec<String> = range.into_iter().filter(|r| !r.is_empty()).collect();
+    if let Some(unit) = &entry.unit {
+        hints.push(unit.clone());
+    }
+    hints.join(" • ")
+}
+
+fn range_text(min: Option<String>, max: Option<String>) -> String {
+    match (min, max) {
+        (Some(min), Some(max)) => format!("{min}–{max}"),
+        (Some(min), None) => format!("≥ {min}"),
+        (None, Some(max)) => format!("≤ {max}"),
+        (None, None) => String::new(),
+    }
+}
+
+/// Best-effort decor strip for non-schema values (repr may carry comments).
+fn strip_decor(raw: &str) -> String {
+    let trimmed = raw.trim();
+    match trimmed.split_once(" #") {
+        Some((value, _)) => value.trim_end().to_owned(),
+        None => trimmed.to_owned(),
+    }
 }
