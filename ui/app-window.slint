@@ -3,7 +3,13 @@
 // everything visual reads tokens from theme.slint.
 
 import { Theme } from "theme.slint";
-import { CheckBox, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
+import {
+    CheckBox,
+    ComboBox,
+    LineEdit,
+    ScrollView,
+    Slider,
+} from "std-widgets.slint";
 
 // Embedded fonts (compiler bakes these into the binary). Family names are
 // the fonts' internal names, verified with fc-scan.
@@ -28,6 +34,8 @@ export  struct FileRow {
     swatch: brush,
     checked: bool,
     hint: string,
+    min: float,
+    max: float,
 }
 
 export struct FileGroup {
@@ -155,6 +163,8 @@ component FilePage inherits Rectangle {
     in property <[FileGroup]> groups;
     in property <[FileRow]> others;
     callback set-value(string, string);
+    callback set-slider-value(string, float);
+    callback slider-preview(string, float);
 
     // Click-away focus: empty page space falls through to the TouchArea,
     // which hands focus to the sink and thereby blurs (committing) any
@@ -168,8 +178,10 @@ component FilePage inherits Rectangle {
     }
 
     VerticalLayout {
-        padding-left: max(Theme.space-l, (parent.width - 680px) / 2);
-        padding-right: max(Theme.space-l, (parent.width - 680px) / 2);
+        // Referencing parent.width here feeds the layout's intrinsic width
+        // back into its own padding calculation.
+        padding-left: Theme.space-l;
+        padding-right: Theme.space-l;
         padding-top: Theme.space-l;
         padding-bottom: Theme.space-l;
         spacing: Theme.space-l;
@@ -219,10 +231,24 @@ component FilePage inherits Rectangle {
                                 checked: row.checked;
                                 toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
                             }
-                            if row.kind == ValueKind.integer || row.kind == ValueKind.float: DraftEdit {
-                                width: 140px;
-                                value: row.value;
-                                commit(t) => { root.set-value(row.key, t); }
+                            if row.kind == ValueKind.integer || row.kind == ValueKind.float: HorizontalLayout {
+                                spacing: Theme.space-s;
+                                alignment: start;
+
+                                if row.max > row.min && row.value.to-float() == row.value.to-float(): Slider {
+                                    width: 160px;
+                                    minimum: row.min;
+                                    maximum: row.max;
+                                    value: row.value.to-float();
+                                    changed(v) => { root.slider-preview(row.key, v); }
+                                    released(v) => { root.set-slider-value(row.key, v); }
+                                }
+
+                                DraftEdit {
+                                    width: 140px;
+                                    value: row.value;
+                                    commit(t) => { root.set-value(row.key, t); }
+                                }
                             }
                             if row.kind == ValueKind.color: HorizontalLayout {
                                 spacing: Theme.space-s;
@@ -367,6 +393,8 @@ export component AppWindow inherits Window {
     callback section-selected(string);
     callback open-file(int);
     callback set-value(string, string);
+    callback set-slider-value(string, float);
+    callback slider-preview(string, float);
     callback save-requested();
     callback sync-schema-requested();
     callback exit-requested();
@@ -572,6 +600,8 @@ export component AppWindow inherits Window {
                         groups: root.file-groups;
                         others: root.other-rows;
                         set-value(k, v) => { root.set-value(k, v); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
                     }
                 }
 

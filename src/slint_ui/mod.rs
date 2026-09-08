@@ -221,10 +221,35 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
 
     {
-        let weak = app.as_weak();
-        let shell = Rc::clone(&shell);
-        app.on_set_value(move |key, value| {
-            let Some(app) = weak.upgrade() else { return };
+        {
+            let weak = app.as_weak();
+            let shell = Rc::clone(&shell);
+            app.on_set_value(move |key, value| {
+                let Some(app) = weak.upgrade() else { return };
+                commit_edit(&app, &shell, &key, &value);
+            });
+        }
+        {
+            let weak = app.as_weak();
+            let shell = Rc::clone(&shell);
+            app.on_set_slider_value(move |key, value| {
+                let Some(app) = weak.upgrade() else { return };
+                let raw = slider_text(&shell.borrow().schema, &key, value);
+                commit_edit(&app, &shell, &key, &raw);
+            });
+        }
+        {
+            let weak = app.as_weak();
+            let shell = Rc::clone(&shell);
+            app.on_slider_preview(move |key, value| {
+                let Some(app) = weak.upgrade() else { return };
+                let raw = slider_text(&shell.borrow().schema, &key, value);
+                preview_row(&app, &key, &raw);
+            });
+        }
+        /// Shared write path for text edits and slider releases: format the raw
+        /// input per Kind, write through set_leaf_text, then refresh the row.
+        fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str) {
             let file_index = app.get_current_file();
             if file_index < 0 {
                 return;
@@ -235,9 +260,9 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 let kind = shell
                     .schema
                     .iter()
-                    .find(|entry| entry.path.join(".") == key.as_str())
+                    .find(|entry| entry.path.join(".") == key)
                     .map(|entry| &entry.kind);
-                commit_value(kind, &value)
+                commit_value(kind, raw)
             };
             let value_text = match formatted {
                 Ok(value_text) => value_text,
@@ -255,7 +280,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 } else {
                     return;
                 };
-                doc.set_leaf_text(&key, &value_text)
+                doc.set_leaf_text(key, &value_text)
             };
             if !accepted {
                 app.set_status(format!("umbriel would reject {key} = {value_text}").into());
@@ -263,8 +288,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             }
             let shell = shell.borrow();
             app.set_dirty(shell.any_modified());
-            refresh_row(&app, &shell, file_index, &key);
-        });
+            refresh_row(app, &shell, file_index, key);
+        }
     }
 
     app.run()
@@ -453,6 +478,8 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
                 swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
                 checked: false,
                 hint: String::new().into(),
+                min: 0.0,
+                max: 0.0,
             }
         })
         .collect();
@@ -464,6 +491,7 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
 fn file_row(doc: &ConfigDocument, entry: &schema::Entry) -> FileRow {
     let value = typed_value(doc, entry).unwrap_or_else(|| "—".to_owned());
     let parts: Vec<&str> = entry.path.iter().map(String::as_str).collect();
+    let (min, max) = kind_bounds(&entry.kind);
     FileRow {
         label: entry.label.clone().into(),
         value: value.clone().into(),
@@ -477,6 +505,8 @@ fn file_row(doc: &ConfigDocument, entry: &schema::Entry) -> FileRow {
         },
         checked: doc.get_bool(&parts).unwrap_or(false),
         hint: entry_hint(entry).into(),
+        min,
+        max,
     }
 }
 
@@ -565,6 +595,8 @@ fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
                         swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
                         checked: false,
                         hint: String::new().into(),
+                        min: 0.0,
+                        max: 0.0,
                     }
                 })
                 .collect();
@@ -599,6 +631,65 @@ fn value_kind(kind: &schema::Kind) -> ValueKind {
         schema::Kind::Choice(_) => ValueKind::Choice,
         schema::Kind::Color => ValueKind::Color,
         schema::Kind::Curve => ValueKind::Curve,
+    }
+}
+
+/// Slider bounds for number kinds that carry both a min and a max;
+/// (0.0, 0.0) means un-ranged; no slider.
+fn kind_bounds(kind: &schema::Kind) -> (f32, f32) {
+    match kind {
+        schema::Kind::Integer {
+            min: Some(min),
+            max: Some(max),
+        } => (*min as f32, *max as f32),
+        schema::Kind::Float {
+            min: Some(min),
+            max: Some(max),
+        } => (*min as f32, *max as f32),
+        _ => (0.0, 0.0),
+    }
+}
+
+/// Text for a slider float, rounded for whole-number kinds so the write
+/// path can parse it back as i64.
+fn slider_text(schema: &[schema::Entry], key: &str, value: f32) -> String {
+    let is_int = schema.iter().any(|entry| {
+        entry.path.join(".") == key && matches!(entry.kind, schema::Kind::Integer { .. })
+    });
+    if is_int {
+        format!("{}", value.round() as i64)
+    } else {
+        format!("{value}")
+    }
+}
+
+/// Show a dragged slider's live value in the row's text box without
+/// touching the document. The unchanged-text guard keeps the Slider's
+/// `changed` callback from looping back through set_row_data.
+fn preview_row(app: &AppWindow, key: &str, value_text: &str) {
+    let groups = app.get_file_groups();
+    let Some(groups) = groups.as_any().downcast_ref::<VecModel<FileGroup>>() else {
+        return;
+    };
+    for gi in 0..groups.row_count() {
+        let Some(group) = groups.row_data(gi) else {
+            continue;
+        };
+        let Some(rows) = group.rows.as_any().downcast_ref::<VecModel<FileRow>>() else {
+            continue;
+        };
+        for ri in 0..rows.row_count() {
+            let Some(mut old) = rows.row_data(ri) else {
+                continue;
+            };
+            if old.key.as_str() == key {
+                if old.value.as_str() != value_text {
+                    old.value = value_text.into();
+                    rows.set_row_data(ri, old);
+                }
+                return;
+            }
+        }
     }
 }
 
