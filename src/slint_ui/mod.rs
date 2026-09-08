@@ -88,7 +88,6 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         refill_section(&app, &shell.borrow(), first);
     }
     app.set_sections(model(sections));
-    app.set_files(model(file_labels(&shell.borrow())));
     app.set_status(status_line(&shell.borrow()));
 
     app.window().set_size(WindowSize::Logical(LogicalSize::new(
@@ -106,22 +105,6 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             app.set_page_title(name.clone());
             app.set_page(Page::Section);
             refill_section(&app, &shell, &name);
-        });
-    }
-    {
-        let weak = app.as_weak();
-        let shell = Rc::clone(&shell);
-        app.on_open_file(move |index| {
-            let Some(app) = weak.upgrade() else { return };
-            let shell = shell.borrow();
-            app.set_page(Page::File);
-            app.set_current_file(index);
-            if let Some(label) = file_labels(&shell).get(index as usize) {
-                app.set_page_title(label.clone());
-            }
-            let (groups, others) = file_groups(&shell, index as usize);
-            app.set_file_groups(Rc::new(VecModel::from(groups)).into());
-            app.set_other_rows(Rc::new(VecModel::from(others)).into());
         });
     }
     {
@@ -151,7 +134,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                     SectionRow {
                         label: entry.label.clone().into(),
                         home_label: labels.get(home).cloned().unwrap_or_default(),
-                        home_index: home as i32,
+                        home_section: entry.section.split('.').next().unwrap_or("other").into(),
                     }
                 })
                 .collect();
@@ -250,11 +233,6 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         /// Shared write path for text edits and slider releases: format the raw
         /// input per Kind, write through set_leaf_text, then refresh the row.
         fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str) {
-            let file_index = app.get_current_file();
-            if file_index < 0 {
-                return;
-            }
-            let file_index = file_index as usize;
             let formatted = {
                 let shell = shell.borrow();
                 let kind = shell
@@ -271,11 +249,19 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                     return;
                 }
             };
+            let home = {
+                let shell = shell.borrow();
+                let sets = chain_path_sets(&shell);
+                // Writes follow ownership: an existing key is edited where
+                // it lives; unset keys default to main.
+                entry_home(&sets, key).unwrap_or(shell.includes.docs.len())
+            };
             let accepted = {
                 let mut shell = shell.borrow_mut();
-                let doc: &mut ConfigDocument = if file_index == shell.includes.docs.len() {
+                let main = shell.includes.docs.len();
+                let doc: &mut ConfigDocument = if home == main {
                     &mut shell.doc
-                } else if let Some(inc) = shell.includes.docs.get_mut(file_index) {
+                } else if let Some(inc) = shell.includes.docs.get_mut(home) {
                     &mut inc.doc
                 } else {
                     return;
@@ -288,7 +274,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             }
             let shell = shell.borrow();
             app.set_dirty(shell.any_modified());
-            refresh_row(app, &shell, file_index, key);
+            refresh_row(app, &shell, key);
         }
     }
 
@@ -393,98 +379,60 @@ fn entry_home(sets: &[BTreeSet<String>], dotted: &str) -> Option<usize> {
     sets.iter().position(|set| set.contains(dotted))
 }
 
-/// Classification for one section: pointers (set somewhere) + available
-/// (schema keys set nowhere). Read-only this lesson; the destination
-/// picker arrives with editing in Phase 2.
-fn section_rows(shell: &Shell, section: &str) -> (Vec<SectionRow>, Vec<SharedString>) {
+/// The doc at a chain index (include i = i, main = includes.docs.len()).
+fn doc_at(shell: &Shell, file_index: usize) -> &ConfigDocument {
+    if file_index == shell.includes.docs.len() {
+        &shell.doc
+    } else {
+        &shell.includes.docs[file_index].doc
+    }
+}
+
+/// Append the owning-file badge to a row's hint ("in file.toml").
+fn badge_home(mut row: FileRow, label: &SharedString) -> FileRow {
+    row.hint = if row.hint.is_empty() {
+        format!("in {label}").into()
+    } else {
+        format!("{} • in {}", row.hint, label).into()
+    };
+    row
+}
+
+/// Refill the section page: every setting of `section` across the chain.
+fn refill_section(app: &AppWindow, shell: &Shell, section: &str) {
+    app.set_file_groups(Rc::new(VecModel::from(section_groups(shell, section))).into());
+}
+
+/// One section page: every schema entry of the top-level `section` across
+/// the whole include chain, grouped by sub-section. Settled keys carry
+/// their owning file in the hint; unset keys read "—" and commit to main
+/// (the inline destination picker is a fast-follow).
+fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
     let sets = chain_path_sets(shell);
     let labels = file_labels(shell);
-    let mut rows = Vec::new();
-    let mut available = Vec::new();
+    let main = shell.includes.docs.len();
+
+    let mut groups: BTreeMap<String, Vec<FileRow>> = BTreeMap::new();
     for entry in &shell.schema {
         if entry.section.split('.').next() != Some(section) {
             continue;
         }
         let dotted = entry.path.join(".");
-        match entry_home(&sets, &dotted) {
-            Some(home) => rows.push(SectionRow {
-                label: entry.label.clone().into(),
-                home_label: labels.get(home).cloned().unwrap_or_default(),
-                home_index: home as i32,
-            }),
-            None => available.push(entry.label.clone().into()),
+        let home = entry_home(&sets, &dotted);
+        let mut row = file_row(doc_at(shell, home.unwrap_or(main)), entry);
+        if let Some(label) = home.and_then(|home| labels.get(home)) {
+            row = badge_home(row, label);
         }
+        groups.entry(entry.section.clone()).or_default().push(row);
     }
-    (rows, available)
-}
 
-/// Refill both section models; called at startup and on every section pick.
-fn refill_section(app: &AppWindow, shell: &Shell, section: &str) {
-    let (rows, available) = section_rows(shell, section);
-    app.set_section_rows(Rc::new(VecModel::from(rows)).into());
-    app.set_available_rows(Rc::new(VecModel::from(available)).into());
-}
-
-/// One file page's content: schema keys owned by the doc at `file_index`,
-/// grouped by their section, plus keys beyond the schema under "Other".
-fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow>) {
-    let sets = chain_path_sets(shell);
-    let Some(owned) = sets.get(file_index) else {
-        return (Vec::new(), Vec::new());
-    };
-    // Chain indexing convention: include i = i, main = includes.docs.len().
-    let doc: &ConfigDocument = if file_index == shell.includes.docs.len() {
-        &shell.doc
-    } else {
-        &shell.includes.docs[file_index].doc
-    };
-    let values: BTreeMap<String, String> = doc.leaf_values().into_iter().collect();
-
-    let mut groups: BTreeMap<String, Vec<FileRow>> = BTreeMap::new();
-    let mut schema_paths: BTreeSet<String> = BTreeSet::new();
-    for entry in &shell.schema {
-        let dotted = entry.path.join(".");
-        schema_paths.insert(dotted.clone());
-        if !owned.contains(&dotted) {
-            continue;
-        }
-        groups
-            .entry(entry.section.clone())
-            .or_default()
-            .push(file_row(doc, entry));
-    }
-    let groups = groups
+    groups
         .into_iter()
         .map(|(title, rows)| FileGroup {
             title: title.into(),
             rows: Rc::new(VecModel::from(rows)).into(),
         })
-        .collect();
-
-    let others: Vec<FileRow> = owned
-        .iter()
-        .filter(|path| !schema_paths.contains(*path))
-        .map(|path| {
-            let value = values
-                .get(path)
-                .map(|raw| strip_decor(raw))
-                .unwrap_or_else(|| "—".to_owned());
-            FileRow {
-                label: path.clone().into(),
-                value: value.into(),
-                key: path.clone().into(),
-                kind: ValueKind::Unset,
-                choices: choice_model(&schema::Kind::Text),
-                swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
-                checked: false,
-                hint: String::new().into(),
-                min: 0.0,
-                max: 0.0,
-            }
-        })
-        .collect();
-
-    (groups, others)
+        .collect()
 }
 
 /// One schema row, editor-ready: typed value, checked state, swatch, hint.
@@ -510,13 +458,9 @@ fn file_row(doc: &ConfigDocument, entry: &schema::Entry) -> FileRow {
     }
 }
 
-/// Re-render one schema row in place after a commit. Swapping the whole
-/// groups model would rebuild every editor and drop the user's focus.
-fn refresh_row(app: &AppWindow, shell: &Shell, file_index: usize, key: &str) {
+fn refresh_row(app: &AppWindow, shell: &Shell, key: &str) {
     let sets = chain_path_sets(shell);
-    let Some(owned) = sets.get(file_index) else {
-        return;
-    };
+    let labels = file_labels(shell);
     let Some(entry) = shell
         .schema
         .iter()
@@ -524,15 +468,11 @@ fn refresh_row(app: &AppWindow, shell: &Shell, file_index: usize, key: &str) {
     else {
         return;
     };
-    if !owned.contains(key) {
-        return;
+    let home = entry_home(&sets, key).unwrap_or(shell.includes.docs.len());
+    let mut row = file_row(doc_at(shell, home), entry);
+    if let Some(label) = labels.get(home) {
+        row = badge_home(row, label);
     }
-    let doc: &ConfigDocument = if file_index == shell.includes.docs.len() {
-        &shell.doc
-    } else {
-        &shell.includes.docs[file_index].doc
-    };
-    let row = file_row(doc, entry);
 
     let groups = app.get_file_groups();
     let Some(groups) = groups.as_any().downcast_ref::<VecModel<FileGroup>>() else {

@@ -20,9 +20,8 @@ import "../assets/fonts/JetBrainsMono-Regular.ttf";
 export struct SectionRow {
     label: string,
     home-label: string,
-    home-index: int,
+    home-section: string,
 }
-
 export enum ValueKind { unset, boolean, integer, float, text, list, choice, color, curve }
 
 export  struct FileRow {
@@ -43,7 +42,7 @@ export struct FileGroup {
     rows: [FileRow],
 }
 
-export enum Page { section, file, search, raw }
+export enum Page { section, search, raw }
 
 // Small token-driven button; std-widgets are avoided until the styled-page
 // pass so the whole shell carries one identity from day one.
@@ -160,6 +159,7 @@ component DraftEdit inherits LineEdit {
 // cards, label left / editor right, mined hints under the label.
 component FilePage inherits Rectangle {
     in property <string> title;
+    in property <string> status;
     in property <[FileGroup]> groups;
     in property <[FileRow]> others;
     callback set-value(string, string);
@@ -192,6 +192,12 @@ component FilePage inherits Rectangle {
             color: Theme.text-1;
             font-size: Theme.font-title;
             font-weight: 700;
+        }
+
+        if root.status != "": Text {
+            text: root.status;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
         }
 
         for group in root.groups: VerticalLayout {
@@ -372,17 +378,12 @@ export component AppWindow inherits Window {
     in property <string> include-note;
     in property <bool> dirty;
     in property <[string]> sections;
-    in property <[string]> files;
     in property <string> page-title;
     in property <string> status;
     in-out property <string> current-section;
     in-out property <bool> show-exit-confirm: false;
     in-out property <Page> page: Page.section;
-    in-out property <int> current-file: -1;
-    in property <[SectionRow]> section-rows;
-    in property <[string]> available-rows;
     in property <[FileGroup]> file-groups;
-    in property <[FileRow]> other-rows;
     in property <[SectionRow]> search-rows;
     in property <[FileGroup]> raw-groups;
     // Never filled; keeps FilePage's Other-keys section empty on other pages.
@@ -391,7 +392,6 @@ export component AppWindow inherits Window {
     callback search-edited(string);
     callback raw-requested();
     callback section-selected(string);
-    callback open-file(int);
     callback set-value(string, string);
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
@@ -500,22 +500,6 @@ export component AppWindow inherits Window {
                                 selected: root.page == Page.section && section == root.current-section;
                                 selected-fired => { root.section-selected(section); }
                             }
-
-                            Rectangle {
-                                height: Theme.space-l;
-                            }
-
-                            Text {
-                                text: "FILES";
-                                color: Theme.text-2;
-                                font-size: Theme.font-small;
-                            }
-
-                            for file[i] in root.files: NavRow {
-                                label: file;
-                                selected: root.page == Page.file && i == root.current-file;
-                                selected-fired => { root.open-file(i); }
-                            }
                         }
                     }
 
@@ -548,57 +532,16 @@ export component AppWindow inherits Window {
             Rectangle {
                 background: Theme.bg-0;
 
-                if root.page == Page.section: VerticalLayout {
-                    padding: Theme.space-l;
-                    spacing: Theme.space-m;
-                    alignment: start;
-
-                    Text {
-                        text: root.page-title;
-                        color: Theme.text-1;
-                        font-size: Theme.font-title;
-                        font-weight: 700;
-                    }
-
-                    Text {
-                        text: root.status;
-                        color: Theme.text-2;
-                        font-size: Theme.font-small;
-                    }
-
-                    Text {
-                        text: "IN USE";
-                        color: Theme.text-2;
-                        font-size: Theme.font-small;
-                    }
-
-                    for row in root.section-rows: PointerRow {
-                        label: row.label;
-                        home-label: row.home-label;
-                        open => { root.open-file(row.home-index); }
-                    }
-                    Text {
-                        text: "AVAILABLE";
-                        color: Theme.text-2;
-                        font-size: Theme.font-small;
-                        visible: root.available-rows.length > 0;
-                    }
-
-                    for label in root.available-rows: Text {
-                        text: label;
-                        color: Theme.text-2;
-                    }
-                }
-
-                if root.page == Page.file: ScrollView {
+                if root.page == Page.section: ScrollView {
                     width: 100%;
                     height: 100%;
-                    viewport-height: file-page.preferred-height;
+                    viewport-height: section-page.preferred-height;
 
-                    file-page := FilePage {
+                    section-page := FilePage {
                         title: root.page-title;
                         groups: root.file-groups;
-                        others: root.other-rows;
+                        others: root.no-rows;
+                        status: root.status;
                         set-value(k, v) => { root.set-value(k, v); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
@@ -620,7 +563,7 @@ export component AppWindow inherits Window {
                         for row in root.search-rows: PointerRow {
                             label: row.label;
                             home-label: row.home-label;
-                            open => { root.open-file(row.home-index); }
+                            open => { root.section-selected(row.home-section); }
                         }
                         if root.search-rows.length == 0: Text {
                             text: "No matches.";
