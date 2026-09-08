@@ -3,6 +3,7 @@
 // everything visual reads tokens from theme.slint.
 
 import { Theme } from "theme.slint";
+import {ScrollView} from "std-widgets.slint";
 
 // Embedded fonts (compiler bakes these into the binary). Family names are
 // the fonts' internal names, verified with fc-scan.
@@ -14,6 +15,16 @@ export struct SectionRow {
     label: string,
     home-label:string,
     home-index: int,
+}
+
+export  struct FileRow {
+    label: string,
+    value: string,
+}
+
+export struct FileGroup {
+    title: string,
+    rows: [FileRow],
 }
 
 export enum Page {section,file}
@@ -73,6 +84,89 @@ component NavRow inherits Rectangle {
     }
 }
 
+// One file page: schema groups + everything the file holds beyond the schema.
+component FilePage inherits Rectangle {
+    in property <string> title;
+    in property <[FileGroup]> groups;
+    in property <[FileRow]> others;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        for group in root.groups: VerticalLayout {
+            spacing: Theme.space-xs;
+            alignment: start;
+
+            Text {
+                text: group.title;
+                color: Theme.accent;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+            for row in group.rows: HorizontalLayout {
+                height: 28px;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: row.label;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: row.value;
+                    color: Theme.text-2;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        if root.others.length > 0: VerticalLayout {
+            spacing: Theme.space-xs;
+            alignment: start;
+
+            Text {
+                text: "OTHER KEYS IN THIS FILE";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+            for row in root.others: HorizontalLayout {
+                height: 28px;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: row.label;
+                    color: Theme.text-2;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: row.value;
+                    color: Theme.text-2;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
 export component AppWindow inherits Window {
     preferred-width: 960px;
     preferred-height: 640px;
@@ -97,9 +191,10 @@ export component AppWindow inherits Window {
     in-out property <int> current-file: -1;
     in property <[SectionRow]> section-rows;
     in property <[string]> available-rows;
+    in property <[FileGroup]> file-groups;
+    in property <[FileRow]> other-rows;
 
     callback section-selected(string);
-    callback file-selected(int);
     callback open-file(int);
     callback save-requested();
     callback sync-schema-requested();
@@ -215,70 +310,70 @@ export component AppWindow inherits Window {
             // ── content ─────────────────────────────────────────
             Rectangle {
                 background: Theme.bg-0;
-                VerticalLayout {
+
+                if root.page == Page.section: VerticalLayout {
                     padding: Theme.space-l;
                     spacing: Theme.space-m;
                     alignment: start;
 
-                                        if root.page == Page.section: VerticalLayout {
-                        spacing: Theme.space-m;
-                        alignment: start;
-
-                        Text {
-                            text: root.page-title;
-                            color: Theme.text-1;
-                            font-size: Theme.font-title;
-                            font-weight: 700;
+                    Text {
+                        text: root.page-title;
+                        color: Theme.text-1;
+                        font-size: Theme.font-title;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: root.status;
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                    }
+                    Text {
+                        text: "IN USE";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                    }
+                    for row in root.section-rows: Rectangle {
+                        height: 32px;
+                        border-radius: Theme.radius-s;
+                        background: ta.has-hover ? Theme.bg-2 : transparent;
+                        ta := TouchArea {
+                            clicked => { root.open-file(row.home-index); }
                         }
-                        Text {
-                            text: root.status;
-                            color: Theme.text-2;
-                            font-size: Theme.font-small;
-                        }
-                        Text {
-                            text: "IN USE";
-                            color: Theme.text-2;
-                            font-size: Theme.font-small;
-                        }
-                        for row in root.section-rows: Rectangle {
-                            height: 32px;
-                            border-radius: Theme.radius-s;
-                            background: ta.has-hover ? Theme.bg-2 : transparent;
-                            ta := TouchArea {
-                                clicked => { root.open-file(row.home-index); }
+                        HorizontalLayout {
+                            padding-left: Theme.space-m;
+                            padding-right: Theme.space-m;
+                            spacing: Theme.space-m;
+                            Text {
+                                text: row.label;
+                                vertical-alignment: center;
                             }
-                            HorizontalLayout {
-                                padding-left: Theme.space-m;
-                                padding-right: Theme.space-m;
-                                spacing: Theme.space-m;
-                                Text {
-                                    text: row.label;
-                                    vertical-alignment: center;
-                                }
-                                Rectangle { horizontal-stretch: 1; }
-                                Text {
-                                    text: "in " + row.home-label + " — open";
-                                    color: Theme.accent;
-                                    font-size: Theme.font-small;
-                                    vertical-alignment: center;
-                                }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text {
+                                text: "in " + row.home-label + " — open";
+                                color: Theme.accent;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
                             }
-                        }
-                        Text {
-                            text: "AVAILABLE";
-                            color: Theme.text-2;
-                            font-size: Theme.font-small;
-                            visible: root.available-rows.length > 0;
-                        }
-                        for label in root.available-rows: Text {
-                            text: label;
-                            color: Theme.text-2;
                         }
                     }
-
-                    if root.page == Page.file: Text {
-                        text: root.page-title + " — file page lands in Lesson 2";
+                    Text {
+                        text: "AVAILABLE";
                         color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        visible: root.available-rows.length > 0;
+                    }
+                    for label in root.available-rows: Text {
+                        text: label;
+                        color: Theme.text-2;
+                    }
+                }
+
+                if root.page == Page.file: ScrollView {
+                    padding: Theme.space-l;
+                    FilePage {
+                        title: root.page-title;
+                        groups: root.file-groups;
+                        others: root.other-rows;
                     }
                 }
             }

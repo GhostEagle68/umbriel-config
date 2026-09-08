@@ -4,7 +4,7 @@
 //! does all real work — this module only presents it and forwards intents.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -106,14 +106,18 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
     {
         let weak = app.as_weak();
-        let labels = file_labels(&shell.borrow());
+        let shell = Rc::clone(&shell);
         app.on_open_file(move |index| {
             let Some(app) = weak.upgrade() else { return };
+            let shell = shell.borrow();
             app.set_page(Page::File);
             app.set_current_file(index);
-            if let Some(label) = labels.get(index as usize) {
+            if let Some(label) = file_labels(&shell).get(index as usize) {
                 app.set_page_title(label.clone());
             }
+            let (groups, others) = file_groups(&shell, index as usize);
+            app.set_file_groups(Rc::new(VecModel::from(groups)).into());
+            app.set_other_rows(Rc::new(VecModel::from(others)).into());
         });
     }
     {
@@ -295,4 +299,63 @@ fn refill_section(app: &AppWindow, shell: &Shell, section: &str) {
     let (rows, available) = section_rows(shell, section);
     app.set_section_rows(Rc::new(VecModel::from(rows)).into());
     app.set_available_rows(Rc::new(VecModel::from(available)).into());
+}
+
+/// One file page's content: schema keys owned by the doc at `file_index`,
+/// grouped by their section, plus keys beyond the schema under "Other".
+fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow>) {
+    let sets = chain_path_sets(shell);
+    let Some(owned) = sets.get(file_index) else {
+        return (Vec::new(), Vec::new());
+    };
+    // Chain indexing convention: include i = i, main = includes.docs.len().
+    let doc: &ConfigDocument = if file_index == shell.includes.docs.len() {
+        &shell.doc
+    } else {
+        &shell.includes.docs[file_index].doc
+    };
+    let values: BTreeMap<String, String> = doc.leaf_values().into_iter().collect();
+
+    let mut groups: BTreeMap<String, Vec<FileRow>> = BTreeMap::new();
+    let mut schema_paths: BTreeSet<String> = BTreeSet::new();
+    for entry in &shell.schema {
+        let dotted = entry.path.join(".");
+        schema_paths.insert(dotted.clone());
+        if !owned.contains(&dotted) {
+            continue;
+        }
+        let value = values
+            .get(&dotted)
+            .cloned()
+            .unwrap_or_else(|| "—".to_owned());
+        groups
+            .entry(entry.section.clone())
+            .or_default()
+            .push(FileRow {
+                label: entry.label.clone().into(),
+                value: value.into(),
+            });
+    }
+    let groups = groups
+        .into_iter()
+        .map(|(title, rows)| FileGroup {
+            title: title.into(),
+            rows: Rc::new(VecModel::from(rows)).into(),
+        })
+        .collect();
+
+    let others: Vec<FileRow> = owned
+        .iter()
+        .filter(|path| !schema_paths.contains(*path))
+        .map(|path| FileRow {
+            label: path.clone().into(),
+            value: values
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| "—".to_owned())
+                .into(),
+        })
+        .collect();
+
+    (groups, others)
 }
