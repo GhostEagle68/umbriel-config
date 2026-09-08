@@ -3,7 +3,7 @@
 // everything visual reads tokens from theme.slint.
 
 import { Theme } from "theme.slint";
-import {CheckBox, ComboBox, LineEdit, ScrollView} from "std-widgets.slint";
+import { CheckBox, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 
 // Embedded fonts (compiler bakes these into the binary). Family names are
 // the fonts' internal names, verified with fc-scan.
@@ -13,11 +13,11 @@ import "../assets/fonts/JetBrainsMono-Regular.ttf";
 
 export struct SectionRow {
     label: string,
-    home-label:string,
+    home-label: string,
     home-index: int,
 }
 
-export enum ValueKind {unset,boolean,integer,float,text,list,choice,color,curve}
+export enum ValueKind { unset, boolean, integer, float, text, list, choice, color, curve }
 
 export  struct FileRow {
     label: string,
@@ -35,7 +35,7 @@ export struct FileGroup {
     rows: [FileRow],
 }
 
-export enum Page {section,file,search,raw}
+export enum Page { section, file, search, raw }
 
 // Small token-driven button; std-widgets are avoided until the styled-page
 // pass so the whole shell carries one identity from day one.
@@ -105,6 +105,7 @@ component PointerRow inherits Rectangle {
     ta := TouchArea {
         clicked => { root.open(); }
     }
+
     HorizontalLayout {
         padding-left: Theme.space-m;
         padding-right: Theme.space-m;
@@ -114,7 +115,11 @@ component PointerRow inherits Rectangle {
             text: root.label;
             vertical-alignment: center;
         }
-        Rectangle { horizontal-stretch: 1; }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
         Text {
             text: "in " + root.home-label + " — open";
             color: Theme.accent;
@@ -153,7 +158,8 @@ component FilePage inherits Rectangle {
                 font-size: Theme.font-small;
                 font-weight: 700;
             }
-                for row in group.rows: HorizontalLayout {
+
+            for row in group.rows: HorizontalLayout {
                 height: 28px;
                 spacing: Theme.space-m;
 
@@ -161,7 +167,11 @@ component FilePage inherits Rectangle {
                     text: row.label;
                     vertical-alignment: center;
                 }
-                Rectangle { horizontal-stretch: 1; }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
                 if row.kind == ValueKind.boolean: CheckBox {
                     checked: row.checked;
                     toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
@@ -182,6 +192,7 @@ component FilePage inherits Rectangle {
                         border-color: Theme.border;
                         background: row.swatch;
                     }
+
                     LineEdit {
                         width: 140px;
                         text: row.value;
@@ -236,6 +247,7 @@ component FilePage inherits Rectangle {
                 font-size: Theme.font-small;
                 font-weight: 700;
             }
+
             for row in root.others: HorizontalLayout {
                 height: 28px;
                 spacing: Theme.space-m;
@@ -247,7 +259,11 @@ component FilePage inherits Rectangle {
                     font-size: Theme.font-small;
                     vertical-alignment: center;
                 }
-                Rectangle { horizontal-stretch: 1; }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
                 Text {
                     text: row.value;
                     color: Theme.text-2;
@@ -258,7 +274,9 @@ component FilePage inherits Rectangle {
             }
         }
 
-        Rectangle { vertical-stretch: 1; }
+        Rectangle {
+            vertical-stretch: 1;
+        }
     }
 }
 
@@ -321,6 +339,7 @@ export component AppWindow inherits Window {
                     font-weight: 700;
                     vertical-alignment: center;
                 }
+
                 Text {
                     text: root.config-path;
                     color: Theme.text-2;
@@ -328,6 +347,7 @@ export component AppWindow inherits Window {
                     font-size: Theme.font-small;
                     vertical-alignment: center;
                 }
+
                 Text {
                     text: "+" + root.include-count + " included";
                     color: Theme.text-2;
@@ -335,16 +355,22 @@ export component AppWindow inherits Window {
                     vertical-alignment: center;
                     visible: root.include-count > 0;
                 }
+
                 LineEdit {
                     width: 200px;
                     placeholder-text: "Search Settings";
-                    edited(t) => {root.search-edited(t);}
+                    edited(t) => { root.search-edited(t); }
                 }
-                Rectangle { horizontal-stretch: 1; }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
                 ActionButton {
                     text: "Sync schema";
                     clicked => { root.sync-schema-requested(); }
                 }
+
                 ActionButton {
                     text: "Save";
                     primary: true;
@@ -383,28 +409,37 @@ export component AppWindow inherits Window {
                         color: Theme.text-2;
                         font-size: Theme.font-small;
                     }
+
                     for section in root.sections: NavRow {
                         label: section;
                         selected: section == root.current-section;
                         selected-fired => { root.section-selected(section); }
                     }
 
-                    Rectangle { height: Theme.space-l; }
+                    Rectangle {
+                        height: Theme.space-l;
+                    }
+
                     Text {
                         text: "FILES";
                         color: Theme.text-2;
                         font-size: Theme.font-small;
                     }
+
                     for file[i] in root.files: NavRow {
                         label: file;
                         selected-fired => { root.open-file(i); }
                     }
 
-                    Rectangle { vertical-stretch: 1; }
+                    Rectangle {
+                        vertical-stretch: 1;
+                    }
+
                     NavRow {
                         label: "Other Settings";
-                        selected-fired => {root.raw-requested();}
+                        selected-fired => { root.raw-requested(); }
                     }
+
                     ActionButton {
                         text: "Exit";
                         clicked => {
@@ -433,27 +468,31 @@ export component AppWindow inherits Window {
                         font-size: Theme.font-title;
                         font-weight: 700;
                     }
+
                     Text {
                         text: root.status;
                         color: Theme.text-2;
                         font-size: Theme.font-small;
                     }
+
                     Text {
                         text: "IN USE";
                         color: Theme.text-2;
                         font-size: Theme.font-small;
                     }
-                                            for row in root.section-rows: PointerRow {
-                            label: row.label;
-                            home-label: row.home-label;
-                            open => { root.open-file(row.home-index); }
-                        }
+
+                    for row in root.section-rows: PointerRow {
+                        label: row.label;
+                        home-label: row.home-label;
+                        open => { root.open-file(row.home-index); }
+                    }
                     Text {
                         text: "AVAILABLE";
                         color: Theme.text-2;
                         font-size: Theme.font-small;
                         visible: root.available-rows.length > 0;
                     }
+
                     for label in root.available-rows: Text {
                         text: label;
                         color: Theme.text-2;
@@ -466,39 +505,39 @@ export component AppWindow inherits Window {
                         groups: root.file-groups;
                         others: root.other-rows;
                         set-value(k, v) => { root.set-value(k, v); }
-
                     }
                 }
-                
+
                 if root.page == Page.search: ScrollView {
-                        VerticalLayout {
-                            padding: Theme.space-l;
-                            spacing: Theme.space-m;
-                            alignment: start;
-                            Text {
-                                text: root.page-title;
-                                color: Theme.text-1;
-                                font-size: Theme.font-title;
-                                font-weight: 700;
-                            }
-                            for row in root.search-rows: PointerRow {
-                                label: row.label;
-                                home-label: row.home-label;
-                                open => { root.open-file(row.home-index); }
-                            }
-                            if root.search-rows.length == 0: Text {
-                                text: "No matches.";
-                                color: Theme.text-2;
-                            }
+                    VerticalLayout {
+                        padding: Theme.space-l;
+                        spacing: Theme.space-m;
+                        alignment: start;
+                        Text {
+                            text: root.page-title;
+                            color: Theme.text-1;
+                            font-size: Theme.font-title;
+                            font-weight: 700;
+                        }
+
+                        for row in root.search-rows: PointerRow {
+                            label: row.label;
+                            home-label: row.home-label;
+                            open => { root.open-file(row.home-index); }
+                        }
+                        if root.search-rows.length == 0: Text {
+                            text: "No matches.";
+                            color: Theme.text-2;
                         }
                     }
-                    if root.page == Page.raw: ScrollView {
-                        FilePage {
-                            title: "Other settings";
-                            groups: root.raw-groups;
-                            others: root.no-rows;
-                        }
+                }
+                if root.page == Page.raw: ScrollView {
+                    FilePage {
+                        title: "Other settings";
+                        groups: root.raw-groups;
+                        others: root.no-rows;
                     }
+                }
             }
         }
     }
@@ -527,11 +566,16 @@ export component AppWindow inherits Window {
                     font-size: Theme.font-large;
                     font-weight: 700;
                 }
+
                 Text {
                     text: "Quit without saving?";
                     color: Theme.text-2;
                 }
-                Rectangle { vertical-stretch: 1; }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
                 HorizontalLayout {
                     alignment: end;
                     spacing: Theme.space-s;
@@ -539,6 +583,7 @@ export component AppWindow inherits Window {
                         text: "Keep editing";
                         clicked => { root.show-exit-confirm = false; }
                     }
+
                     ActionButton {
                         text: "Quit anyway";
                         primary: true;
