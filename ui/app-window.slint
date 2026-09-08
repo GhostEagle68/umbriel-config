@@ -59,7 +59,7 @@ export struct SaveEntry {
     dest-index: int,
 }
 
-export enum Page { section, search, raw, settings }
+export enum Page { section, search, settings }
 
 // Small token-driven button; std-widgets are avoided until the styled-page
 // pass so the whole shell carries one identity from day one.
@@ -178,7 +178,6 @@ component FilePage inherits Rectangle {
     in property <string> title;
     in property <string> status;
     in property <[FileGroup]> groups;
-    in property <[FileRow]> others;
     callback set-value(string, string);
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
@@ -372,51 +371,6 @@ component FilePage inherits Rectangle {
                 }
             }
         }
-
-        if root.others.length > 0: VerticalLayout {
-            spacing: Theme.space-xs;
-
-            Text {
-                text: "OTHER KEYS IN THIS FILE";
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                font-weight: 700;
-            }
-
-            Rectangle {
-                background: Theme.bg-1;
-                border-radius: Theme.radius-m;
-
-                VerticalLayout {
-                    padding: Theme.space-m;
-
-                    for row in root.others: HorizontalLayout {
-                        min-height: 28px;
-                        spacing: Theme.space-m;
-
-                        Text {
-                            text: row.label;
-                            color: Theme.text-2;
-                            font-family: Theme.font-mono;
-                            font-size: Theme.font-small;
-                            vertical-alignment: center;
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                        }
-
-                        Text {
-                            text: row.value;
-                            color: Theme.text-2;
-                            font-family: Theme.font-mono;
-                            font-size: Theme.font-small;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -563,9 +517,6 @@ export component AppWindow inherits Window {
     in-out property <Page> page: Page.section;
     in property <[FileGroup]> file-groups;
     in property <[SectionRow]> search-rows;
-    in property <[FileGroup]> raw-groups;
-    // Never filled; keeps FilePage's Other-keys section empty on other pages.
-    in property <[FileRow]> no-rows;
     // Keys whose current value differs from the on-disk snapshot.
     in property <int> changed-count;
     in property <[string]> destinations;
@@ -579,7 +530,6 @@ export component AppWindow inherits Window {
     in property <string> popup-file-text;
 
     callback search-edited(string);
-    callback raw-requested();
     callback section-selected(string);
     callback set-value(string, string);
     callback set-slider-value(string, float);
@@ -727,12 +677,6 @@ export component AppWindow inherits Window {
                         spacing: Theme.space-xs;
 
                         NavRow {
-                            label: "Other Settings";
-                            selected: root.page == Page.raw;
-                            selected-fired => { root.raw-requested(); }
-                        }
-
-                        NavRow {
                             label: "Settings" + (root.update-available ? " •" : "");
                             selected: root.page == Page.settings;
                             selected-fired => { root.settings-requested(); }
@@ -769,7 +713,6 @@ export component AppWindow inherits Window {
                         width: svs.visible-width;
                         title: root.page-title;
                         groups: root.file-groups;
-                        others: root.no-rows;
                         status: root.status;
                         set-value(k, v) => { root.set-value(k, v); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
@@ -801,19 +744,6 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-                if root.page == Page.raw: srv := ScrollView {
-                    width: 100%;
-                    height: 100%;
-                    viewport-height: fp.preferred-height;
-
-                    fp := FilePage {
-                        width: srv.visible-width;
-                        title: "Other settings";
-                        groups: root.raw-groups;
-                        others: root.no-rows;
-                    }
-                }
-
                 if root.page == Page.settings: stv := ScrollView {
                     width: 100%;
                     height: 100%;

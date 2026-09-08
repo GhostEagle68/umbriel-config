@@ -173,18 +173,6 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(&shell);
-        app.on_raw_requested(move || {
-            let Some(app) = weak.upgrade() else { return };
-            let shell = shell.borrow();
-            let groups = raw_groups(&shell);
-            app.set_raw_groups(Rc::new(VecModel::from(groups)).into());
-            app.set_page(Page::Raw);
-            app.set_page_title("Other settings".into());
-        });
-    }
-    {
-        let weak = app.as_weak();
-        let shell = Rc::clone(&shell);
         app.on_view_file(move |index| {
             let Some(app) = weak.upgrade() else { return };
             if index < 0 {
@@ -865,13 +853,69 @@ fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
         groups.entry(entry.section.clone()).or_default().push(row);
     }
 
-    groups
+    let mut out: Vec<FileGroup> = groups
         .into_iter()
         .map(|(title, rows)| FileGroup {
             title: title.into(),
             rows: Rc::new(VecModel::from(rows)).into(),
         })
-        .collect()
+        .collect();
+
+    // Keys beyond the schema fold onto the section that owns them (the
+    // old Other-settings sweep): one read-only row per key, owned like
+    // any other row. Only keys of this section are shown.
+    let docs: Vec<&ConfigDocument> = shell.includes.docs.iter().map(|inc| &inc.doc).collect();
+    let claims = schema::managed_claims(&docs);
+    let schema_keys = schema::key_set(&shell.schema);
+    let mut other: BTreeMap<String, FileRow> = BTreeMap::new();
+    for (i, set) in sets.iter().enumerate() {
+        let paths: Vec<String> = set.iter().cloned().collect();
+        for path in schema::uncovered(&paths, &schema_keys, &claims) {
+            if path.split('.').next() != Some(section) {
+                continue;
+            }
+            // One row per key: the file that owns it (shadowed copies
+            // in later includes are skipped).
+            let Some(home) = entry_home(&sets, &path) else {
+                continue;
+            };
+            if home != i || other.contains_key(&path) {
+                continue;
+            }
+            let value = current
+                .get(home)
+                .and_then(|values| values.get(&path))
+                .map(|raw| strip_decor(raw))
+                .unwrap_or_else(|| "—".to_owned());
+            other.insert(
+                path.clone(),
+                FileRow {
+                    label: path.clone().into(),
+                    value: value.into(),
+                    key: path.clone().into(),
+                    kind: ValueKind::Unset,
+                    choices: choice_model(&schema::Kind::Text),
+                    swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
+                    checked: false,
+                    hint: String::new().into(),
+                    min: 0.0,
+                    max: 0.0,
+                    home: home as i32,
+                    home_label: labels.get(home).cloned().unwrap_or_default(),
+                    changed: current.get(home).and_then(|values| values.get(&path))
+                        != shell.saved.get(home).and_then(|values| values.get(&path)),
+                    available: false,
+                },
+            );
+        }
+    }
+    if !other.is_empty() {
+        out.push(FileGroup {
+            title: "other".into(),
+            rows: Rc::new(VecModel::from(other.into_values().collect::<Vec<_>>())).into(),
+        });
+    }
+    out
 }
 
 /// One schema row, editor-ready: typed value, checked state, swatch, hint.
@@ -944,58 +988,6 @@ fn refresh_row(app: &AppWindow, shell: &Shell, key: &str) {
             }
         }
     }
-}
-
-/// Chain-wide sweep of keys beyond the schema and the dedicated editors,
-/// grouped per file (mirrors egui's raw_rows + Raw page).
-fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
-    let mut docs: Vec<&ConfigDocument> = shell.includes.docs.iter().map(|inc| &inc.doc).collect();
-    docs.push(&shell.doc);
-    let claims = schema::managed_claims(&docs);
-    let schema_keys = schema::key_set(&shell.schema);
-    let sets = chain_path_sets(shell);
-    shell
-        .includes
-        .docs
-        .iter()
-        .map(|inc| inc.label.as_str())
-        .chain(std::iter::once("Other settings"))
-        .zip(docs)
-        .zip(sets)
-        .map(|((title, doc), set)| {
-            let values: BTreeMap<String, String> = doc.leaf_values().into_iter().collect();
-            let paths: Vec<String> = set.iter().cloned().collect();
-            let rows: Vec<FileRow> = schema::uncovered(&paths, &schema_keys, &claims)
-                .into_iter()
-                .map(|path| {
-                    let value = values
-                        .get(&path)
-                        .map(|raw| strip_decor(raw))
-                        .unwrap_or_else(|| "—".to_owned());
-                    FileRow {
-                        label: path.clone().into(),
-                        value: value.into(),
-                        key: path.clone().into(),
-                        kind: ValueKind::Unset,
-                        choices: choice_model(&schema::Kind::Text),
-                        swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
-                        checked: false,
-                        hint: String::new().into(),
-                        min: 0.0,
-                        max: 0.0,
-                        home: -1,
-                        home_label: String::new().into(),
-                        changed: false,
-                        available: false,
-                    }
-                })
-                .collect();
-            FileGroup {
-                title: title.into(),
-                rows: Rc::new(VecModel::from(rows)).into(),
-            }
-        })
-        .collect()
 }
 
 /// Dropdown vocabulary for Choice kinds; empty for everything else.
