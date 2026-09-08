@@ -25,6 +25,7 @@ export  struct FileRow {
     key: string,
     kind: ValueKind,
     choices: [string],
+    swatch: brush,
 }
 
 export struct FileGroup {
@@ -150,7 +151,7 @@ component FilePage inherits Rectangle {
                 font-size: Theme.font-small;
                 font-weight: 700;
             }
-                        for row in group.rows: HorizontalLayout {
+                for row in group.rows: HorizontalLayout {
                 height: 28px;
                 spacing: Theme.space-m;
 
@@ -168,8 +169,35 @@ component FilePage inherits Rectangle {
                     text: row.value;
                     accepted(t) => { root.set-value(row.key, t); }
                 }
-                if row.kind == ValueKind.text || row.kind == ValueKind.curve
-                    || row.kind == ValueKind.color || row.kind == ValueKind.list: LineEdit {
+                if row.kind == ValueKind.color: HorizontalLayout {
+                    spacing: Theme.space-s;
+                    alignment: start;
+
+                    Rectangle {
+                        width: 28px;
+                        border-radius: Theme.radius-s;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        background: row.swatch;
+                    }
+                    LineEdit {
+                        width: 140px;
+                        text: row.value;
+                        accepted(t) => { root.set-value(row.key, t); }
+                    }
+                }
+                if row.kind == ValueKind.curve: ComboBox {
+                    width: 180px;
+                    model: row.choices;
+                    current-value: row.value;
+                    selected(v) => { root.set-value(row.key, v); }
+                }
+                if row.kind == ValueKind.list: LineEdit {
+                    width: 220px;
+                    text: row.value;
+                    accepted(t) => { root.set-value(row.key, t); }
+                }
+                if row.kind == ValueKind.text: LineEdit {
                     width: 220px;
                     text: row.value;
                     accepted(t) => { root.set-value(row.key, t); }

@@ -427,8 +427,13 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
         }
         let value = values
             .get(&dotted)
-            .map(|raw| display_value(raw))
+            .map(|raw| display_value(&entry.kind, raw))
             .unwrap_or_else(|| "—".to_owned());
+        let swatch = if matches!(entry.kind, schema::Kind::Color) {
+            swatch_for(&value)
+        } else {
+            slint::Color::from_argb_u8(0, 0, 0, 0).into()
+        };
         groups
             .entry(entry.section.clone())
             .or_default()
@@ -438,6 +443,7 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
                 key: dotted.clone().into(),
                 kind: value_kind(&entry.kind),
                 choices: choice_model(&entry.kind),
+                swatch,
             });
     }
     let groups = groups
@@ -461,6 +467,7 @@ fn file_groups(shell: &Shell, file_index: usize) -> (Vec<FileGroup>, Vec<FileRow
             key: path.clone().into(),
             kind: ValueKind::Unset,
             choices: choice_model(&schema::Kind::Text),
+            swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
         })
         .collect();
 
@@ -498,6 +505,7 @@ fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
                     key: path.clone().into(),
                     kind: ValueKind::Unset,
                     choices: choice_model(&schema::Kind::Text),
+                    swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
                 })
                 .collect();
             FileGroup {
@@ -512,6 +520,10 @@ fn raw_groups(shell: &Shell) -> Vec<FileGroup> {
 fn choice_model(kind: &schema::Kind) -> slint::ModelRc<SharedString> {
     let choices: Vec<SharedString> = match kind {
         schema::Kind::Choice(values) => values.iter().map(SharedString::from).collect(),
+        schema::Kind::Curve => schema::BUILTIN_CURVES
+            .iter()
+            .map(|name| SharedString::from(*name))
+            .collect(),
         _ => Vec::new(),
     };
     Rc::new(VecModel::from(choices)).into()
@@ -530,19 +542,27 @@ fn value_kind(kind: &schema::Kind) -> ValueKind {
     }
 }
 
-/// Display form: strip the TOML repr's surrounding quotes for editing.
-fn display_value(raw: &str) -> String {
-    let trimmed = raw.trim();
-    let trimmed = trimmed
-        .strip_prefix('"')
-        .and_then(|t| t.strip_suffix('"'))
-        .or_else(|| {
-            trimmed
-                .strip_prefix('\'')
-                .and_then(|t| t.strip_suffix('\''))
-        })
-        .unwrap_or(trimmed);
-    trimmed.to_owned()
+/// Display form: strip the TOML repr — brackets for lists, quotes for
+/// strings — so editors see bare content.
+fn display_value(kind: &schema::Kind, raw: &str) -> String {
+    let mut text = raw.trim().to_owned();
+    if matches!(kind, schema::Kind::List)
+        && let Some(inner) = text.strip_prefix('[')
+        && let Some(inner) = inner.strip_suffix(']')
+    {
+        text = inner.to_owned();
+    }
+    if let Some(unquoted) = text.strip_prefix('"')
+        && let Some(unquoted) = unquoted.strip_suffix('"')
+    {
+        return unquoted.to_owned();
+    }
+    if let Some(unquoted) = text.strip_prefix('\'')
+        && let Some(unquoted) = unquoted.strip_suffix('\'')
+    {
+        return unquoted.to_owned();
+    }
+    text
 }
 
 /// Commit form: turn editor input into the value text `set_leaf_text`
@@ -550,6 +570,10 @@ fn display_value(raw: &str) -> String {
 fn commit_value(kind: Option<&schema::Kind>, raw: &str) -> Result<String, String> {
     let raw = raw.trim();
     match kind {
+        Some(schema::Kind::List) => {
+            let inner = raw.trim().trim_start_matches('[').trim_end_matches(']');
+            Ok(format!("[{inner}]"))
+        }
         Some(schema::Kind::Bool) => Ok(raw.to_owned()),
         Some(schema::Kind::Integer { min, max }) => {
             let mut value: i64 = raw
@@ -585,4 +609,19 @@ fn commit_value(kind: Option<&schema::Kind>, raw: &str) -> Result<String, String
         ) => Ok(format!("{raw:?}")),
         _ => Ok(raw.to_owned()),
     }
+}
+
+/// Hex color (#RRGGBB or #RRGGBBAA) to swatch brush; black when unparseable.
+fn swatch_for(value: &str) -> slint::Brush {
+    let hex = value.trim().trim_start_matches('#');
+    let channel = |range: std::ops::Range<usize>| {
+        hex.get(range)
+            .and_then(|bits| u8::from_str_radix(bits, 16).ok())
+            .unwrap_or(0)
+    };
+    slint::Brush::from(slint::Color::from_rgb_u8(
+        channel(0..2),
+        channel(2..4),
+        channel(4..6),
+    ))
 }
