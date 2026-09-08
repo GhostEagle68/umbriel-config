@@ -221,33 +221,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         app.on_save_requested(move || {
             let Some(app) = weak.upgrade() else { return };
             let shell = shell.borrow();
-            // Every changed key across the chain, in save-popup form.
-            let main = shell.includes.docs.len();
-            let labels = file_labels(&shell);
-            let mut entries: Vec<SaveEntry> = Vec::new();
-            for i in 0..=main {
-                let saved = shell.saved.get(i);
-                let current: BTreeMap<String, String> =
-                    doc_at(&shell, i).leaf_values().into_iter().collect();
-                for (key, value) in &current {
-                    if saved.and_then(|values| values.get(key)) == Some(value) {
-                        continue;
-                    }
-                    let label = shell
-                        .schema
-                        .iter()
-                        .find(|entry| entry.path.join(".") == key.as_str())
-                        .map(|entry| entry.label.clone())
-                        .unwrap_or_else(|| key.clone());
-                    entries.push(SaveEntry {
-                        key: key.clone().into(),
-                        label: label.into(),
-                        value: value.clone().into(),
-                        dest_label: labels.get(i).cloned().unwrap_or_default(),
-                        dest_index: i as i32,
-                    });
-                }
-            }
+            let entries = build_save_entries(&shell);
             if entries.is_empty() {
                 app.set_status("Nothing to save.".into());
                 return;
@@ -273,6 +247,53 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                     break;
                 }
             }
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_reset_entry(move |key| {
+            let Some(app) = weak.upgrade() else { return };
+            {
+                let mut shell = shell.borrow_mut();
+                reset_key(&mut shell, &key);
+            }
+            let shell = shell.borrow();
+            let entries = build_save_entries(&shell);
+            app.set_show_save_popup(!entries.is_empty());
+            app.set_save_entries(Rc::new(VecModel::from(entries)).into());
+            app.set_changed_count(changed_count(&shell));
+            refresh_row(&app, &shell, &key);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_discard_all(move || {
+            let Some(app) = weak.upgrade() else { return };
+            {
+                let mut shell = shell.borrow_mut();
+                let main = shell.includes.docs.len();
+                let mut changed: Vec<String> = Vec::new();
+                for i in 0..=main {
+                    let saved = shell.saved.get(i);
+                    let current: BTreeMap<String, String> =
+                        doc_at(&shell, i).leaf_values().into_iter().collect();
+                    for (key, value) in &current {
+                        if saved.and_then(|values| values.get(key)) != Some(value) {
+                            changed.push(key.clone());
+                        }
+                    }
+                }
+                for key in &changed {
+                    reset_key(&mut shell, key);
+                }
+            }
+            let shell = shell.borrow();
+            refill_section(&app, &shell, app.get_current_section().as_str());
+            app.set_show_save_popup(false);
+            app.set_changed_count(changed_count(&shell));
+            app.set_status("Discarded all unsaved changes.".into());
         });
     }
     {
@@ -356,6 +377,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             app.set_changed_count(0);
             match report {
                 Ok(report) if report.is_ok() => {
+                    app.set_validate_note(String::new().into());
                     app.set_status(
                         format!("Saved {saved_files} file(s); umbriel has validated the config.")
                             .into(),
@@ -367,12 +389,15 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                         .iter()
                         .map(|d| d.message().to_owned())
                         .collect();
+                    app.set_validate_note(messages.join("; ").into());
                     app.set_status(
-                        format!("Saved, but umbriel reported: {}.", messages.join("; ")).into(),
+                        format!("Saved {saved_files} file(s), but umbriel has complaints — see the banner.")
+                            .into(),
                     );
                 }
                 Err(err) => {
-                    app.set_status(format!("Saved, but umbriel could not be run: {err}.").into());
+                    app.set_validate_note(format!("umbriel could not be run: {err}").into());
+                    app.set_status(format!("Saved {saved_files} file(s) without validation.").into());
                 }
             }
             let section = app.get_current_section().to_string();
@@ -622,6 +647,65 @@ fn changed_count(shell: &Shell) -> i32 {
         }
     }
     count
+}
+
+/// The current diff across the chain, in save-popup form.
+fn build_save_entries(shell: &Shell) -> Vec<SaveEntry> {
+    let main = shell.includes.docs.len();
+    let labels = file_labels(shell);
+    let mut entries: Vec<SaveEntry> = Vec::new();
+    for i in 0..=main {
+        let saved = shell.saved.get(i);
+        let current: BTreeMap<String, String> =
+            doc_at(shell, i).leaf_values().into_iter().collect();
+        for (key, value) in &current {
+            if saved.and_then(|values| values.get(key)) == Some(value) {
+                continue;
+            }
+            let label = shell
+                .schema
+                .iter()
+                .find(|entry| entry.path.join(".") == key.as_str())
+                .map(|entry| entry.label.clone())
+                .unwrap_or_else(|| key.clone());
+            entries.push(SaveEntry {
+                key: key.clone().into(),
+                label: label.into(),
+                value: value.clone().into(),
+                dest_label: labels.get(i).cloned().unwrap_or_default(),
+                dest_index: i as i32,
+            });
+        }
+    }
+    entries
+}
+
+/// Restore one key to its saved on-disk value; brand-new keys are removed.
+fn reset_key(shell: &mut Shell, key: &str) {
+    let sets = chain_path_sets(shell);
+    let Some(home) = entry_home(&sets, key) else {
+        return;
+    };
+    let main = shell.includes.docs.len();
+    let saved_repr = shell
+        .saved
+        .get(home)
+        .and_then(|values| values.get(key))
+        .cloned();
+    let doc = if home == main {
+        &mut shell.doc
+    } else {
+        &mut shell.includes.docs[home].doc
+    };
+    match saved_repr {
+        Some(repr) => {
+            doc.set_leaf_text(key, &repr);
+        }
+        None => {
+            let parts: Vec<&str> = key.split('.').collect();
+            doc.remove_table(&parts);
+        }
+    }
 }
 
 /// Refill the section page: every setting of `section` across the chain.

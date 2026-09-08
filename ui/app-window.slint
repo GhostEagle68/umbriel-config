@@ -449,6 +449,8 @@ export component AppWindow inherits Window {
     in property <[string]> destinations;
     in-out property <bool> show-save-popup: false;
     in property <[SaveEntry]> save-entries;
+    // Validation result of the last save (empty = nothing to report).
+    in-out property <string> validate-note;
     in-out property <bool> show-file-popup: false;
     in property <string> popup-file-title;
     in property <string> popup-file-path;
@@ -463,6 +465,8 @@ export component AppWindow inherits Window {
     callback view-file(int);
     callback save-dest-chosen(string, string);
     callback save-confirmed();
+    callback reset-entry(string);
+    callback discard-all();
     callback save-requested();
     callback sync-schema-requested();
     callback exit-requested();
@@ -534,6 +538,19 @@ export component AppWindow inherits Window {
             Text {
                 x: Theme.space-l;
                 text: "⚠ " + root.include-note;
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+        }
+
+        // validation result of the last save (errors and warnings)
+        if root.validate-note != "": Rectangle {
+            height: 24px;
+            background: Theme.bg-1;
+            Text {
+                x: Theme.space-l;
+                text: "⚠ " + root.validate-note;
                 color: Theme.warning;
                 font-size: Theme.font-small;
                 vertical-alignment: center;
@@ -693,6 +710,12 @@ export component AppWindow inherits Window {
                     font-weight: 700;
                 }
 
+                Text {
+                    text: "Pick where each changed setting should live, or reset it.";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                }
+
                 ScrollView {
                     VerticalLayout {
                         spacing: Theme.space-s;
@@ -725,6 +748,11 @@ export component AppWindow inherits Window {
                                 current-index: entry.dest-index;
                                 selected(v) => { root.save-dest-chosen(entry.key, v); }
                             }
+
+                            ActionButton {
+                                text: "Reset";
+                                clicked => { root.reset-entry(entry.key); }
+                            }
                         }
                     }
                 }
@@ -732,6 +760,11 @@ export component AppWindow inherits Window {
                 HorizontalLayout {
                     alignment: end;
                     spacing: Theme.space-s;
+
+                    ActionButton {
+                        text: "Discard all";
+                        clicked => { root.discard-all(); }
+                    }
 
                     ActionButton {
                         text: "Cancel";
