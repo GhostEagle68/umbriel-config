@@ -4,6 +4,7 @@
 
 import { Theme } from "theme.slint";
 import {
+    AboutSlint,
     CheckBox,
     ComboBox,
     LineEdit,
@@ -58,7 +59,7 @@ export struct SaveEntry {
     dest-index: int,
 }
 
-export enum Page { section, search, raw }
+export enum Page { section, search, raw, settings }
 
 // Small token-driven button; std-widgets are avoided until the styled-page
 // pass so the whole shell carries one identity from day one.
@@ -419,6 +420,127 @@ component FilePage inherits Rectangle {
     }
 }
 
+// Settings page: app updates, the compositor's latest commit, about.
+component SettingsPage inherits Rectangle {
+    in property <string> app-version;
+    in property <bool> check-updates-on-start;
+    in property <string> update-note;
+    in property <bool> update-available;
+    in property <string> upstream-note;
+    callback check-now();
+    callback toggled(bool);
+    callback open-url(string);
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: "Settings";
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        // ── updates ─────────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+
+            Text {
+                text: "Updates";
+                color: Theme.text-1;
+                font-size: Theme.font-large;
+                font-weight: 700;
+            }
+
+            CheckBox {
+                text: "Check for updates on startup";
+                checked: root.check-updates-on-start;
+                toggled => { root.toggled(self.checked); }
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-m;
+
+                ActionButton {
+                    text: "Check for update";
+                    clicked => { root.check-now(); }
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.update-note == ""
+                        ? "Checks against GitHub releases; one request, nothing sent."
+                        : root.update-note;
+                    color: root.update-available ? Theme.success : Theme.text-2;
+                    vertical-alignment: center;
+                    wrap: TextWrap.word-wrap;
+                }
+            }
+        }
+
+        // ── Umbriel (the compositor) ────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+
+            Text {
+                text: "Umbriel Latest Commit";
+                color: Theme.text-1;
+                font-size: Theme.font-large;
+                font-weight: 700;
+            }
+
+            Text {
+                text: root.upstream-note == ""
+                    ? "The compositor's latest commit loads while you're here."
+                    : root.upstream-note;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                wrap: TextWrap.word-wrap;
+            }
+
+            ActionButton {
+                text: "Open repository";
+                clicked => { root.open-url("https://github.com/noctalia-dev/umbriel"); }
+            }
+        }
+
+        // ── about ───────────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+
+            Text {
+                text: "About";
+                color: Theme.text-1;
+                font-size: Theme.font-large;
+                font-weight: 700;
+            }
+
+            Text {
+                text: "umbriel-config v" + root.app-version;
+                color: Theme.text-1;
+            }
+
+            ActionButton {
+                text: "Source & issue tracker";
+                clicked => { root.open-url("https://github.com/GhostEagle68/umbriel-config"); }
+            }
+
+            // The widget asks for 100% of its parent — pin it to badge
+            // size (logo 256px wide + padding + version text) or it
+            // swallows the whole page.
+            AboutSlint {
+                width: 200px;
+                height: 100px;
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     preferred-width: 960px;
     preferred-height: 640px;
@@ -470,6 +592,17 @@ export component AppWindow inherits Window {
     callback save-requested();
     callback sync-schema-requested();
     callback exit-requested();
+
+    // Settings page
+    in property <string> app-version;
+    in-out property <bool> check-updates-on-start: true;
+    in property <string> update-note;
+    in property <bool> update-available: false;
+    in property <string> upstream-note;
+    callback settings-requested();
+    callback check-updates-requested();
+    callback check-updates-toggled(bool);
+    callback open-url(string);
 
     VerticalLayout {
         // ── header ─────────────────────────────────────────────
@@ -599,6 +732,12 @@ export component AppWindow inherits Window {
                             selected-fired => { root.raw-requested(); }
                         }
 
+                        NavRow {
+                            label: "Settings" + (root.update-available ? " •" : "");
+                            selected: root.page == Page.settings;
+                            selected-fired => { root.settings-requested(); }
+                        }
+
                         ActionButton {
                             text: "Exit";
                             clicked => {
@@ -622,11 +761,12 @@ export component AppWindow inherits Window {
                     height: 100%;
                     viewport-height: section-page.preferred-height;
 
-                    // Explicit width + centered x: the page fills up to 720px
-                    // without feeding back into its intrinsic size.
+                    // Full content width; the page's own layout padding
+                    // insets the cards. Width depends only on the
+                    // ScrollView's visible width, so no intrinsic-size
+                    // feedback cycles.
                     section-page := FilePage {
-                        width: min(720px, svs.visible-width - 2 * Theme.space-l);
-                        x: (svs.visible-width - self.width) / 2;
+                        width: svs.visible-width;
                         title: root.page-title;
                         groups: root.file-groups;
                         others: root.no-rows;
@@ -667,11 +807,28 @@ export component AppWindow inherits Window {
                     viewport-height: fp.preferred-height;
 
                     fp := FilePage {
-                        width: min(720px, srv.visible-width - 2 * Theme.space-l);
-                        x: (srv.visible-width - self.width) / 2;
+                        width: srv.visible-width;
                         title: "Other settings";
                         groups: root.raw-groups;
                         others: root.no-rows;
+                    }
+                }
+
+                if root.page == Page.settings: stv := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: settings-page.preferred-height;
+
+                    settings-page := SettingsPage {
+                        width: stv.visible-width;
+                        app-version: root.app-version;
+                        check-updates-on-start: root.check-updates-on-start;
+                        update-note: root.update-note;
+                        update-available: root.update-available;
+                        upstream-note: root.upstream-note;
+                        check-now => { root.check-updates-requested(); }
+                        toggled(v) => { root.check-updates-toggled(v); }
+                        open-url(u) => { root.open-url(u); }
                     }
                 }
             }

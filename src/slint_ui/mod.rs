@@ -15,6 +15,7 @@ use slint::{
 use umbriel_config::config::{
     discovery, document::ConfigDocument, includes, schema, settings as app_settings, validate,
 };
+use umbriel_config::update;
 
 slint::include_modules!();
 
@@ -95,6 +96,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         app.set_include_note(shell.includes.notes.join("; ").into());
     }
     app.set_dirty(false);
+    app.set_app_version(env!("CARGO_PKG_VERSION").into());
+    app.set_check_updates_on_start(settings.check_updates_on_start);
 
     let sections = section_names(&shell.borrow().schema);
     if let Some(first) = sections.first() {
@@ -415,11 +418,56 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
     {
         let weak = app.as_weak();
+        app.on_settings_requested(move || {
+            let Some(app) = weak.upgrade() else { return };
+            app.set_page(Page::Settings);
+            // Fetch the compositor's latest commit once per run; the
+            // "Checking…" note doubles as the in-flight guard.
+            if app.get_upstream_note().is_empty() {
+                let weak = app.as_weak();
+                app.set_upstream_note("Checking…".into());
+                std::thread::spawn(move || {
+                    let result = fetch_latest_commit();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(app) = weak.upgrade() {
+                            let note = match result {
+                                Ok(note) => note,
+                                Err(err) => {
+                                    format!("Couldn't fetch the latest commit: {err}")
+                                }
+                            };
+                            app.set_upstream_note(note.into());
+                        }
+                    });
+                });
+            }
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_check_updates_requested(move || {
+            start_update_check(weak.clone(), None);
+        });
+    }
+    {
         let env = env.clone();
-        let check_updates = settings.check_updates_on_start;
+        app.on_check_updates_toggled(move |checked| {
+            let mut settings = app_settings::load(&env);
+            settings.check_updates_on_start = checked;
+            let _ = app_settings::store(&env, &settings);
+        });
+    }
+    app.on_open_url(|url| {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(url.as_str())
+            .spawn();
+    });
+    {
+        let weak = app.as_weak();
+        let env = env.clone();
         app.on_exit_requested(move || {
             let Some(app) = weak.upgrade() else { return };
-            store_window_settings(&app, &env, check_updates);
+            store_window_settings(&app, &env);
             let _ = app.hide();
             let _ = slint::quit_event_loop();
         });
@@ -429,7 +477,6 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     {
         let weak = app.as_weak();
         let env = env.clone();
-        let check_updates = settings.check_updates_on_start;
         app.window().on_close_requested(move || {
             let Some(app) = weak.upgrade() else {
                 return CloseRequestResponse::HideWindow;
@@ -438,7 +485,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 app.set_show_exit_confirm(true);
                 CloseRequestResponse::KeepWindowShown
             } else {
-                store_window_settings(&app, &env, check_updates);
+                store_window_settings(&app, &env);
                 CloseRequestResponse::HideWindow
             }
         });
@@ -521,23 +568,93 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         }
     }
 
+    if settings.check_updates_on_start && update::should_auto_check(&env) {
+        start_update_check(app.as_weak(), Some(env.clone()));
+    }
+
     app.run()
         .map_err(|err| anyhow::anyhow!("event loop failed: {err}"))?;
     Ok(())
 }
 
 /// Persist the app settings with the current window size (logical px).
-fn store_window_settings(app: &AppWindow, env: &discovery::Env, check_updates: bool) {
+/// The toggle is read from the live property so a change made on the
+/// Settings page survives exit.
+fn store_window_settings(app: &AppWindow, env: &discovery::Env) {
     let scale = app.window().scale_factor();
     let size = app.window().size();
     let _ = app_settings::store(
         env,
         &app_settings::Settings {
-            check_updates_on_start: check_updates,
+            check_updates_on_start: app.get_check_updates_on_start(),
             window_width: (size.width as f32 / scale) as u32,
             window_height: (size.height as f32 / scale) as u32,
         },
     );
+}
+
+/// Background update check; results land on the UI thread. `env` is only
+/// passed for automatic startup checks — a manual check doesn't move the
+/// once-a-day stamp (egui parity).
+fn start_update_check(weak: slint::Weak<AppWindow>, env: Option<discovery::Env>) {
+    let Some(app) = weak.upgrade() else { return };
+    app.set_update_note("Checking…".into());
+    std::thread::spawn(move || {
+        let result = update::check();
+        if result.is_ok()
+            && let Some(env) = env.as_ref()
+        {
+            update::mark_checked(env);
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(app) = weak.upgrade() else { return };
+            match result {
+                Ok(update::Verdict::UpToDate) => app.set_update_note("Up to date.".into()),
+                Ok(update::Verdict::UpdateAvailable(version)) => {
+                    app.set_update_available(true);
+                    app.set_update_note(
+                        format!("Version {version} available — see the releases page.").into(),
+                    );
+                }
+                Err(err) => app.set_update_note(format!("Couldn't check: {err}").into()),
+            }
+        });
+    });
+}
+
+/// Latest commit of the Umbriel compositor, one display line:
+/// short sha • date • first message line. Offline shows the error and
+/// the next app run tries again.
+fn fetch_latest_commit() -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct Commit {
+        sha: String,
+        commit: Detail,
+    }
+    #[derive(serde::Deserialize)]
+    struct Detail {
+        message: String,
+        author: Author,
+    }
+    #[derive(serde::Deserialize)]
+    struct Author {
+        date: String,
+    }
+    let commits: Vec<Commit> =
+        ureq::get("https://api.github.com/repos/noctalia-dev/umbriel/commits?per_page=1")
+            .set("User-Agent", "umbriel-config")
+            .timeout(std::time::Duration::from_secs(10))
+            .call()
+            .map_err(|err| err.to_string())?
+            .into_json()
+            .map_err(|err| err.to_string())?;
+    let Some(latest) = commits.first() else {
+        return Err("no commits found".to_owned());
+    };
+    let sha: String = latest.sha.chars().take(7).collect();
+    let message = latest.commit.message.lines().next().unwrap_or_default();
+    let date = latest.commit.author.date.get(..10).unwrap_or_default();
+    Ok(format!("{sha} • {date} • {message}"))
 }
 
 /// Top-level section names (sorted, deduplicated) across the schema.
