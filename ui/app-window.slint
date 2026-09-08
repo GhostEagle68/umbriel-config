@@ -129,7 +129,9 @@ component PointerRow inherits Rectangle {
     }
 }
 
-// One file page: schema groups + everything the file holds beyond the schema.
+// One file page: schema groups + everything the file holds beyond the
+// schema — laid out like a settings page: a centered column of group
+// cards, label left / editor right, mined hints under the label.
 component FilePage inherits Rectangle {
     in property <string> title;
     in property <[FileGroup]> groups;
@@ -137,8 +139,11 @@ component FilePage inherits Rectangle {
     callback set-value(string, string);
 
     VerticalLayout {
-        padding: Theme.space-l;
-        spacing: Theme.space-m;
+        padding-left: max(Theme.space-l, (parent.width - 680px) / 2);
+        padding-right: max(Theme.space-l, (parent.width - 680px) / 2);
+        padding-top: Theme.space-l;
+        padding-bottom: Theme.space-l;
+        spacing: Theme.space-l;
         alignment: start;
 
         Text {
@@ -150,96 +155,108 @@ component FilePage inherits Rectangle {
 
         for group in root.groups: VerticalLayout {
             spacing: Theme.space-xs;
-            alignment: start;
 
             Text {
                 text: group.title;
-                color: Theme.accent;
+                color: Theme.text-2;
                 font-size: Theme.font-small;
                 font-weight: 700;
             }
 
-            for row in group.rows: HorizontalLayout {
-                height: 28px;
-                spacing: Theme.space-m;
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
 
-                Text {
-                    text: row.label;
-                    vertical-alignment: center;
-                }
+                VerticalLayout {
+                    padding: Theme.space-m;
 
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
+                    for row in group.rows: VerticalLayout {
+                        spacing: 2px;
 
-                if row.kind == ValueKind.boolean: CheckBox {
-                    checked: row.checked;
-                    toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
-                }
-                if row.kind == ValueKind.integer || row.kind == ValueKind.float: LineEdit {
-                    width: 140px;
-                    text: row.value;
-                    accepted(t) => { root.set-value(row.key, t); }
-                }
-                if row.kind == ValueKind.color: HorizontalLayout {
-                    spacing: Theme.space-s;
-                    alignment: start;
+                        HorizontalLayout {
+                            min-height: 32px;
+                            spacing: Theme.space-m;
 
-                    Rectangle {
-                        width: 28px;
-                        border-radius: Theme.radius-s;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        background: row.swatch;
+                            Text {
+                                text: row.label;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            if row.kind == ValueKind.boolean: CheckBox {
+                                checked: row.checked;
+                                toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
+                            }
+                            if row.kind == ValueKind.integer || row.kind == ValueKind.float: LineEdit {
+                                width: 140px;
+                                text: row.value;
+                                accepted(t) => { root.set-value(row.key, t); }
+                            }
+                            if row.kind == ValueKind.color: HorizontalLayout {
+                                spacing: Theme.space-s;
+                                alignment: start;
+
+                                Rectangle {
+                                    width: 28px;
+                                    border-radius: Theme.radius-s;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    background: row.swatch;
+                                }
+
+                                LineEdit {
+                                    width: 140px;
+                                    text: row.value;
+                                    accepted(t) => { root.set-value(row.key, t); }
+                                }
+                            }
+                            if row.kind == ValueKind.curve: ComboBox {
+                                width: 180px;
+                                model: row.choices;
+                                current-value: row.value;
+                                selected(v) => { root.set-value(row.key, v); }
+                            }
+                            if row.kind == ValueKind.list: LineEdit {
+                                width: 220px;
+                                text: row.value;
+                                accepted(t) => { root.set-value(row.key, t); }
+                            }
+                            if row.kind == ValueKind.text: LineEdit {
+                                width: 220px;
+                                text: row.value;
+                                accepted(t) => { root.set-value(row.key, t); }
+                            }
+                            if row.kind == ValueKind.choice: ComboBox {
+                                width: 180px;
+                                model: row.choices;
+                                current-value: row.value;
+                                selected(v) => { root.set-value(row.key, v); }
+                            }
+                            if row.kind == ValueKind.unset: Text {
+                                text: row.value;
+                                color: Theme.text-2;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        if row.hint != "": Text {
+                            text: row.hint;
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            opacity: 0.7;
+                        }
                     }
-
-                    LineEdit {
-                        width: 140px;
-                        text: row.value;
-                        accepted(t) => { root.set-value(row.key, t); }
-                    }
-                }
-                if row.kind == ValueKind.curve: ComboBox {
-                    width: 180px;
-                    model: row.choices;
-                    current-value: row.value;
-                    selected(v) => { root.set-value(row.key, v); }
-                }
-                if row.kind == ValueKind.list: LineEdit {
-                    width: 220px;
-                    text: row.value;
-                    accepted(t) => { root.set-value(row.key, t); }
-                }
-                if row.kind == ValueKind.text: LineEdit {
-                    width: 220px;
-                    text: row.value;
-                    accepted(t) => { root.set-value(row.key, t); }
-                }
-                if row.kind == ValueKind.choice: ComboBox {
-                    width: 180px;
-                    model: row.choices;
-                    current-value: row.value;
-                    selected(v) => { root.set-value(row.key, v); }
-                }
-                if row.kind == ValueKind.unset: Text {
-                    text: row.value;
-                    color: Theme.text-2;
-                    font-family: Theme.font-mono;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
-                }
-                if row.hint != "": Text {
-                    text: row.hint;
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    opacity: 0.7;
-                    vertical-alignment: center;
                 }
             }
         }
+
         if root.others.length > 0: VerticalLayout {
             spacing: Theme.space-xs;
-            alignment: start;
 
             Text {
                 text: "OTHER KEYS IN THIS FILE";
@@ -248,34 +265,39 @@ component FilePage inherits Rectangle {
                 font-weight: 700;
             }
 
-            for row in root.others: HorizontalLayout {
-                height: 28px;
-                spacing: Theme.space-m;
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
 
-                Text {
-                    text: row.label;
-                    color: Theme.text-2;
-                    font-family: Theme.font-mono;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
-                }
+                VerticalLayout {
+                    padding: Theme.space-m;
 
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
+                    for row in root.others: HorizontalLayout {
+                        min-height: 28px;
+                        spacing: Theme.space-m;
 
-                Text {
-                    text: row.value;
-                    color: Theme.text-2;
-                    font-family: Theme.font-mono;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
+                        Text {
+                            text: row.label;
+                            color: Theme.text-2;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        Text {
+                            text: row.value;
+                            color: Theme.text-2;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
-        }
-
-        Rectangle {
-            vertical-stretch: 1;
         }
     }
 }
@@ -500,7 +522,11 @@ export component AppWindow inherits Window {
                 }
 
                 if root.page == Page.file: ScrollView {
-                    FilePage {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: file-page.preferred-height;
+
+                    file-page := FilePage {
                         title: root.page-title;
                         groups: root.file-groups;
                         others: root.other-rows;
@@ -532,7 +558,11 @@ export component AppWindow inherits Window {
                     }
                 }
                 if root.page == Page.raw: ScrollView {
-                    FilePage {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: fp.preferred-height;
+
+                    fp := FilePage {
                         title: "Other settings";
                         groups: root.raw-groups;
                         others: root.no-rows;
