@@ -3,6 +3,8 @@
 //! read-only status projection of the loaded config. The UI-agnostic library
 //! does all real work — this module only presents it and forwards intents.
 
+use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -63,23 +65,27 @@ impl Shell {
 pub fn run(path: PathBuf) -> anyhow::Result<()> {
     let env = discovery::Env::from_process();
     let settings = app_settings::load(&env);
-    let shell = Shell::load(&path, &env);
+    let shell = Rc::new(RefCell::new(Shell::load(&path, &env)));
 
     let app = AppWindow::new().map_err(|err| anyhow::anyhow!("window creation failed: {err}"))?;
 
-    app.set_config_path(shell.path.display().to_string().into());
-    app.set_include_count(shell.includes.docs.len() as i32);
-    app.set_include_note(shell.includes.notes.join("; ").into());
+    {
+        let shell = shell.borrow();
+        app.set_config_path(shell.path.display().to_string().into());
+        app.set_include_count(shell.includes.docs.len() as i32);
+        app.set_include_note(shell.includes.notes.join("; ").into());
+    }
     app.set_dirty(false);
 
-    let sections = section_names(&shell.schema);
+    let sections = section_names(&shell.borrow().schema);
     if let Some(first) = sections.first() {
         app.set_current_section(first.clone());
         app.set_page_title(first.clone());
+        refill_section(&app, &shell.borrow(), first);
     }
     app.set_sections(model(sections));
-    app.set_files(model(file_labels(&shell)));
-    app.set_status(status_line(&shell));
+    app.set_files(model(file_labels(&shell.borrow())));
+    app.set_status(status_line(&shell.borrow()));
 
     app.window().set_size(WindowSize::Logical(LogicalSize::new(
         settings.window_width as f32,
@@ -88,20 +94,24 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
 
     {
         let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
         app.on_section_selected(move |name| {
-            if let Some(app) = weak.upgrade() {
-                app.set_current_section(name.clone());
-                app.set_page_title(name);
-            }
+            let Some(app) = weak.upgrade() else { return };
+            let shell = shell.borrow();
+            app.set_current_section(name.clone());
+            app.set_page_title(name.clone());
+            app.set_page(Page::Section);
+            refill_section(&app, &shell, &name);
         });
     }
     {
         let weak = app.as_weak();
-        let labels = file_labels(&shell);
-        app.on_file_selected(move |index| {
-            if let Some(app) = weak.upgrade()
-                && let Some(label) = labels.get(index as usize)
-            {
+        let labels = file_labels(&shell.borrow());
+        app.on_open_file(move |index| {
+            let Some(app) = weak.upgrade() else { return };
+            app.set_page(Page::File);
+            app.set_current_file(index);
+            if let Some(label) = labels.get(index as usize) {
                 app.set_page_title(label.clone());
             }
         });
@@ -116,7 +126,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
     {
         let weak = app.as_weak();
-        let count = shell.schema.len();
+        let count = shell.borrow().schema.len();
         app.on_sync_schema_requested(move || {
             if let Some(app) = weak.upgrade() {
                 app.set_status(format!("{count} settings in the current schema").into());
@@ -230,4 +240,59 @@ fn status_line(shell: &Shell) -> SharedString {
 
 fn model(strings: Vec<SharedString>) -> slint::ModelRc<SharedString> {
     Rc::new(VecModel::from(strings)).into()
+}
+
+/// Per-doc leaf-path sets over the include chain: includes in order, main
+/// last (chain indexing: include i = i, main = includes.docs.len()).
+fn chain_path_sets(shell: &Shell) -> Vec<BTreeSet<String>> {
+    let mut sets: Vec<BTreeSet<String>> = shell
+        .includes
+        .docs
+        .iter()
+        .map(|inc| inc.doc.value_paths().into_iter().collect())
+        .collect();
+    sets.push(shell.doc.value_paths().into_iter().collect());
+    sets
+}
+
+/// Effective home of a dotted path: main wins over includes, earlier
+/// includes win over later (merge order — mirrors egui's entry_home).
+fn entry_home(sets: &[BTreeSet<String>], dotted: &str) -> Option<usize> {
+    let main = sets.len() - 1;
+    if sets[main].contains(dotted) {
+        return Some(main);
+    }
+    sets.iter().position(|set| set.contains(dotted))
+}
+
+/// Classification for one section: pointers (set somewhere) + available
+/// (schema keys set nowhere). Read-only this lesson; the destination
+/// picker arrives with editing in Phase 2.
+fn section_rows(shell: &Shell, section: &str) -> (Vec<SectionRow>, Vec<SharedString>) {
+    let sets = chain_path_sets(shell);
+    let labels = file_labels(shell);
+    let mut rows = Vec::new();
+    let mut available = Vec::new();
+    for entry in &shell.schema {
+        if entry.section.split('.').next() != Some(section) {
+            continue;
+        }
+        let dotted = entry.path.join(".");
+        match entry_home(&sets, &dotted) {
+            Some(home) => rows.push(SectionRow {
+                label: entry.label.clone().into(),
+                home_label: labels.get(home).cloned().unwrap_or_default(),
+                home_index: home as i32,
+            }),
+            None => available.push(entry.label.clone().into()),
+        }
+    }
+    (rows, available)
+}
+
+/// Refill both section models; called at startup and on every section pick.
+fn refill_section(app: &AppWindow, shell: &Shell, section: &str) {
+    let (rows, available) = section_rows(shell, section);
+    app.set_section_rows(Rc::new(VecModel::from(rows)).into());
+    app.set_available_rows(Rc::new(VecModel::from(available)).into());
 }

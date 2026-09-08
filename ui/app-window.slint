@@ -10,6 +10,14 @@ import "../assets/fonts/Inter-Regular.ttf";
 import "../assets/fonts/Inter-Bold.ttf";
 import "../assets/fonts/JetBrainsMono-Regular.ttf";
 
+export struct SectionRow {
+    label: string,
+    home-label:string,
+    home-index: int,
+}
+
+export enum Page {section,file}
+
 // Small token-driven button; std-widgets are avoided until the styled-page
 // pass so the whole shell carries one identity from day one.
 component ActionButton inherits Rectangle {
@@ -85,9 +93,14 @@ export component AppWindow inherits Window {
     in property <string> status;
     in-out property <string> current-section;
     in-out property <bool> show-exit-confirm: false;
+    in-out property <Page> page: Page.section;
+    in-out property <int> current-file: -1;
+    in property <[SectionRow]> section-rows;
+    in property <[string]> available-rows;
 
     callback section-selected(string);
     callback file-selected(int);
+    callback open-file(int);
     callback save-requested();
     callback sync-schema-requested();
     callback exit-requested();
@@ -180,9 +193,9 @@ export component AppWindow inherits Window {
                         color: Theme.text-2;
                         font-size: Theme.font-small;
                     }
-                    for file in root.files: NavRow {
+                    for file[i] in root.files: NavRow {
                         label: file;
-                        selected-fired => { }
+                        selected-fired => { root.open-file(i); }
                     }
 
                     Rectangle { vertical-stretch: 1; }
@@ -207,22 +220,65 @@ export component AppWindow inherits Window {
                     spacing: Theme.space-m;
                     alignment: start;
 
-                    Text {
-                        text: root.page-title;
-                        color: Theme.text-1;
-                        font-size: Theme.font-title;
-                        font-weight: 700;
+                                        if root.page == Page.section: VerticalLayout {
+                        spacing: Theme.space-m;
+                        alignment: start;
+
+                        Text {
+                            text: root.page-title;
+                            color: Theme.text-1;
+                            font-size: Theme.font-title;
+                            font-weight: 700;
+                        }
+                        Text {
+                            text: root.status;
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                        }
+                        Text {
+                            text: "IN USE";
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                        }
+                        for row in root.section-rows: Rectangle {
+                            height: 32px;
+                            border-radius: Theme.radius-s;
+                            background: ta.has-hover ? Theme.bg-2 : transparent;
+                            ta := TouchArea {
+                                clicked => { root.open-file(row.home-index); }
+                            }
+                            HorizontalLayout {
+                                padding-left: Theme.space-m;
+                                padding-right: Theme.space-m;
+                                spacing: Theme.space-m;
+                                Text {
+                                    text: row.label;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text {
+                                    text: "in " + row.home-label + " — open";
+                                    color: Theme.accent;
+                                    font-size: Theme.font-small;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        Text {
+                            text: "AVAILABLE";
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            visible: root.available-rows.length > 0;
+                        }
+                        for label in root.available-rows: Text {
+                            text: label;
+                            color: Theme.text-2;
+                        }
                     }
-                    Text {
-                        text: root.status;
+
+                    if root.page == Page.file: Text {
+                        text: root.page-title + " — file page lands in Lesson 2";
                         color: Theme.text-2;
-                        font-size: Theme.font-body;
-                    }
-                    Text {
-                        text: "Pages land in Phases 1–2 — see .design/ui-plan.md";
-                        color: Theme.text-2;
-                        font-size: Theme.font-small;
-                        opacity: 0.6;
                     }
                 }
             }
