@@ -194,217 +194,67 @@ component FilePage inherits Rectangle {
         clicked => { sink.focus(); }
     }
 
-    // Gutters center the column; the column caps at max-width. No
-    // parent.width references — those create intrinsic-size cycles.
-    HorizontalLayout {
-        Rectangle {
-            horizontal-stretch: 1;
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
         }
 
-        VerticalLayout {
-            max-width: 720px;
-            padding-top: Theme.space-l;
-            padding-bottom: Theme.space-l;
-            spacing: Theme.space-l;
-            alignment: start;
+        if root.status != "": Text {
+            text: root.status;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+        }
+
+        for group in root.groups: VerticalLayout {
+            spacing: Theme.space-xs;
 
             Text {
-                text: root.title;
-                color: Theme.text-1;
-                font-size: Theme.font-title;
+                text: group.title;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
                 font-weight: 700;
             }
 
-            if root.status != "": Text {
-                text: root.status;
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-            }
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
 
-            for group in root.groups: VerticalLayout {
-                spacing: Theme.space-xs;
+                VerticalLayout {
+                    padding: Theme.space-m;
 
-                Text {
-                    text: group.title;
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    font-weight: 700;
-                }
+                    for row in group.rows: VerticalLayout {
+                        spacing: 2px;
+                        opacity: row.available ? 0.55 : 1.0;
 
-                Rectangle {
-                    background: Theme.bg-1;
-                    border-radius: Theme.radius-m;
+                        HorizontalLayout {
+                            min-height: 32px;
+                            spacing: Theme.space-m;
 
-                    VerticalLayout {
-                        padding: Theme.space-m;
-
-                        for row in group.rows: VerticalLayout {
-                            spacing: 2px;
-                            opacity: row.available ? 0.55 : 1.0;
-
-                            HorizontalLayout {
-                                min-height: 32px;
-                                spacing: Theme.space-m;
-
-                                if row.changed: Rectangle {
-                                    width: 7px;
-                                    VerticalLayout {
-                                        alignment: center;
-
-                                        Rectangle {
-                                            width: 7px;
-                                            height: 7px;
-                                            border-radius: 4px;
-                                            background: Theme.accent;
-                                        }
-                                    }
-                                }
-
-                                Text {
-                                    text: row.label;
-                                    vertical-alignment: center;
-                                }
-
-                                Rectangle {
-                                    horizontal-stretch: 1;
-                                }
-
-                                if row.kind == ValueKind.boolean: CheckBox {
-                                    checked: row.checked;
-                                    toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
-                                }
-                                if row.kind == ValueKind.integer || row.kind == ValueKind.float: HorizontalLayout {
-                                    spacing: Theme.space-s;
-                                    alignment: start;
-
-                                    if row.max > row.min && row.value.to-float() == row.value.to-float(): Slider {
-                                        width: 160px;
-                                        minimum: row.min;
-                                        maximum: row.max;
-                                        value: row.value.to-float();
-                                        changed(v) => { root.slider-preview(row.key, v); }
-                                        released(v) => { root.set-slider-value(row.key, v); }
-                                    }
-
-                                    DraftEdit {
-                                        width: 140px;
-                                        value: row.value;
-                                        commit(t) => { root.set-value(row.key, t); }
-                                    }
-                                }
-                                if row.kind == ValueKind.color: HorizontalLayout {
-                                    spacing: Theme.space-s;
-                                    alignment: start;
+                            if row.changed: Rectangle {
+                                width: 7px;
+                                VerticalLayout {
+                                    alignment: center;
 
                                     Rectangle {
-                                        width: 28px;
-                                        border-radius: Theme.radius-s;
-                                        border-width: 1px;
-                                        border-color: Theme.border;
-                                        background: row.swatch;
-                                    }
-
-                                    DraftEdit {
-                                        width: 140px;
-                                        value: row.value;
-                                        commit(t) => { root.set-value(row.key, t); }
-                                    }
-                                }
-                                if row.kind == ValueKind.curve: ComboBox {
-                                    width: 180px;
-                                    model: row.choices;
-                                    current-value: row.value;
-                                    selected(v) => { root.set-value(row.key, v); }
-                                }
-                                if row.kind == ValueKind.list: DraftEdit {
-                                    width: 220px;
-                                    value: row.value;
-                                    commit(t) => { root.set-value(row.key, t); }
-                                }
-                                if row.kind == ValueKind.text: DraftEdit {
-                                    width: 220px;
-                                    value: row.value;
-                                    commit(t) => { root.set-value(row.key, t); }
-                                }
-                                if row.kind == ValueKind.choice: ComboBox {
-                                    width: 180px;
-                                    model: row.choices;
-                                    current-value: row.value;
-                                    selected(v) => { root.set-value(row.key, v); }
-                                }
-                                if row.kind == ValueKind.unset: Text {
-                                    text: row.value;
-                                    color: Theme.text-2;
-                                    font-family: Theme.font-mono;
-                                    font-size: Theme.font-small;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: Theme.space-s;
-                                alignment: start;
-
-                                if row.hint != "": Text {
-                                    text: row.hint;
-                                    color: Theme.text-2;
-                                    font-size: Theme.font-small;
-                                    opacity: 0.7;
-                                    vertical-alignment: center;
-                                }
-
-                                // Ownership badge: click to view the file that
-                            // owns this key (read-only).
-                            if row.home >= 0: Rectangle {
-                                    width: badge-text.preferred-width + 10px;
-                                    height: badge-text.preferred-height + 4px;
-                                    border-radius: Theme.radius-s;
-
-                                    badge-ta := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => { root.view-file(row.home); }
-                                    }
-
-                                    badge-text := Text {
-                                        text: "in " + row.home-label;
-                                        color: badge-ta.has-hover ? Theme.accent : Theme.text-2;
-                                        font-size: Theme.font-small;
-                                        vertical-alignment: center;
-                                        horizontal-alignment: center;
+                                        width: 7px;
+                                        height: 7px;
+                                        border-radius: 4px;
+                                        background: Theme.accent;
                                     }
                                 }
                             }
-                        }
-                    }
-                }
-            }
-
-            if root.others.length > 0: VerticalLayout {
-                spacing: Theme.space-xs;
-
-                Text {
-                    text: "OTHER KEYS IN THIS FILE";
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    font-weight: 700;
-                }
-
-                Rectangle {
-                    background: Theme.bg-1;
-                    border-radius: Theme.radius-m;
-
-                    VerticalLayout {
-                        padding: Theme.space-m;
-
-                        for row in root.others: HorizontalLayout {
-                            min-height: 28px;
-                            spacing: Theme.space-m;
 
                             Text {
                                 text: row.label;
-                                color: Theme.text-2;
-                                font-family: Theme.font-mono;
-                                font-size: Theme.font-small;
+                                width: 260px;
+                                wrap: TextWrap.word-wrap;
                                 vertical-alignment: center;
                             }
 
@@ -412,7 +262,70 @@ component FilePage inherits Rectangle {
                                 horizontal-stretch: 1;
                             }
 
-                            Text {
+                            if row.kind == ValueKind.boolean: CheckBox {
+                                checked: row.checked;
+                                toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
+                            }
+                            if row.kind == ValueKind.integer || row.kind == ValueKind.float: HorizontalLayout {
+                                spacing: Theme.space-s;
+                                alignment: start;
+
+                                if row.max > row.min && row.value.to-float() == row.value.to-float(): Slider {
+                                    width: 160px;
+                                    minimum: row.min;
+                                    maximum: row.max;
+                                    value: row.value.to-float();
+                                    changed(v) => { root.slider-preview(row.key, v); }
+                                    released(v) => { root.set-slider-value(row.key, v); }
+                                }
+
+                                DraftEdit {
+                                    width: 140px;
+                                    value: row.value;
+                                    commit(t) => { root.set-value(row.key, t); }
+                                }
+                            }
+                            if row.kind == ValueKind.color: HorizontalLayout {
+                                spacing: Theme.space-s;
+                                alignment: start;
+
+                                Rectangle {
+                                    width: 28px;
+                                    border-radius: Theme.radius-s;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    background: row.swatch;
+                                }
+
+                                DraftEdit {
+                                    width: 140px;
+                                    value: row.value;
+                                    commit(t) => { root.set-value(row.key, t); }
+                                }
+                            }
+                            if row.kind == ValueKind.curve: ComboBox {
+                                width: 180px;
+                                model: row.choices;
+                                current-value: row.value;
+                                selected(v) => { root.set-value(row.key, v); }
+                            }
+                            if row.kind == ValueKind.list: DraftEdit {
+                                width: 220px;
+                                value: row.value;
+                                commit(t) => { root.set-value(row.key, t); }
+                            }
+                            if row.kind == ValueKind.text: DraftEdit {
+                                width: 220px;
+                                value: row.value;
+                                commit(t) => { root.set-value(row.key, t); }
+                            }
+                            if row.kind == ValueKind.choice: ComboBox {
+                                width: 180px;
+                                model: row.choices;
+                                current-value: row.value;
+                                selected(v) => { root.set-value(row.key, v); }
+                            }
+                            if row.kind == ValueKind.unset: Text {
                                 text: row.value;
                                 color: Theme.text-2;
                                 font-family: Theme.font-mono;
@@ -420,13 +333,88 @@ component FilePage inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
+
+                        HorizontalLayout {
+                            spacing: Theme.space-s;
+                            alignment: start;
+
+                            if row.hint != "": Text {
+                                text: row.hint;
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                opacity: 0.7;
+                                vertical-alignment: center;
+                            }
+
+                            // Ownership badge: click to view the file that
+                            // owns this key (read-only).
+                            if row.home >= 0: Rectangle {
+                                width: badge-text.preferred-width + 10px;
+                                height: badge-text.preferred-height + 4px;
+                                border-radius: Theme.radius-s;
+
+                                badge-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.view-file(row.home); }
+                                }
+
+                                badge-text := Text {
+                                    text: "in " + row.home-label;
+                                    color: badge-ta.has-hover ? Theme.accent : Theme.text-2;
+                                    font-size: Theme.font-small;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        Rectangle {
-            horizontal-stretch: 1;
+        if root.others.length > 0: VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "OTHER KEYS IN THIS FILE";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+
+                    for row in root.others: HorizontalLayout {
+                        min-height: 28px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: row.label;
+                            color: Theme.text-2;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        Text {
+                            text: row.value;
+                            color: Theme.text-2;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -612,12 +600,16 @@ export component AppWindow inherits Window {
             Rectangle {
                 background: Theme.bg-0;
 
-                if root.page == Page.section: ScrollView {
+                if root.page == Page.section: svs := ScrollView {
                     width: 100%;
                     height: 100%;
                     viewport-height: section-page.preferred-height;
 
+                    // Explicit width + centered x: the page fills up to 720px
+                    // without feeding back into its intrinsic size.
                     section-page := FilePage {
+                        width: min(720px, svs.visible-width - 2 * Theme.space-l);
+                        x: (svs.visible-width - self.width) / 2;
                         title: root.page-title;
                         groups: root.file-groups;
                         others: root.no-rows;
@@ -652,12 +644,14 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-                if root.page == Page.raw: ScrollView {
+                if root.page == Page.raw: srv := ScrollView {
                     width: 100%;
                     height: 100%;
                     viewport-height: fp.preferred-height;
 
                     fp := FilePage {
+                        width: min(720px, srv.visible-width - 2 * Theme.space-l);
+                        x: (srv.visible-width - self.width) / 2;
                         title: "Other settings";
                         groups: root.raw-groups;
                         others: root.no-rows;
