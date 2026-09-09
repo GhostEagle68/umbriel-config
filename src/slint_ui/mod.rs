@@ -18,6 +18,8 @@ use umbriel_config::config::{
 };
 use umbriel_config::{live, update};
 
+mod catalog;
+
 slint::include_modules!();
 
 /// Minimal starter written by the onboarding panel: comments only, so it
@@ -270,13 +272,18 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     app.set_schema_empty(shell.borrow().schema.is_empty());
 
     let nav = section_nav(&shell.borrow());
-    if let Some(first) = nav.first() {
-        app.set_current_section(first.label.clone());
-        app.set_page_title(first.label.clone());
-        refill_section(&app, &shell.borrow(), &first.label);
+    let configured_outputs = !outputs::configured(&shell.borrow().doc).is_empty();
+    let landing = nav
+        .iter()
+        .find(|entry| !entry.is_header && (configured_outputs || entry.id != catalog::OUTPUTS_ID));
+    if let Some(first) = landing {
+        let (title, description) = page_meta(&first.id);
+        app.set_current_section(first.id.clone());
+        app.set_page_title(title.into());
+        app.set_page_description(description.into());
+        refill_page(&app, &shell.borrow(), &first.id);
     }
     app.set_sections(Rc::new(VecModel::from(nav)).into());
-    app.set_status(status_line(&shell.borrow()));
     {
         // Destination picker model, main first: index 0 = main, i = include i-1.
         let shell = shell.borrow();
@@ -297,11 +304,18 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         let shell = Rc::clone(&shell);
         app.on_section_selected(move |name| {
             let Some(app) = weak.upgrade() else { return };
+            // Outputs page: rescan on open — fast-fails when no
+            // compositor is reachable and keeps the last detection.
+            if name.as_str() == catalog::OUTPUTS_ID {
+                shell.borrow_mut().guide_monitors = live::outputs().unwrap_or_default();
+            }
             let shell = shell.borrow();
             app.set_current_section(name.clone());
-            app.set_page_title(name.clone());
+            let (title, description) = page_meta(&name);
+            app.set_page_title(title.into());
+            app.set_page_description(description.into());
             app.set_page(Page::Section);
-            refill_section(&app, &shell, &name);
+            refill_page(&app, &shell, &name);
         });
     }
     {
@@ -315,8 +329,10 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 // Empty box = leave search; restore the section overview.
                 let section = app.get_current_section().to_string();
                 app.set_page(Page::Section);
-                app.set_page_title(section.clone().into());
-                refill_section(&app, &shell, &section);
+                let (title, description) = page_meta(&section);
+                app.set_page_title(title.into());
+                app.set_page_description(description.into());
+                refill_page(&app, &shell, &section);
                 return;
             }
             let sets = chain_path_sets(&shell);
@@ -331,7 +347,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                     SectionRow {
                         label: entry.label.clone().into(),
                         home_label: labels.get(home).cloned().unwrap_or_default(),
-                        home_section: entry.section.split('.').next().unwrap_or("other").into(),
+                        home_section: page_id_for_section(&entry.section).into(),
                     }
                 })
                 .collect();
@@ -373,6 +389,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             app.set_popup_file_title(format!("{label}{modified}").into());
             app.set_popup_file_path(path.into());
             app.set_popup_file_text(doc.text().into());
+            app.set_file_stats(status_line(&shell));
             app.set_show_file_popup(true);
         });
     }
@@ -451,7 +468,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 }
             }
             let shell = shell.borrow();
-            refill_section(&app, &shell, app.get_current_section().as_str());
+            refill_page(&app, &shell, app.get_current_section().as_str());
             app.set_show_save_popup(false);
             app.set_changed_count(changed_count(&shell));
             app.set_status("Discarded all unsaved changes.".into());
@@ -562,7 +579,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 }
             }
             let section = app.get_current_section().to_string();
-            refill_section(&app, &shell, &section);
+            refill_page(&app, &shell, &section);
         });
     }
     {
@@ -595,7 +612,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             app.set_schema_empty(empty);
             app.set_sections(Rc::new(VecModel::from(section_nav(&shell))).into());
             let section = app.get_current_section().to_string();
-            refill_section(&app, &shell, &section);
+            refill_page(&app, &shell, &section);
         });
     }
     {
@@ -1057,21 +1074,6 @@ fn status_line(shell: &Shell) -> SharedString {
     .into()
 }
 
-/// Sidebar model: each section name plus how many of its keys are NEW.
-fn section_nav(shell: &Shell) -> Vec<SectionNav> {
-    section_names(&shell.schema)
-        .into_iter()
-        .map(|name| SectionNav {
-            new_count: shell
-                .new_keys
-                .iter()
-                .filter(|key| key.split('.').next() == Some(name.as_str()))
-                .count() as i32,
-            label: name,
-        })
-        .collect()
-}
-
 /// Per-doc leaf-path sets over the include chain: includes in order, main
 /// last (chain indexing: include i = i, main = includes.docs.len()).
 fn chain_path_sets(shell: &Shell) -> Vec<BTreeSet<String>> {
@@ -1182,15 +1184,198 @@ fn reset_key(shell: &mut Shell, key: &str) {
 }
 
 /// Refill the section page: every setting of `section` across the chain.
-fn refill_section(app: &AppWindow, shell: &Shell, section: &str) {
-    app.set_file_groups(Rc::new(VecModel::from(section_groups(shell, section))).into());
+fn refill_page(app: &AppWindow, shell: &Shell, page_id: &str) {
+    app.set_file_groups(Rc::new(VecModel::from(page_groups(shell, page_id))).into());
     app.set_changed_count(changed_count(shell));
 }
 
-/// One section page: every schema entry of the top-level `section` across
-/// the whole include chain, grouped by sub-section. Unset keys read "—"
-/// and commit to main (the inline destination picker is a fast-follow).
-fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
+/// Which page a schema sub-section belongs to: its claimed page, else the
+/// first page covering its top-level area, else the MORE fallback page
+/// (whose id is the top-level name itself).
+fn page_id_for_section(section: &str) -> String {
+    if let Some((_, id)) = catalog::claimed_sections().find(|(claimed, _)| *claimed == section) {
+        return (*id).to_owned();
+    }
+    let top = section.split('.').next().unwrap_or(section);
+    if let Some((claimed, id)) =
+        catalog::claimed_sections().find(|(claimed, _)| claimed.split('.').next() == Some(top))
+    {
+        let _ = claimed;
+        return (*id).to_owned();
+    }
+    top.to_owned()
+}
+
+/// NEW-key counts per page id (sidebar badges).
+fn page_new_counts(shell: &Shell) -> BTreeMap<String, i32> {
+    let mut counts: BTreeMap<String, i32> = BTreeMap::new();
+    for key in &shell.new_keys {
+        let page_id = if key.starts_with("output.") {
+            catalog::OUTPUTS_ID.to_owned()
+        } else {
+            match shell
+                .schema
+                .iter()
+                .find(|entry| entry.dotted() == *key)
+                .map(|entry| page_id_for_section(&entry.section))
+            {
+                Some(page_id) => page_id,
+                None => continue,
+            }
+        };
+        *counts.entry(page_id).or_default() += 1;
+    }
+    counts
+}
+
+/// "hot_corners" → "Hot corners".
+fn prettify(name: &str) -> String {
+    let mut owned = name.replace('_', " ");
+    if let Some(first) = owned.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    owned
+}
+
+/// Header title + subtitle for a page.
+fn page_meta(page_id: &str) -> (String, String) {
+    match catalog::page(page_id) {
+        Some(page) => (page.title.to_owned(), page.description.to_owned()),
+        None => (
+            prettify(page_id),
+            "Settings umbriel hasn't grouped yet, the catalog will catch up.".to_owned(),
+        ),
+    }
+}
+
+/// The sidebar model: grouped human pages (catalog + MORE fallback) with
+/// small header rows and NEW counts per page.
+fn section_nav(shell: &Shell) -> Vec<SectionNav> {
+    fn push_page(
+        nav: &mut Vec<SectionNav>,
+        claimed_tops: &mut Vec<&'static str>,
+        counts: &BTreeMap<String, i32>,
+        page: &'static catalog::Page,
+    ) {
+        for top in catalog::page_top_levels(page) {
+            if !claimed_tops.contains(&top) {
+                claimed_tops.push(top);
+            }
+        }
+        nav.push(SectionNav {
+            label: page.title.into(),
+            id: page.id.into(),
+            new_count: counts.get(page.id).copied().unwrap_or(0),
+            is_header: false,
+        });
+    }
+
+    let counts = page_new_counts(shell);
+    let mut nav: Vec<SectionNav> = Vec::new();
+    let mut claimed_tops: Vec<&'static str> = Vec::new();
+    // Outputs leads the sidebar and needs no redundant group header.
+    if let Some(page) = catalog::page(catalog::OUTPUTS_ID) {
+        push_page(&mut nav, &mut claimed_tops, &counts, page);
+    }
+    for group in catalog::GROUPS.iter().filter(|group| **group != "outputs") {
+        nav.push(SectionNav {
+            label: catalog::group_title(group).into(),
+            id: String::new().into(),
+            new_count: 0,
+            is_header: true,
+        });
+        for page in catalog::PAGES.iter().filter(|page| page.group == *group) {
+            push_page(&mut nav, &mut claimed_tops, &counts, page);
+        }
+    }
+    // Top-level areas the catalog doesn't claim surface under MORE.
+    let more: Vec<SharedString> = section_names(&shell.schema)
+        .into_iter()
+        .filter(|name| !claimed_tops.contains(&name.as_str()))
+        .collect();
+    if !more.is_empty() {
+        nav.push(SectionNav {
+            label: catalog::group_title(catalog::MORE_GROUP).into(),
+            id: String::new().into(),
+            new_count: 0,
+            is_header: true,
+        });
+        for name in more {
+            nav.push(SectionNav {
+                new_count: counts.get(name.as_str()).copied().unwrap_or(0),
+                label: prettify(&name).into(),
+                id: name.to_string().into(),
+                is_header: false,
+            });
+        }
+    }
+    nav
+}
+
+/// One settings page's cards.
+fn page_groups(shell: &Shell, page_id: &str) -> Vec<FileGroup> {
+    if page_id == catalog::OUTPUTS_ID {
+        return output_groups(shell);
+    }
+    if let Some(page) = catalog::page(page_id) {
+        return catalog_page_groups(shell, page);
+    }
+    fallback_page_groups(shell, page_id)
+}
+
+/// A catalog page: one card per curated sub-section, then any
+/// sub-sections of the same areas the catalog doesn't claim yet, then
+/// the uncovered-keys card.
+fn catalog_page_groups(shell: &Shell, page: &catalog::Page) -> Vec<FileGroup> {
+    let sets = chain_path_sets(shell);
+    let labels = file_labels(shell);
+    let main = shell.includes.docs.len();
+    let current: Vec<BTreeMap<String, String>> = (0..=main)
+        .map(|i| doc_at(shell, i).leaf_values().into_iter().collect())
+        .collect();
+
+    let mut groups: Vec<FileGroup> = Vec::new();
+    let mut claimed: Vec<&str> = Vec::new();
+    for card in page.cards {
+        claimed.push(card.section);
+        let rows: Vec<FileRow> = shell
+            .schema
+            .iter()
+            .filter(|entry| entry.section == card.section)
+            .map(|entry| schema_row(shell, &sets, &labels, &current, entry))
+            .collect();
+        if !rows.is_empty() {
+            groups.push(FileGroup {
+                title: card.title.into(),
+                rows: Rc::new(VecModel::from(rows)).into(),
+            });
+        }
+    }
+
+    let tops = catalog::page_top_levels(page);
+    let mut auto: BTreeMap<String, Vec<FileRow>> = BTreeMap::new();
+    for entry in &shell.schema {
+        let top = entry.section.split('.').next().unwrap_or("");
+        if !tops.contains(&top) || claimed.contains(&entry.section.as_str()) {
+            continue;
+        }
+        let row = schema_row(shell, &sets, &labels, &current, entry);
+        auto.entry(prettify(&entry.section)).or_default().push(row);
+    }
+    for (title, rows) in auto {
+        groups.push(FileGroup {
+            title: title.into(),
+            rows: Rc::new(VecModel::from(rows)).into(),
+        });
+    }
+    if let Some(other) = other_group(shell, &sets, &labels, &current, &tops) {
+        groups.push(other);
+    }
+    groups
+}
+
+/// A MORE fallback page: every sub-section of one top-level area.
+fn fallback_page_groups(shell: &Shell, top: &str) -> Vec<FileGroup> {
     let sets = chain_path_sets(shell);
     let labels = file_labels(shell);
     let main = shell.includes.docs.len();
@@ -1200,13 +1385,15 @@ fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
 
     let mut groups: BTreeMap<String, Vec<FileRow>> = BTreeMap::new();
     for entry in &shell.schema {
-        if entry.section.split('.').next() != Some(section) {
+        if entry.section.split('.').next() != Some(top) {
             continue;
         }
         let row = schema_row(shell, &sets, &labels, &current, entry);
-        groups.entry(entry.section.clone()).or_default().push(row);
+        groups
+            .entry(prettify(&entry.section))
+            .or_default()
+            .push(row);
     }
-
     let mut out: Vec<FileGroup> = groups
         .into_iter()
         .map(|(title, rows)| FileGroup {
@@ -1214,10 +1401,22 @@ fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
             rows: Rc::new(VecModel::from(rows)).into(),
         })
         .collect();
+    if let Some(other) = other_group(shell, &sets, &labels, &current, &[top]) {
+        out.push(other);
+    }
+    out
+}
 
-    // Keys beyond the schema fold onto the section that owns them (the
-    // old Other-settings sweep): one read-only row per key, owned like
-    // any other row. Only keys of this section are shown.
+/// Keys beyond the schema fold onto the page that owns their area (the
+/// old Other-settings sweep): one read-only row per key, owned like any
+/// other row. Only keys whose top-level matches one of `tops` are shown.
+fn other_group(
+    shell: &Shell,
+    sets: &[BTreeSet<String>],
+    labels: &[SharedString],
+    current: &[BTreeMap<String, String>],
+    tops: &[&str],
+) -> Option<FileGroup> {
     let docs: Vec<&ConfigDocument> = shell.includes.docs.iter().map(|inc| &inc.doc).collect();
     let claims = schema::managed_claims(&docs);
     let schema_keys = schema::key_set(&shell.schema);
@@ -1225,12 +1424,13 @@ fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
     for (i, set) in sets.iter().enumerate() {
         let paths: Vec<String> = set.iter().cloned().collect();
         for path in schema::uncovered(&paths, &schema_keys, &claims) {
-            if path.split('.').next() != Some(section) {
+            let top = path.split('.').next().unwrap_or_default();
+            if !tops.contains(&top) {
                 continue;
             }
             // One row per key: the file that owns it (shadowed copies
             // in later includes are skipped).
-            let Some(home) = entry_home(&sets, &path) else {
+            let Some(home) = entry_home(sets, &path) else {
                 continue;
             };
             if home != i || other.contains_key(&path) {
@@ -1264,13 +1464,13 @@ fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
             );
         }
     }
-    if !other.is_empty() {
-        out.push(FileGroup {
-            title: "other".into(),
-            rows: Rc::new(VecModel::from(other.into_values().collect::<Vec<_>>())).into(),
-        });
+    if other.is_empty() {
+        return None;
     }
-    out
+    Some(FileGroup {
+        title: "other".into(),
+        rows: Rc::new(VecModel::from(other.into_values().collect::<Vec<_>>())).into(),
+    })
 }
 
 /// One schema row, editor-ready: typed value, checked state, swatch, hint.
@@ -1815,7 +2015,14 @@ fn output_groups(shell: &Shell) -> Vec<FileGroup> {
     let doc = doc_at(shell, main);
     let current: BTreeMap<String, String> = doc.leaf_values().into_iter().collect();
     let home_label = file_labels(shell).get(main).cloned().unwrap_or_default();
-    outputs::configured(doc)
+    // Configured monitors plus anything detected but not configured yet.
+    let mut names: Vec<String> = outputs::configured(doc);
+    for monitor in &shell.guide_monitors {
+        if !names.contains(&monitor.name) {
+            names.push(monitor.name.clone());
+        }
+    }
+    names
         .iter()
         .map(|name| {
             let monitor = shell
@@ -1890,7 +2097,12 @@ fn resolution_choice_row(
 ) -> FileRow {
     let main = shell.includes.docs.len();
     let doc = doc_at(shell, main);
-    let (resolution, _) = mode_parts(doc, name);
+    let (mut resolution, _) = mode_parts(doc, name);
+    if resolution.is_empty()
+        && let Some(mode) = monitor.current.and_then(|index| monitor.modes.get(index))
+    {
+        resolution = format!("{}x{}", mode.width, mode.height);
+    }
     let key = format!("output.{name}.resolution");
     let mut row = blank_output_row(shell, key.clone(), "Resolution");
     row.kind = ValueKind::Choice;
@@ -1915,7 +2127,13 @@ fn refresh_choice_row(
 ) -> FileRow {
     let main = shell.includes.docs.len();
     let doc = doc_at(shell, main);
-    let (resolution, refresh) = mode_parts(doc, name);
+    let (mut resolution, mut refresh) = mode_parts(doc, name);
+    if resolution.is_empty()
+        && let Some(mode) = monitor.current.and_then(|index| monitor.modes.get(index))
+    {
+        resolution = format!("{}x{}", mode.width, mode.height);
+        refresh = (mode.refresh_mhz as f64 / 1000.0).to_string();
+    }
     let key = format!("output.{name}.refresh");
     let mut row = blank_output_row(shell, key.clone(), "Refresh rate");
     row.kind = ValueKind::Choice;
@@ -1989,9 +2207,18 @@ fn output_row(
     let key = format!("output.{name}.{}", field.key);
     let mut row = blank_output_row(shell, key.clone(), field.label);
     row.hint = output_field_hint(field.key).into();
+    let default_text = match &field.default {
+        Some(outputs::DefaultValue::Bool(value)) => value.to_string(),
+        Some(outputs::DefaultValue::Float(value)) => value.to_string(),
+        Some(outputs::DefaultValue::Text(value)) => (*value).to_owned(),
+        None => String::new(),
+    };
     match &field.kind {
         outputs::FieldKind::Toggle => {
-            let value = doc.get_bool(&path).unwrap_or(false);
+            let value = doc.get_bool(&path).unwrap_or(matches!(
+                field.default,
+                Some(outputs::DefaultValue::Bool(true))
+            ));
             row.kind = ValueKind::Boolean;
             row.checked = value;
             row.value = value.to_string().into();
@@ -2005,7 +2232,11 @@ fn output_row(
                     .collect::<Vec<_>>(),
             ))
             .into();
-            row.value = doc.get_string(&path).unwrap_or_default().into();
+            row.value = doc
+                .get_string(&path)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(default_text)
+                .into();
         }
         outputs::FieldKind::Position => {
             row.kind = ValueKind::Text;
@@ -2018,12 +2249,18 @@ fn output_row(
             row.kind = ValueKind::Float;
             row.min = *min as f32;
             row.max = *max as f32;
-            if let Some(value) = doc.get_float(&path) {
-                row.value = value.to_string().into();
-            }
+            row.value = doc
+                .get_float(&path)
+                .unwrap_or_else(|| default_text.parse().unwrap_or(0.0))
+                .to_string()
+                .into();
         }
         outputs::FieldKind::Text | outputs::FieldKind::Workspaces => {
-            row.value = doc.get_string(&path).unwrap_or_default().into();
+            row.value = doc
+                .get_string(&path)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(default_text)
+                .into();
         }
     }
     row.changed = current.get(&key) != shell.saved.get(main).and_then(|values| values.get(&key));

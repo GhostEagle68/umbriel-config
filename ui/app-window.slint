@@ -62,9 +62,13 @@ export struct SaveEntry {
 }
 
 // One sidebar section entry, with how many of its keys are NEW.
+// One sidebar entry: a dimmed header (group caption) or a page row.
+// `label` is what's shown; `id` is what navigation keys off.
 export struct SectionNav {
     label: string,
+    id: string,
     new-count: int,
+    is-header: bool,
 }
 
 export enum Page { section, search, settings }
@@ -99,28 +103,33 @@ component ActionButton inherits Rectangle {
     }
 }
 
-// One sidebar navigation row (section or file).
+// One sidebar navigation row (group header or page).
 component NavRow inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
     in property <int> count: 0;
+    in property <bool> header: false;
     callback selected-fired();
 
-    height: 30px;
+    height: root.header ? 20px : 30px;
     border-radius: Theme.radius-s;
-    background: root.selected ? Theme.bg-2
+    background: root.header ? transparent
+        : root.selected ? Theme.bg-2
         : ta.has-hover ? Theme.bg-2
         : transparent;
 
     Text {
         x: Theme.space-m;
         text: root.label;
-        color: root.selected ? Theme.text-1 : Theme.text-2;
-        font-size: Theme.font-body;
+        color: root.header ? Theme.text-2
+            : root.selected ? Theme.text-1
+            : Theme.text-2;
+        font-size: root.header ? Theme.font-small : Theme.font-body;
+        font-weight: root.header ? 700 : 400;
         vertical-alignment: center;
     }
 
-    if root.count > 0: Text {
+    if root.count > 0 && !root.header: Text {
         x: parent.width - self.preferred-width - Theme.space-m;
         text: "· " + root.count;
         color: Theme.accent;
@@ -129,6 +138,7 @@ component NavRow inherits Rectangle {
     }
 
     ta := TouchArea {
+        enabled: !root.header;
         clicked => { root.selected-fired(); }
     }
 }
@@ -188,12 +198,11 @@ component DraftEdit inherits LineEdit {
     }
 }
 
-// One file page: schema groups + everything the file holds beyond the
-// schema — laid out like a settings page: a centered column of group
-// cards, label left / editor right, mined hints under the label.
+// One settings category page: curated cards of rows, label left /
+// editor right, descriptions under the labels.
 component FilePage inherits Rectangle {
     in property <string> title;
-    in property <string> status;
+    in property <string> description;
     in property <[FileGroup]> groups;
     callback set-value(string, string);
     callback set-slider-value(string, float);
@@ -223,8 +232,8 @@ component FilePage inherits Rectangle {
             font-weight: 700;
         }
 
-        if root.status != "": Text {
-            text: root.status;
+        if root.description != "": Text {
+            text: root.description;
             color: Theme.text-2;
             font-size: Theme.font-small;
         }
@@ -530,37 +539,31 @@ component SettingsPage inherits Rectangle {
                 text: "Run guided setup";
                 clicked => { root.relaunch(); }
             }
-        }
-    }
 
-    // ── about ───────────────────────────────────────────
-        VerticalLayout {
-        spacing: Theme.space-s;
-        alignment: start;
+            // ── about ───────────────────────────────────────
+            Text {
+                text: "About";
+                color: Theme.text-1;
+                font-size: Theme.font-large;
+                font-weight: 700;
+            }
 
-        Text {
-            text: "About";
-            color: Theme.text-1;
-            font-size: Theme.font-large;
-            font-weight: 700;
-        }
+            Text {
+                text: "umbriel-config v" + root.app-version;
+                color: Theme.text-1;
+            }
 
-        Text {
-            text: "umbriel-config v" + root.app-version;
-            color: Theme.text-1;
-        }
+            ActionButton {
+                text: "Source & issue tracker";
+                clicked => { root.open-url("https://github.com/GhostEagle68/umbriel-config"); }
+            }
 
-        ActionButton {
-            text: "Source & issue tracker";
-            clicked => { root.open-url("https://github.com/GhostEagle68/umbriel-config"); }
-        }
-
-        // The widget asks for 100% of its parent — pin it to badge
-            // size (logo 256px wide + padding + version text) or it
-            // swallows the whole page.
+            // The widget asks for 100% of its parent — pin it to badge
+            // size or it swallows the whole page.
             AboutSlint {
-            width: 200px;
-            height: 100px;
+                width: 200px;
+                height: 100px;
+            }
         }
     }
 }
@@ -581,6 +584,7 @@ export component AppWindow inherits Window {
     in property <bool> dirty;
     in property <[SectionNav]> sections;
     in property <string> page-title;
+    in property <string> page-description;
     in property <string> status;
     in-out property <string> current-section;
     in-out property <bool> show-exit-confirm: false;
@@ -598,6 +602,7 @@ export component AppWindow inherits Window {
     in property <string> popup-file-title;
     in property <string> popup-file-path;
     in property <string> popup-file-text;
+    in property <string> file-stats;
 
     callback search-edited(string);
     callback section-selected(string);
@@ -772,8 +777,11 @@ export component AppWindow inherits Window {
                             for section in root.sections: NavRow {
                                 label: section.label;
                                 count: section.new-count;
-                                selected: root.page == Page.section && section.label == root.current-section;
-                                selected-fired => { root.section-selected(section.label); }
+                                header: section.is-header;
+                                selected: !section.is-header
+                                    && root.page == Page.section
+                                    && section.id == root.current-section;
+                                selected-fired => { root.section-selected(section.id); }
                             }
                         }
                     }
@@ -819,8 +827,8 @@ export component AppWindow inherits Window {
                     section-page := FilePage {
                         width: svs.visible-width;
                         title: root.page-title;
+                        description: root.page-description;
                         groups: root.file-groups;
-                        status: root.status;
                         set-value(k, v) => { root.set-value(k, v); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
@@ -1054,8 +1062,8 @@ export component AppWindow inherits Window {
                     guide-page := FilePage {
                         width: gsv.visible-width;
                         title: "";
+                        description: "";
                         groups: root.file-groups;
-                        status: "";
                         set-value(k, v) => { root.set-value(k, v); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
@@ -1284,6 +1292,14 @@ export component AppWindow inherits Window {
                             font-family: Theme.font-mono;
                             font-size: Theme.font-small;
                             vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.file-stats;
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            visible: root.file-stats != "";
                         }
                     }
 
