@@ -25,7 +25,7 @@ export struct SectionRow {
 }
 export enum ValueKind { unset, boolean, integer, float, text, list, choice, color, curve }
 
-export  struct FileRow {
+export  struct SettingRow {
     label: string,
     value: string,
     key: string,
@@ -49,9 +49,9 @@ export  struct FileRow {
     preview: string,
 }
 
-export struct FileGroup {
+export struct SettingsCard {
     title: string,
-    rows: [FileRow],
+    rows: [SettingRow],
 }
 
 // One changed key, as shown in the save popup.
@@ -202,10 +202,10 @@ component DraftEdit inherits LineEdit {
 
 // One settings category page: curated cards of rows, label left /
 // editor right, descriptions under the labels.
-component FilePage inherits Rectangle {
+component CategoryPage inherits Rectangle {
     in property <string> title;
     in property <string> description;
-    in property <[FileGroup]> groups;
+    in property <[SettingsCard]> cards;
     callback set-value(string, string);
     callback reset-key(string);
     callback set-slider-value(string, float);
@@ -241,11 +241,11 @@ component FilePage inherits Rectangle {
             font-size: Theme.font-small;
         }
 
-        for group in root.groups: VerticalLayout {
+        for card in root.cards: VerticalLayout {
             spacing: Theme.space-xs;
 
             Text {
-                text: group.title;
+                text: card.title;
                 color: Theme.text-2;
                 font-size: Theme.font-small;
                 font-weight: 700;
@@ -258,7 +258,7 @@ component FilePage inherits Rectangle {
                 VerticalLayout {
                     padding: Theme.space-m;
 
-                    for row in group.rows: VerticalLayout {
+                    for row in card.rows: VerticalLayout {
                         spacing: 2px;
                         opacity: row.available ? 0.55 : 1.0;
 
@@ -605,7 +605,7 @@ export component AppWindow inherits Window {
     in-out property <string> current-section;
     in-out property <bool> show-exit-confirm: false;
     in-out property <Page> page: Page.section;
-    in property <[FileGroup]> file-groups;
+    in property <[SettingsCard]> cards;
     in property <[SectionRow]> search-rows;
     // Keys whose current value differs from the on-disk snapshot.
     in property <int> changed-count;
@@ -841,11 +841,11 @@ export component AppWindow inherits Window {
                     // insets the cards. Width depends only on the
                     // ScrollView's visible width, so no intrinsic-size
                     // feedback cycles.
-                    section-page := FilePage {
+                    section-page := CategoryPage {
                         width: svs.visible-width;
                         title: root.page-title;
                         description: root.page-description;
-                        groups: root.file-groups;
+                        cards: root.cards;
                         set-value(k, v) => { root.set-value(k, v); }
                         reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
@@ -1077,11 +1077,11 @@ export component AppWindow inherits Window {
                     height: 100%;
                     viewport-height: guide-page.preferred-height;
 
-                    guide-page := FilePage {
+                    guide-page := CategoryPage {
                         width: gsv.visible-width;
                         title: "";
                         description: "";
-                        groups: root.file-groups;
+                        cards: root.cards;
                         set-value(k, v) => { root.set-value(k, v); }
                         reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }

@@ -287,7 +287,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     {
         // Destination picker model, main first: index 0 = main, i = include i-1.
         let shell = shell.borrow();
-        let labels = file_labels(&shell);
+        let labels = setting_labels(&shell);
         let main = labels.len() - 1;
         let mut destinations = vec![labels[main].clone()];
         destinations.extend(labels[..main].iter().cloned());
@@ -336,7 +336,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 return;
             }
             let sets = chain_path_sets(&shell);
-            let labels = file_labels(&shell);
+            let labels = setting_labels(&shell);
             let rows: Vec<SectionRow> = shell
                 .schema
                 .iter()
@@ -370,7 +370,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             if index > main {
                 return;
             }
-            let label = file_labels(&shell)
+            let label = setting_labels(&shell)
                 .get(index)
                 .cloned()
                 .unwrap_or_default()
@@ -510,7 +510,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 return;
             }
 
-            let labels = file_labels(&shell);
+            let labels = setting_labels(&shell);
             let sets = chain_path_sets(&shell);
             let main = shell.includes.docs.len();
 
@@ -1056,7 +1056,7 @@ fn section_names(entries: &[schema::Entry]) -> Vec<SharedString> {
 
 /// Sidebar file labels: includes in chain order, main last (chain indexing
 /// convention: include i = i, main = includes.docs.len()).
-fn file_labels(shell: &Shell) -> Vec<SharedString> {
+fn setting_labels(shell: &Shell) -> Vec<SharedString> {
     let mut labels: Vec<SharedString> = shell
         .includes
         .docs
@@ -1144,7 +1144,7 @@ fn changed_count(shell: &Shell) -> i32 {
 /// The current diff across the chain, in save-popup form.
 fn build_save_entries(shell: &Shell) -> Vec<SaveEntry> {
     let main = shell.includes.docs.len();
-    let labels = file_labels(shell);
+    let labels = setting_labels(shell);
     let mut entries: Vec<SaveEntry> = Vec::new();
     for i in 0..=main {
         let saved = shell.saved.get(i);
@@ -1202,7 +1202,7 @@ fn reset_key(shell: &mut Shell, key: &str) {
 
 /// Refill the section page: every setting of `section` across the chain.
 fn refill_page(app: &AppWindow, shell: &Shell, page_id: &str) {
-    app.set_file_groups(Rc::new(VecModel::from(page_groups(shell, page_id))).into());
+    app.set_cards(Rc::new(VecModel::from(page_cards(shell, page_id))).into());
     app.set_changed_count(changed_count(shell));
 }
 
@@ -1330,39 +1330,39 @@ fn section_nav(shell: &Shell) -> Vec<SectionNav> {
 }
 
 /// One settings page's cards.
-fn page_groups(shell: &Shell, page_id: &str) -> Vec<FileGroup> {
+fn page_cards(shell: &Shell, page_id: &str) -> Vec<SettingsCard> {
     if page_id == catalog::OUTPUTS_ID {
-        return output_groups(shell);
+        return output_cards(shell);
     }
     if let Some(page) = catalog::page(page_id) {
-        return catalog_page_groups(shell, page);
+        return catalog_page_cards(shell, page);
     }
-    fallback_page_groups(shell, page_id)
+    fallback_page_cards(shell, page_id)
 }
 
 /// A catalog page: one card per curated sub-section, then any
 /// sub-sections of the same areas the catalog doesn't claim yet, then
 /// the uncovered-keys card.
-fn catalog_page_groups(shell: &Shell, page: &catalog::Page) -> Vec<FileGroup> {
+fn catalog_page_cards(shell: &Shell, page: &catalog::Page) -> Vec<SettingsCard> {
     let sets = chain_path_sets(shell);
-    let labels = file_labels(shell);
+    let labels = setting_labels(shell);
     let main = shell.includes.docs.len();
     let current: Vec<BTreeMap<String, String>> = (0..=main)
         .map(|i| doc_at(shell, i).leaf_values().into_iter().collect())
         .collect();
 
-    let mut groups: Vec<FileGroup> = Vec::new();
+    let mut cards: Vec<SettingsCard> = Vec::new();
     let mut claimed: Vec<&str> = Vec::new();
     for card in page.cards {
         claimed.push(card.section);
-        let rows: Vec<FileRow> = shell
+        let rows: Vec<SettingRow> = shell
             .schema
             .iter()
             .filter(|entry| entry.section == card.section)
             .map(|entry| schema_row(shell, &sets, &labels, &current, entry))
             .collect();
         if !rows.is_empty() {
-            groups.push(FileGroup {
+            cards.push(SettingsCard {
                 title: card.title.into(),
                 rows: Rc::new(VecModel::from(rows)).into(),
             });
@@ -1370,7 +1370,7 @@ fn catalog_page_groups(shell: &Shell, page: &catalog::Page) -> Vec<FileGroup> {
     }
 
     let tops = catalog::page_top_levels(page);
-    let mut auto: BTreeMap<String, Vec<FileRow>> = BTreeMap::new();
+    let mut auto: BTreeMap<String, Vec<SettingRow>> = BTreeMap::new();
     for entry in &shell.schema {
         let top = entry.section.split('.').next().unwrap_or("");
         if !tops.contains(&top) || claimed.contains(&entry.section.as_str()) {
@@ -1380,45 +1380,42 @@ fn catalog_page_groups(shell: &Shell, page: &catalog::Page) -> Vec<FileGroup> {
         auto.entry(prettify(&entry.section)).or_default().push(row);
     }
     for (title, rows) in auto {
-        groups.push(FileGroup {
+        cards.push(SettingsCard {
             title: title.into(),
             rows: Rc::new(VecModel::from(rows)).into(),
         });
     }
-    if let Some(other) = other_group(shell, &sets, &labels, &current, &tops) {
-        groups.push(other);
+    if let Some(other) = other_card(shell, &sets, &labels, &current, &tops) {
+        cards.push(other);
     }
-    groups
+    cards
 }
 
 /// A MORE fallback page: every sub-section of one top-level area.
-fn fallback_page_groups(shell: &Shell, top: &str) -> Vec<FileGroup> {
+fn fallback_page_cards(shell: &Shell, top: &str) -> Vec<SettingsCard> {
     let sets = chain_path_sets(shell);
-    let labels = file_labels(shell);
+    let labels = setting_labels(shell);
     let main = shell.includes.docs.len();
     let current: Vec<BTreeMap<String, String>> = (0..=main)
         .map(|i| doc_at(shell, i).leaf_values().into_iter().collect())
         .collect();
 
-    let mut groups: BTreeMap<String, Vec<FileRow>> = BTreeMap::new();
+    let mut cards: BTreeMap<String, Vec<SettingRow>> = BTreeMap::new();
     for entry in &shell.schema {
         if entry.section.split('.').next() != Some(top) {
             continue;
         }
         let row = schema_row(shell, &sets, &labels, &current, entry);
-        groups
-            .entry(prettify(&entry.section))
-            .or_default()
-            .push(row);
+        cards.entry(prettify(&entry.section)).or_default().push(row);
     }
-    let mut out: Vec<FileGroup> = groups
+    let mut out: Vec<SettingsCard> = cards
         .into_iter()
-        .map(|(title, rows)| FileGroup {
+        .map(|(title, rows)| SettingsCard {
             title: title.into(),
             rows: Rc::new(VecModel::from(rows)).into(),
         })
         .collect();
-    if let Some(other) = other_group(shell, &sets, &labels, &current, &[top]) {
+    if let Some(other) = other_card(shell, &sets, &labels, &current, &[top]) {
         out.push(other);
     }
     out
@@ -1427,17 +1424,17 @@ fn fallback_page_groups(shell: &Shell, top: &str) -> Vec<FileGroup> {
 /// Keys beyond the schema fold onto the page that owns their area (the
 /// old Other-settings sweep): one read-only row per key, owned like any
 /// other row. Only keys whose top-level matches one of `tops` are shown.
-fn other_group(
+fn other_card(
     shell: &Shell,
     sets: &[BTreeSet<String>],
     labels: &[SharedString],
     current: &[BTreeMap<String, String>],
     tops: &[&str],
-) -> Option<FileGroup> {
+) -> Option<SettingsCard> {
     let docs: Vec<&ConfigDocument> = shell.includes.docs.iter().map(|inc| &inc.doc).collect();
     let claims = schema::managed_claims(&docs);
     let schema_keys = schema::key_set(&shell.schema);
-    let mut other: BTreeMap<String, FileRow> = BTreeMap::new();
+    let mut other: BTreeMap<String, SettingRow> = BTreeMap::new();
     for (i, set) in sets.iter().enumerate() {
         let paths: Vec<String> = set.iter().cloned().collect();
         for path in schema::uncovered(&paths, &schema_keys, &claims) {
@@ -1460,7 +1457,7 @@ fn other_group(
                 .unwrap_or_else(|| "—".to_owned());
             other.insert(
                 path.clone(),
-                FileRow {
+                SettingRow {
                     label: path.clone().into(),
                     value: value.into(),
                     key: path.clone().into(),
@@ -1485,18 +1482,18 @@ fn other_group(
     if other.is_empty() {
         return None;
     }
-    Some(FileGroup {
+    Some(SettingsCard {
         title: "other".into(),
         rows: Rc::new(VecModel::from(other.into_values().collect::<Vec<_>>())).into(),
     })
 }
 
 /// One schema row, editor-ready: typed value, checked state, swatch, hint.
-fn file_row(doc: &ConfigDocument, entry: &schema::Entry) -> FileRow {
+fn setting_row(doc: &ConfigDocument, entry: &schema::Entry) -> SettingRow {
     let value = typed_value(doc, entry).unwrap_or_else(|| "—".to_owned());
     let parts: Vec<&str> = entry.path.iter().map(String::as_str).collect();
     let (min, max) = kind_bounds(&entry.kind);
-    FileRow {
+    SettingRow {
         label: entry.label.clone().into(),
         value: value.clone().into(),
         key: entry.path.join(".").into(),
@@ -1528,7 +1525,7 @@ fn refresh_row(app: &AppWindow, shell: &Shell, key: &str) {
 /// when a sibling edit changes this row's options (resolution → refresh).
 fn rebuild_row(app: &AppWindow, shell: &Shell, key: &str, force: bool) {
     let sets = chain_path_sets(shell);
-    let labels = file_labels(shell);
+    let labels = setting_labels(shell);
     let row = if let Some(entry) = shell
         .schema
         .iter()
@@ -1537,7 +1534,7 @@ fn rebuild_row(app: &AppWindow, shell: &Shell, key: &str, force: bool) {
         let home = entry_home(&sets, key).unwrap_or(shell.includes.docs.len());
         let current: BTreeMap<String, String> =
             doc_at(shell, home).leaf_values().into_iter().collect();
-        let mut row = file_row(doc_at(shell, home), entry);
+        let mut row = setting_row(doc_at(shell, home), entry);
         row.home = home as i32;
         if let Some(label) = labels.get(home) {
             row.home_label = label.clone();
@@ -1582,15 +1579,15 @@ fn rebuild_row(app: &AppWindow, shell: &Shell, key: &str, force: bool) {
         return;
     };
 
-    let groups = app.get_file_groups();
-    let Some(groups) = groups.as_any().downcast_ref::<VecModel<FileGroup>>() else {
+    let cards = app.get_cards();
+    let Some(cards) = cards.as_any().downcast_ref::<VecModel<SettingsCard>>() else {
         return;
     };
-    for gi in 0..groups.row_count() {
-        let Some(group) = groups.row_data(gi) else {
+    for gi in 0..cards.row_count() {
+        let Some(card) = cards.row_data(gi) else {
             continue;
         };
-        let Some(rows) = group.rows.as_any().downcast_ref::<VecModel<FileRow>>() else {
+        let Some(rows) = card.rows.as_any().downcast_ref::<VecModel<SettingRow>>() else {
             continue;
         };
         for ri in 0..rows.row_count() {
@@ -1669,15 +1666,15 @@ fn slider_text(schema: &[schema::Entry], key: &str, value: f32) -> String {
 /// touching the document. The unchanged-text guard keeps the Slider's
 /// `changed` callback from looping back through set_row_data.
 fn preview_row(app: &AppWindow, key: &str, value_text: &str) {
-    let groups = app.get_file_groups();
-    let Some(groups) = groups.as_any().downcast_ref::<VecModel<FileGroup>>() else {
+    let cards = app.get_cards();
+    let Some(cards) = cards.as_any().downcast_ref::<VecModel<SettingsCard>>() else {
         return;
     };
-    for gi in 0..groups.row_count() {
-        let Some(group) = groups.row_data(gi) else {
+    for gi in 0..cards.row_count() {
+        let Some(card) = cards.row_data(gi) else {
             continue;
         };
-        let Some(rows) = group.rows.as_any().downcast_ref::<VecModel<FileRow>>() else {
+        let Some(rows) = card.rows.as_any().downcast_ref::<VecModel<SettingRow>>() else {
             continue;
         };
         for ri in 0..rows.row_count() {
@@ -1956,7 +1953,7 @@ fn start_guide(shell: &mut Shell) -> bool {
     true
 }
 
-/// Render the guide's current step into the file-groups model and update
+/// Render the guide's current step into the cards model and update
 /// the card heading/controls.
 fn guide_show_step(app: &AppWindow, shell: &Shell) {
     let Some(guide) = shell.guide.as_ref() else {
@@ -1964,9 +1961,9 @@ fn guide_show_step(app: &AppWindow, shell: &Shell) {
     };
     let (title, metas) = &guide.steps[guide.index];
     if title == "output" {
-        app.set_file_groups(Rc::new(VecModel::from(output_groups(shell))).into());
+        app.set_cards(Rc::new(VecModel::from(output_cards(shell))).into());
     } else {
-        app.set_file_groups(Rc::new(VecModel::from(guide_groups(shell, metas))).into());
+        app.set_cards(Rc::new(VecModel::from(guide_cards(shell, metas))).into());
     }
     app.set_guide_title(guide_title(title, guide.index + 1, guide.steps.len()).into());
     app.set_guide_first(guide.index == 0);
@@ -1977,14 +1974,14 @@ fn guide_show_step(app: &AppWindow, shell: &Shell) {
 /// schema rows (keys this umbriel's schema lacks are skipped). The
 /// curated label and description replace the mined ones — the guide
 /// speaks human, not config-file.
-fn guide_groups(shell: &Shell, metas: &[&'static GuideKey]) -> Vec<FileGroup> {
+fn guide_cards(shell: &Shell, metas: &[&'static GuideKey]) -> Vec<SettingsCard> {
     let sets = chain_path_sets(shell);
-    let labels = file_labels(shell);
+    let labels = setting_labels(shell);
     let main = shell.includes.docs.len();
     let current: Vec<BTreeMap<String, String>> = (0..=main)
         .map(|i| doc_at(shell, i).leaf_values().into_iter().collect())
         .collect();
-    let rows: Vec<FileRow> = metas
+    let rows: Vec<SettingRow> = metas
         .iter()
         .filter_map(|meta| shell.schema.iter().find(|entry| entry.dotted() == meta.key))
         .map(|entry| {
@@ -1996,7 +1993,7 @@ fn guide_groups(shell: &Shell, metas: &[&'static GuideKey]) -> Vec<FileGroup> {
             row
         })
         .collect();
-    vec![FileGroup {
+    vec![SettingsCard {
         title: String::new().into(),
         rows: Rc::new(VecModel::from(rows)).into(),
     }]
@@ -2010,11 +2007,11 @@ fn schema_row(
     labels: &[SharedString],
     current: &[BTreeMap<String, String>],
     entry: &schema::Entry,
-) -> FileRow {
+) -> SettingRow {
     let main = shell.includes.docs.len();
     let dotted = entry.dotted();
     let home = entry_home(sets, &dotted);
-    let mut row = file_row(doc_at(shell, home.unwrap_or(main)), entry);
+    let mut row = setting_row(doc_at(shell, home.unwrap_or(main)), entry);
     row.is_new = shell.new_keys.contains(dotted.as_str());
     row.available = home.is_none();
     row.home = home.map_or(-1, |home| home as i32);
@@ -2033,11 +2030,11 @@ fn schema_row(
 
 /// The outputs guide step: one card per configured monitor, its fields
 /// editable through the standard row editors.
-fn output_groups(shell: &Shell) -> Vec<FileGroup> {
+fn output_cards(shell: &Shell) -> Vec<SettingsCard> {
     let main = shell.includes.docs.len();
     let doc = doc_at(shell, main);
     let current: BTreeMap<String, String> = doc.leaf_values().into_iter().collect();
-    let home_label = file_labels(shell).get(main).cloned().unwrap_or_default();
+    let home_label = setting_labels(shell).get(main).cloned().unwrap_or_default();
     // Configured monitors plus anything detected but not configured yet.
     let mut names: Vec<String> = outputs::configured(doc);
     for monitor in &shell.guide_monitors {
@@ -2052,7 +2049,7 @@ fn output_groups(shell: &Shell) -> Vec<FileGroup> {
                 .guide_monitors
                 .iter()
                 .find(|monitor| monitor.name == *name);
-            let mut rows: Vec<FileRow> = Vec::new();
+            let mut rows: Vec<SettingRow> = Vec::new();
             for field in outputs::FIELDS {
                 if field.key == "mode" {
                     // With detected modes the single mode string splits
@@ -2068,7 +2065,7 @@ fn output_groups(shell: &Shell) -> Vec<FileGroup> {
             for row in &mut rows {
                 row.home_label = home_label.clone();
             }
-            FileGroup {
+            SettingsCard {
                 title: name.clone().into(),
                 rows: Rc::new(VecModel::from(rows)).into(),
             }
@@ -2117,7 +2114,7 @@ fn resolution_choice_row(
     name: &str,
     monitor: &live::LiveOutput,
     current: &BTreeMap<String, String>,
-) -> FileRow {
+) -> SettingRow {
     let main = shell.includes.docs.len();
     let doc = doc_at(shell, main);
     let (mut resolution, _) = mode_parts(doc, name);
@@ -2147,7 +2144,7 @@ fn refresh_choice_row(
     name: &str,
     monitor: &live::LiveOutput,
     current: &BTreeMap<String, String>,
-) -> FileRow {
+) -> SettingRow {
     let main = shell.includes.docs.len();
     let doc = doc_at(shell, main);
     let (mut resolution, mut refresh) = mode_parts(doc, name);
@@ -2175,9 +2172,9 @@ fn refresh_choice_row(
 
 /// Row scaffold shared by every output editor row: owned by the main
 /// config, no metadata yet.
-fn blank_output_row(shell: &Shell, key: String, label: &str) -> FileRow {
+fn blank_output_row(shell: &Shell, key: String, label: &str) -> SettingRow {
     let main = shell.includes.docs.len();
-    FileRow {
+    SettingRow {
         label: label.into(),
         value: String::new().into(),
         key: key.into(),
@@ -2224,7 +2221,7 @@ fn output_row(
     name: &str,
     field: &outputs::Field,
     current: &BTreeMap<String, String>,
-) -> FileRow {
+) -> SettingRow {
     let main = shell.includes.docs.len();
     let doc = doc_at(shell, main);
     let path = ["output", name, field.key];
