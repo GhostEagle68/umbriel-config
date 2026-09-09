@@ -9,8 +9,6 @@ use umbriel_config::config::{discovery, document::ConfigDocument, validate};
 use umbriel_config::live;
 
 mod slint_ui;
-#[cfg(feature = "legacy-egui")]
-mod ui;
 
 fn main() -> ExitCode {
     match run() {
@@ -38,17 +36,7 @@ fn run() -> Result<()> {
     let path = config.unwrap_or_else(discovery::resolve_process);
 
     match command.as_str() {
-        "gui" => {
-            #[cfg(feature = "legacy-egui")]
-            {
-                if std::env::var_os("UMBRIEL_CONFIG_UI")
-                    .is_some_and(|v| v.to_string_lossy() == "egui")
-                {
-                    return ui::run(path);
-                }
-            }
-            slint_ui::run(path)
-        }
+        "gui" => slint_ui::run(path),
         "path" => {
             println!("{}", path.display());
             Ok(())

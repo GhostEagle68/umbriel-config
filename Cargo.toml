@@ -10,15 +10,8 @@ readme = "README.md"
 keywords = ["wayland", "umbriel", "configuration", "gui"]
 categories = ["gui", "config"]
 
-[features]
-default = []
-# Legacy egui shell, kept until Slint reaches parity (Phase 4 deletes it).
-# Run it with: UMBRIEL_CONFIG_UI=egui cargo run --features legacy-egui
-legacy-egui = ["dep:eframe"]
-
 [dependencies]
 anyhow = "1.0.104"
-eframe = { version = "0.36.1", optional = true }
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 slint = "1"
@@ -30,3 +23,8 @@ wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 
 [build-dependencies]
 slint-build = "1"
+
+# Shipped-binary size: symbols stripped, cross-crate optimization on.
+[profile.release]
+strip = true
+lto = "thin"

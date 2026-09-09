@@ -293,8 +293,8 @@ impl ConfigDocument {
     }
 
     /// Every leaf outside `[keybinds]` as `(dotted path, raw TOML text)`;
-    /// binds are diffed as whole entries (see `diff`), so their table is
-    /// skipped here. Array-of-tables count as one leaf with a summary.
+    /// binds count as whole entries, so their table is skipped here.
+    /// Array-of-tables count as one leaf with a summary.
     pub fn leaf_values(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         for (key, item) in self.doc.as_table().iter() {

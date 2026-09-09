@@ -1,4 +1,3 @@
-pub mod diff;
 pub mod discovery;
 pub mod document;
 pub mod includes;
