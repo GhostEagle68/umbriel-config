@@ -43,6 +43,8 @@ export  struct FileRow {
     changed: bool,
     // True while the key isn't set in any file yet.
     available: bool,
+    // Added by an umbriel update or the last schema sync.
+    is-new: bool,
 }
 
 export struct FileGroup {
@@ -57,6 +59,12 @@ export struct SaveEntry {
     value: string,
     dest-label: string,
     dest-index: int,
+}
+
+// One sidebar section entry, with how many of its keys are NEW.
+export struct SectionNav {
+    label: string,
+    new-count: int,
 }
 
 export enum Page { section, search, settings }
@@ -95,6 +103,7 @@ component ActionButton inherits Rectangle {
 component NavRow inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
+    in property <int> count: 0;
     callback selected-fired();
 
     height: 30px;
@@ -108,6 +117,14 @@ component NavRow inherits Rectangle {
         text: root.label;
         color: root.selected ? Theme.text-1 : Theme.text-2;
         font-size: Theme.font-body;
+        vertical-alignment: center;
+    }
+
+    if root.count > 0: Text {
+        x: parent.width - self.preferred-width - Theme.space-m;
+        text: "· " + root.count;
+        color: Theme.accent;
+        font-size: Theme.font-small;
         vertical-alignment: center;
     }
 
@@ -255,6 +272,13 @@ component FilePage inherits Rectangle {
                                 text: row.label;
                                 width: 260px;
                                 wrap: TextWrap.word-wrap;
+                                vertical-alignment: center;
+                            }
+
+                            if row.is-new: Text {
+                                text: "NEW";
+                                color: Theme.accent;
+                                font-size: Theme.font-small;
                                 vertical-alignment: center;
                             }
 
@@ -509,7 +533,7 @@ export component AppWindow inherits Window {
     in property <int> include-count;
     in property <string> include-note;
     in property <bool> dirty;
-    in property <[string]> sections;
+    in property <[SectionNav]> sections;
     in property <string> page-title;
     in property <string> status;
     in-out property <string> current-section;
@@ -664,9 +688,10 @@ export component AppWindow inherits Window {
                             }
 
                             for section in root.sections: NavRow {
-                                label: section;
-                                selected: root.page == Page.section && section == root.current-section;
-                                selected-fired => { root.section-selected(section); }
+                                label: section.label;
+                                count: section.new-count;
+                                selected: root.page == Page.section && section.label == root.current-section;
+                                selected-fired => { root.section-selected(section.label); }
                             }
                         }
                     }

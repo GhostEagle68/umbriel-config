@@ -13,7 +13,8 @@ use slint::{
     CloseRequestResponse, ComponentHandle, LogicalSize, Model, SharedString, VecModel, WindowSize,
 };
 use umbriel_config::config::{
-    discovery, document::ConfigDocument, includes, schema, settings as app_settings, validate,
+    discovery, document::ConfigDocument, includes, schema, settings as app_settings, state,
+    validate,
 };
 use umbriel_config::update;
 
@@ -31,6 +32,9 @@ struct Shell {
     // Per chain index: each doc's leaf values as last saved on disk. A row
     // whose current value differs from this snapshot is "changed".
     saved: Vec<BTreeMap<String, String>>,
+    // Keys added by an umbriel update or the last sync: sidebar counts and
+    // NEW badges.
+    new_keys: BTreeSet<String>,
 }
 
 impl Shell {
@@ -54,6 +58,19 @@ impl Shell {
             .and_then(|path| std::fs::read_to_string(path).ok())
             .map(|text| schema::assemble(&text))
             .unwrap_or_default();
+        // Startup drift: keys added since the last snapshot get NEW badges.
+        // No snapshot yet (first run) flags nothing — egui's note guard,
+        // applied to the badge set too.
+        let seen = state::load(&state::snapshot_path(env));
+        let new_keys = if seen.is_empty() {
+            BTreeSet::new()
+        } else {
+            schema::diff(&seen, &schema::key_set(&schema))
+                .added
+                .into_iter()
+                .collect()
+        };
+        let _ = state::store(&state::snapshot_path(env), &schema::key_set(&schema));
         let includes = includes::load_chain(&doc, path);
         let mut shell = Shell {
             path: path.to_path_buf(),
@@ -63,6 +80,7 @@ impl Shell {
             schema,
             includes,
             saved: Vec::new(),
+            new_keys,
         };
         shell.reset_saved();
         shell
@@ -99,13 +117,13 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     app.set_app_version(env!("CARGO_PKG_VERSION").into());
     app.set_check_updates_on_start(settings.check_updates_on_start);
 
-    let sections = section_names(&shell.borrow().schema);
-    if let Some(first) = sections.first() {
-        app.set_current_section(first.clone());
-        app.set_page_title(first.clone());
-        refill_section(&app, &shell.borrow(), first);
+    let nav = section_nav(&shell.borrow());
+    if let Some(first) = nav.first() {
+        app.set_current_section(first.label.clone());
+        app.set_page_title(first.label.clone());
+        refill_section(&app, &shell.borrow(), &first.label);
     }
-    app.set_sections(model(sections));
+    app.set_sections(Rc::new(VecModel::from(nav)).into());
     app.set_status(status_line(&shell.borrow()));
     {
         // Destination picker model, main first: index 0 = main, i = include i-1.
@@ -397,11 +415,33 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
     {
         let weak = app.as_weak();
-        let count = shell.borrow().schema.len();
+        let shell = Rc::clone(&shell);
+        let env = env.clone();
         app.on_sync_schema_requested(move || {
-            if let Some(app) = weak.upgrade() {
-                app.set_status(format!("{count} settings in the current schema").into());
-            }
+            let Some(app) = weak.upgrade() else { return };
+            // egui semantics: re-read the packaged default, diff old vs
+            // fresh, store the fresh snapshot; the added keys get badges.
+            let fresh = discovery::packaged_default(&env)
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .map(|text| schema::assemble(&text))
+                .unwrap_or_default();
+            let fresh_set = schema::key_set(&fresh);
+            let mut shell = shell.borrow_mut();
+            let drift = schema::diff(&schema::key_set(&shell.schema), &fresh_set);
+            let _ = state::store(&state::snapshot_path(&env), &fresh_set);
+            shell.new_keys = drift.added.iter().cloned().collect();
+            let status = if fresh.is_empty() {
+                SharedString::from("No packaged default found; install umbriel and sync again.")
+            } else if drift.is_empty() {
+                SharedString::from("Schema is up to date.")
+            } else {
+                SharedString::from(format!("Synced from umbriel: {}.", drift.summary()))
+            };
+            shell.schema = fresh;
+            app.set_status(status);
+            app.set_sections(Rc::new(VecModel::from(section_nav(&shell))).into());
+            let section = app.get_current_section().to_string();
+            refill_section(&app, &shell, &section);
         });
     }
     {
@@ -700,8 +740,19 @@ fn status_line(shell: &Shell) -> SharedString {
     .into()
 }
 
-fn model(strings: Vec<SharedString>) -> slint::ModelRc<SharedString> {
-    Rc::new(VecModel::from(strings)).into()
+/// Sidebar model: each section name plus how many of its keys are NEW.
+fn section_nav(shell: &Shell) -> Vec<SectionNav> {
+    section_names(&shell.schema)
+        .into_iter()
+        .map(|name| SectionNav {
+            new_count: shell
+                .new_keys
+                .iter()
+                .filter(|key| key.split('.').next() == Some(name.as_str()))
+                .count() as i32,
+            label: name,
+        })
+        .collect()
 }
 
 /// Per-doc leaf-path sets over the include chain: includes in order, main
@@ -838,6 +889,7 @@ fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
         let dotted = entry.path.join(".");
         let home = entry_home(&sets, &dotted);
         let mut row = file_row(doc_at(shell, home.unwrap_or(main)), entry);
+        row.is_new = shell.new_keys.contains(dotted.as_str());
         row.available = home.is_none();
         row.home = home.map_or(-1, |home| home as i32);
         if let Some(label) = home.and_then(|home| labels.get(home)) {
@@ -905,6 +957,7 @@ fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
                     changed: current.get(home).and_then(|values| values.get(&path))
                         != shell.saved.get(home).and_then(|values| values.get(&path)),
                     available: false,
+                    is_new: false,
                 },
             );
         }
@@ -942,6 +995,7 @@ fn file_row(doc: &ConfigDocument, entry: &schema::Entry) -> FileRow {
         home_label: String::new().into(),
         changed: false,
         available: false,
+        is_new: false,
     }
 }
 
