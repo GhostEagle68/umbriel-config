@@ -45,6 +45,8 @@ export  struct FileRow {
     available: bool,
     // Added by an umbriel update or the last schema sync.
     is-new: bool,
+    // Live slider feedback for the text box; empty when not dragging.
+    preview: string,
 }
 
 export struct FileGroup {
@@ -205,6 +207,7 @@ component FilePage inherits Rectangle {
     in property <string> description;
     in property <[FileGroup]> groups;
     callback set-value(string, string);
+    callback reset-key(string);
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
     callback view-file(int);
@@ -308,14 +311,27 @@ component FilePage inherits Rectangle {
                                     minimum: row.min;
                                     maximum: row.max;
                                     value: row.value.to-float();
+                                    // A drag detaches the slider's value
+                                    // from the binding above, so watch the
+                                    // row and push resets/external edits
+                                    // back into the thumb.
+                                    property <string> watched: row.value;
+                                    changed watched => {
+                                        self.value = row.value.to-float();
+                                    }
                                     changed(v) => { root.slider-preview(row.key, v); }
                                     released(v) => { root.set-slider-value(row.key, v); }
                                 }
 
                                 DraftEdit {
                                     width: 140px;
-                                    value: row.value;
+                                    value: row.preview == "" ? row.value : row.preview;
                                     commit(t) => { root.set-value(row.key, t); }
+                                }
+
+                                if row.changed: ActionButton {
+                                    text: "Reset";
+                                    clicked => { root.reset-key(row.key); }
                                 }
                             }
                             if row.kind == ValueKind.color: HorizontalLayout {
@@ -613,6 +629,7 @@ export component AppWindow inherits Window {
     callback save-dest-chosen(string, string);
     callback save-confirmed();
     callback reset-entry(string);
+    callback reset-key(string);
     callback discard-all();
     callback save-requested();
     callback sync-schema-requested();
@@ -830,6 +847,7 @@ export component AppWindow inherits Window {
                         description: root.page-description;
                         groups: root.file-groups;
                         set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
                         view-file(i) => { root.view-file(i); }
@@ -1065,6 +1083,7 @@ export component AppWindow inherits Window {
                         description: "";
                         groups: root.file-groups;
                         set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
                         view-file(i) => { root.view-file(i); }

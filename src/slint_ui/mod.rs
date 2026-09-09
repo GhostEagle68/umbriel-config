@@ -445,6 +445,23 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         });
     }
     {
+        // Row-level reset (the slider "Reset" button): back to the
+        // stored value, without the save popup.
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_reset_key(move |key| {
+            let Some(app) = weak.upgrade() else { return };
+            {
+                let mut shell = shell.borrow_mut();
+                reset_key(&mut shell, &key);
+            }
+            let shell = shell.borrow();
+            app.set_dirty(shell.any_modified());
+            refresh_row(&app, &shell, &key);
+            app.set_changed_count(changed_count(&shell));
+        });
+    }
+    {
         let weak = app.as_weak();
         let shell = Rc::clone(&shell);
         app.on_discard_all(move || {
@@ -1460,6 +1477,7 @@ fn other_group(
                         != shell.saved.get(home).and_then(|values| values.get(&path)),
                     available: false,
                     is_new: false,
+                    preview: String::new().into(),
                 },
             );
         }
@@ -1498,6 +1516,7 @@ fn file_row(doc: &ConfigDocument, entry: &schema::Entry) -> FileRow {
         changed: false,
         available: false,
         is_new: false,
+        preview: String::new().into(),
     }
 }
 
@@ -1580,8 +1599,9 @@ fn rebuild_row(app: &AppWindow, shell: &Shell, key: &str, force: bool) {
             };
             if old.key.as_str() == key {
                 // Same text = nothing to re-render; keeps the editor's
-                // focus. A forced rebuild also swaps changed options.
-                if force || old.value != row.value {
+                // focus. A forced rebuild also swaps changed options, and
+                // a lingering drag preview always clears.
+                if force || old.value != row.value || !old.preview.is_empty() {
                     rows.set_row_data(ri, row);
                 }
                 return;
@@ -1665,8 +1685,11 @@ fn preview_row(app: &AppWindow, key: &str, value_text: &str) {
                 continue;
             };
             if old.key.as_str() == key {
-                if old.value.as_str() != value_text {
-                    old.value = value_text.into();
+                // Patch the preview text only: touching `value` would
+                // re-evaluate the Slider's binding mid-drag and kill the
+                // gesture (the thumb fights the user at the extremes).
+                if old.preview.as_str() != value_text {
+                    old.preview = value_text.into();
                     rows.set_row_data(ri, old);
                 }
                 return;
@@ -2170,6 +2193,7 @@ fn blank_output_row(shell: &Shell, key: String, label: &str) -> FileRow {
         changed: false,
         available: false,
         is_new: false,
+        preview: String::new().into(),
     }
 }
 
