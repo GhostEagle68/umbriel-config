@@ -405,9 +405,11 @@ component SettingsPage inherits Rectangle {
     in property <string> update-note;
     in property <bool> update-available;
     in property <string> upstream-note;
+    in property <bool> umbriel-missing;
     callback check-now();
     callback toggled(bool);
     callback open-url(string);
+    callback relaunch();
 
     VerticalLayout {
         padding: Theme.space-l;
@@ -486,35 +488,79 @@ component SettingsPage inherits Rectangle {
             }
         }
 
-        // ── about ───────────────────────────────────────────
+        // ── Umbriel detection ───────────────────────────────
         VerticalLayout {
             spacing: Theme.space-s;
             alignment: start;
 
             Text {
-                text: "About";
+                text: "Umbriel";
                 color: Theme.text-1;
                 font-size: Theme.font-large;
                 font-weight: 700;
             }
 
             Text {
-                text: "umbriel-config v" + root.app-version;
+                text: root.umbriel-missing ? "Not detected on this system." : "Detected.";
+                color: root.umbriel-missing ? Theme.warning : Theme.success;
+                font-size: Theme.font-small;
+            }
+        }
+
+        // ── guided setup ────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+
+            Text {
+                text: "Guided setup";
                 color: Theme.text-1;
+                font-size: Theme.font-large;
+                font-weight: 700;
+            }
+
+            Text {
+                text: "Walk through the settings people change most — outputs, layout, input, general, appearance. Values you already set are left alone.";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                wrap: TextWrap.word-wrap;
             }
 
             ActionButton {
-                text: "Source & issue tracker";
-                clicked => { root.open-url("https://github.com/GhostEagle68/umbriel-config"); }
+                text: "Run guided setup";
+                clicked => { root.relaunch(); }
             }
+        }
+    }
 
-            // The widget asks for 100% of its parent — pin it to badge
+    // ── about ───────────────────────────────────────────
+        VerticalLayout {
+        spacing: Theme.space-s;
+        alignment: start;
+
+        Text {
+            text: "About";
+            color: Theme.text-1;
+            font-size: Theme.font-large;
+            font-weight: 700;
+        }
+
+        Text {
+            text: "umbriel-config v" + root.app-version;
+            color: Theme.text-1;
+        }
+
+        ActionButton {
+            text: "Source & issue tracker";
+            clicked => { root.open-url("https://github.com/GhostEagle68/umbriel-config"); }
+        }
+
+        // The widget asks for 100% of its parent — pin it to badge
             // size (logo 256px wide + padding + version text) or it
             // swallows the whole page.
             AboutSlint {
-                width: 200px;
-                height: 100px;
-            }
+            width: 200px;
+            height: 100px;
         }
     }
 }
@@ -577,6 +623,24 @@ export component AppWindow inherits Window {
     callback check-updates-requested();
     callback check-updates-toggled(bool);
     callback open-url(string);
+
+    // First-run onboarding (plain install) + missing-umbriel banner.
+    in-out property <bool> show-onboarding: false;
+    in-out property <bool> umbriel-missing: false;
+    // No schema source (umbriel not detected): the section page becomes
+    // an empty-state pointer instead of a blank page.
+    in property <bool> schema-empty: false;
+    callback onboarding-create();
+
+    // Guided setup after create (schema present): one card per section,
+    // suggested defaults filled in and editable.
+    in-out property <bool> show-guide: false;
+    in property <string> guide-title;
+    in property <bool> guide-first: false;
+    in property <bool> guide-last: false;
+    callback guide-back();
+    callback guide-next();
+    callback guide-relaunch();
 
     VerticalLayout {
         // ── header ─────────────────────────────────────────────
@@ -664,6 +728,24 @@ export component AppWindow inherits Window {
             }
         }
 
+        // quiet banner: umbriel missing but a config exists
+        if root.umbriel-missing: Rectangle {
+            height: 24px;
+            background: Theme.bg-1;
+
+            banner-ta := TouchArea {
+                clicked => { root.umbriel-missing = false; }
+            }
+
+            Text {
+                x: Theme.space-l;
+                text: "Umbriel not detected, validation unavailable · click to dismiss";
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+        }
+
         HorizontalLayout {
             // ── sidebar ─────────────────────────────────────────
                         Rectangle {
@@ -725,7 +807,7 @@ export component AppWindow inherits Window {
             Rectangle {
                 background: Theme.bg-0;
 
-                if root.page == Page.section: svs := ScrollView {
+                if root.page == Page.section && !root.schema-empty: svs := ScrollView {
                     width: 100%;
                     height: 100%;
                     viewport-height: section-page.preferred-height;
@@ -777,6 +859,7 @@ export component AppWindow inherits Window {
                     settings-page := SettingsPage {
                         width: stv.visible-width;
                         app-version: root.app-version;
+                        umbriel-missing: root.umbriel-missing;
                         check-updates-on-start: root.check-updates-on-start;
                         update-note: root.update-note;
                         update-available: root.update-available;
@@ -784,6 +867,216 @@ export component AppWindow inherits Window {
                         check-now => { root.check-updates-requested(); }
                         toggled(v) => { root.check-updates-toggled(v); }
                         open-url(u) => { root.open-url(u); }
+                        relaunch => { root.guide-relaunch(); }
+                    }
+                }
+
+                // No schema source: an honest empty state instead of a
+                // blank page (plain install after create / continue).
+                if root.page == Page.section && root.schema-empty: Rectangle {
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: Theme.space-m;
+                        padding: Theme.space-xl;
+
+                        Text {
+                            text: "No settings to show";
+                            color: Theme.text-1;
+                            font-size: Theme.font-title;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Umbriel isn't detected, so there are no setting pages. The packaged default config is the schema source.";
+                            color: Theme.text-2;
+                            wrap: TextWrap.word-wrap;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Your config: " + root.config-path;
+                            color: Theme.text-2;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                            horizontal-alignment: center;
+                        }
+
+                        if root.status != "": Text {
+                            text: root.status;
+                            color: Theme.success;
+                            font-size: Theme.font-small;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Install umbriel, then click \"Sync schema\". Its settings will appear here.";
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                            horizontal-alignment: center;
+                        }
+
+                        HorizontalLayout {
+                            alignment: center;
+
+                            ActionButton {
+                                text: "Install docs";
+                                clicked => { root.open-url("https://docs.noctalia.dev/umbriel/"); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── first-run onboarding (plain install state) ──────────
+    if root.show-onboarding: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+
+        Rectangle {
+            width: min(parent.width - 96px, 520px);
+            height: min(parent.height - 96px, 440px);
+            border-radius: Theme.radius-l;
+            background: Theme.bg-1;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            TouchArea { }
+
+            VerticalLayout {
+                padding: Theme.space-xl;
+                spacing: Theme.space-m;
+                alignment: start;
+
+                Text {
+                    text: "Welcome to Umbriel Config";
+                    color: Theme.text-1;
+                    font-size: Theme.font-title;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: root.umbriel-missing
+                        ? "Umbriel wasn't detected on this system or no config file exists."
+                        : "No config file exists yet, create one to be guided on setting the frequently used settings.";
+                    color: Theme.text-1;
+                    wrap: TextWrap.word-wrap;
+                }
+
+                Text {
+                    text: "Right now you can create and edit config.toml, change values, and use include files.";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    wrap: TextWrap.word-wrap;
+                }
+
+                Text {
+                    text: "Without umbriel there are no schema-driven setting pages (the packaged default is the schema source), no defaults shown, and validation is unavailable.";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    wrap: TextWrap.word-wrap;
+                    visible: root.umbriel-missing;
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-s;
+
+                    ActionButton {
+                        text: "Install docs";
+                        visible: root.umbriel-missing;
+                        clicked => { root.open-url("https://docs.noctalia.dev/umbriel/"); }
+                    }
+
+                    ActionButton {
+                        text: "Continue anyway";
+                        clicked => { root.show-onboarding = false; }
+                    }
+
+                    ActionButton {
+                        text: "Create config.toml";
+                        primary: true;
+                        clicked => { root.onboarding-create(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── guided setup (after create, schema present) ─────────
+    if root.show-guide: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000cc;
+
+        Rectangle {
+            width: min(parent.width - 128px, 760px);
+            height: min(parent.height - 96px, 560px);
+            border-radius: Theme.radius-l;
+            background: Theme.bg-0;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            TouchArea { }
+
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: root.guide-title;
+                    color: Theme.text-1;
+                    font-size: Theme.font-large;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "Suggested defaults are filled in, change anything you like. A value you leave alone is saved as the suggested default.";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    wrap: TextWrap.word-wrap;
+                }
+
+                gsv := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: guide-page.preferred-height;
+
+                    guide-page := FilePage {
+                        width: gsv.visible-width;
+                        title: "";
+                        groups: root.file-groups;
+                        status: "";
+                        set-value(k, v) => { root.set-value(k, v); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-s;
+
+                    ActionButton {
+                        text: "Back";
+                        enabled: !root.guide-first;
+                        clicked => { root.guide-back(); }
+                    }
+
+                    ActionButton {
+                        text: root.guide-last ? "Finish and save" : "Next";
+                        primary: true;
+                        clicked => { root.guide-next(); }
                     }
                 }
             }

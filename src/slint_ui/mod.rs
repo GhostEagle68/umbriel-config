@@ -13,12 +13,19 @@ use slint::{
     CloseRequestResponse, ComponentHandle, LogicalSize, Model, SharedString, VecModel, WindowSize,
 };
 use umbriel_config::config::{
-    discovery, document::ConfigDocument, includes, schema, settings as app_settings, state,
-    validate,
+    discovery, document::ConfigDocument, includes, outputs, schema, settings as app_settings,
+    state, validate,
 };
-use umbriel_config::update;
+use umbriel_config::{live, update};
 
 slint::include_modules!();
+
+/// Minimal starter written by the onboarding panel: comments only, so it
+/// is valid TOML and loads as an empty healthy document.
+const STARTER_CONFIG: &str = "\
+# umbriel configuration — created by Umbriel Config.
+# Reference: https://github.com/noctalia-dev/umbriel
+";
 
 /// Shell state, re-homing the egui `App` fields with the same semantics.
 /// Fields unused in Phase 0 become load-bearing in Phases 1–3.
@@ -35,7 +42,138 @@ struct Shell {
     // Keys added by an umbriel update or the last sync: sidebar counts and
     // NEW badges.
     new_keys: BTreeSet<String>,
+    // Guided-setup walk (create flow): the sections left to visit.
+    guide: Option<Guide>,
+    // Monitors detected when the guide was armed: feeds the outputs
+    // card's resolution/refresh dropdowns and its recommendation hints.
+    guide_monitors: Vec<live::LiveOutput>,
 }
+
+/// One guided-setup walk: the curated cards, in visit order. Each step is
+/// its title plus the curated key definitions it shows.
+struct Guide {
+    steps: Vec<(String, Vec<&'static GuideKey>)>,
+    index: usize,
+}
+
+/// The guided-setup steps: a hand-picked handful of the most-wanted
+/// settings per card (outputs is prepended when monitors are detected;
+/// keybinds joins when its editor exists). Each key carries a plain
+/// label and a one-line description — the guide speaks human, not
+/// config-file. Keys missing from the installed schema are skipped.
+struct GuideKey {
+    key: &'static str,
+    label: &'static str,
+    description: &'static str,
+}
+
+const GUIDE_STEPS: &[(&str, &[GuideKey])] = &[
+    (
+        "layout",
+        &[
+            GuideKey {
+                key: "layout.mode",
+                label: "Layout mode",
+                description: "How windows are arranged, scrolling columns or the classic dwindle / master trees.",
+            },
+            GuideKey {
+                key: "layout.gap",
+                label: "Gap",
+                description: "Space between windows",
+            },
+            GuideKey {
+                key: "layout.scrolling.default_width_fraction",
+                label: "New column width",
+                description: "How much of the screen a new column starts with.",
+            },
+        ],
+    ),
+    (
+        "input",
+        &[
+            GuideKey {
+                key: "input.keyboard.layout",
+                label: "Keyboard layout",
+                description: "Country layout for your keyboard, e.g. us or de,us.",
+            },
+            GuideKey {
+                key: "input.keyboard.numlock_toggle",
+                label: "Num Lock on connect",
+                description: "Turn Num Lock on whenever a keyboard connects.",
+            },
+            GuideKey {
+                key: "input.middle_click_paste",
+                label: "Middle-click paste",
+                description: "Paste the selected text with a middle click.",
+            },
+            GuideKey {
+                key: "input.touchpad.tap",
+                label: "Tap to click",
+                description: "Tapping the touchpad counts as a click.",
+            },
+            GuideKey {
+                key: "input.cursor.size",
+                label: "Cursor size",
+                description: "Mouse cursor size.",
+            },
+        ],
+    ),
+    (
+        "general",
+        &[
+            GuideKey {
+                key: "general.xwayland",
+                label: "XWayland",
+                description: "Run X11 apps through xwayland-satellite. Changing this needs a fresh Umbriel session.",
+            },
+            GuideKey {
+                key: "general.show_cheatsheet",
+                label: "Cheat sheet at start",
+                description: "Show the keybind overlay when the session starts.",
+            },
+            GuideKey {
+                key: "general.focus_on_activate",
+                label: "Let apps take focus",
+                description: "Allow newly opened apps to demand focus.",
+            },
+            GuideKey {
+                key: "general.autostart",
+                label: "Autostart commands",
+                description: "Commands run once when the session starts.",
+            },
+        ],
+    ),
+    (
+        "appearance",
+        &[
+            GuideKey {
+                key: "appearance.border_width",
+                label: "Border width",
+                description: "Thickness of the window border, in logical pixels.",
+            },
+            GuideKey {
+                key: "appearance.corner_radius",
+                label: "Corner radius",
+                description: "How rounded the window corners are.",
+            },
+            GuideKey {
+                key: "appearance.blur.radius",
+                label: "Blur radius",
+                description: "How far the blur spreads behind windows.",
+            },
+            GuideKey {
+                key: "appearance.blur.passes",
+                label: "Blur passes",
+                description: "How many times the blur is applied, more is smoother.",
+            },
+            GuideKey {
+                key: "colors.border.focused",
+                label: "Focused border color",
+                description: "Border color of the focused window, as hex (e.g. #7AA3FFFF).",
+            },
+        ],
+    ),
+];
 
 impl Shell {
     fn load(path: &Path, env: &discovery::Env) -> Self {
@@ -81,6 +219,8 @@ impl Shell {
             includes,
             saved: Vec::new(),
             new_keys,
+            guide: None,
+            guide_monitors: Vec::new(),
         };
         shell.reset_saved();
         shell
@@ -116,6 +256,18 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     app.set_dirty(false);
     app.set_app_version(env!("CARGO_PKG_VERSION").into());
     app.set_check_updates_on_start(settings.check_updates_on_start);
+
+    // First-run state (plan-onboarding.md): a machine without a config
+    // gets the panel — with the guided walk when umbriel is present.
+    // Umbriel missing additionally arms the quiet banner + empty state.
+    let umbriel_present = discovery::packaged_default(&env).is_some();
+    let mode = setup_mode(umbriel_present, path.exists());
+    app.set_show_onboarding(matches!(
+        mode,
+        SetupMode::PlainInstall | SetupMode::FreshWithUmbriel
+    ));
+    app.set_umbriel_missing(!umbriel_present);
+    app.set_schema_empty(shell.borrow().schema.is_empty());
 
     let nav = section_nav(&shell.borrow());
     if let Some(first) = nav.first() {
@@ -430,7 +582,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             let drift = schema::diff(&schema::key_set(&shell.schema), &fresh_set);
             let _ = state::store(&state::snapshot_path(&env), &fresh_set);
             shell.new_keys = drift.added.iter().cloned().collect();
-            let status = if fresh.is_empty() {
+            let empty = fresh.is_empty();
+            let status = if empty {
                 SharedString::from("No packaged default found; install umbriel and sync again.")
             } else if drift.is_empty() {
                 SharedString::from("Schema is up to date.")
@@ -439,6 +592,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             };
             shell.schema = fresh;
             app.set_status(status);
+            app.set_schema_empty(empty);
             app.set_sections(Rc::new(VecModel::from(section_nav(&shell))).into());
             let section = app.get_current_section().to_string();
             refill_section(&app, &shell, &section);
@@ -490,6 +644,157 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             .arg(url.as_str())
             .spawn();
     });
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_onboarding_create(move || {
+            let Some(app) = weak.upgrade() else { return };
+            // The panel only shows while the file is absent; never clobber
+            // a config that appeared meanwhile.
+            let created = {
+                let shell = shell.borrow_mut();
+                if shell.path.exists() {
+                    app.set_show_onboarding(false);
+                    return;
+                }
+                if let Some(parent) = shell.path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match std::fs::write(&shell.path, STARTER_CONFIG) {
+                    Ok(()) => {
+                        app.set_show_onboarding(false);
+                        app.set_status("Created config.toml.".into());
+                        true
+                    }
+                    Err(err) => {
+                        app.set_status(format!("Couldn't create config.toml: {err}").into());
+                        false
+                    }
+                }
+            };
+            if !created {
+                return;
+            }
+            // With a schema source, walk the frequent sections with the
+            // suggested defaults filled in; without one there is nothing
+            // to guide through (the empty state explains).
+            if !start_guide(&mut shell.borrow_mut()) {
+                return;
+            }
+            guide_show_step(&app, &shell.borrow());
+            app.set_show_guide(true);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_guide_back(move || {
+            let Some(app) = weak.upgrade() else { return };
+            {
+                let mut shell = shell.borrow_mut();
+                let Some(guide) = shell.guide.as_mut() else {
+                    return;
+                };
+                if guide.index == 0 {
+                    return;
+                }
+                guide.index -= 1;
+            }
+            guide_show_step(&app, &shell.borrow());
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_guide_relaunch(move || {
+            let Some(app) = weak.upgrade() else { return };
+            if app.get_dirty() {
+                app.set_status(
+                    "Save or discard your changes before running the guided setup.".into(),
+                );
+                return;
+            }
+            if !start_guide(&mut shell.borrow_mut()) {
+                app.set_status(
+                    "Nothing to guide through yet — install umbriel and sync the schema.".into(),
+                );
+                return;
+            }
+            guide_show_step(&app, &shell.borrow());
+            app.set_show_guide(true);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_guide_next(move || {
+            let Some(app) = weak.upgrade() else { return };
+            // Advance one step, or — on the last — write the config and
+            // land in the app. Borrowed in an inner scope so the step
+            // data outlives the &mut.
+            let advance = {
+                let mut shell = shell.borrow_mut();
+                let Some(guide) = shell.guide.as_mut() else {
+                    return;
+                };
+                guide.index += 1;
+                guide.index < guide.steps.len()
+            };
+            if advance {
+                guide_show_step(&app, &shell.borrow());
+                return;
+            }
+            // Finish: write every modified doc, then validate through
+            // umbriel (absent installs skip validation gracefully).
+            let mut shell = shell.borrow_mut();
+            let mut saved_files = 0;
+            for inc in &mut shell.includes.docs {
+                if inc.doc.is_modified() {
+                    if let Err(err) = inc.doc.save(&inc.path) {
+                        app.set_status(format!("save failed: {err}").into());
+                        return;
+                    }
+                    saved_files += 1;
+                }
+            }
+            if shell.doc.is_modified() {
+                let path = shell.path.clone();
+                if let Err(err) = shell.doc.save(&path) {
+                    app.set_status(format!("save failed: {err}").into());
+                    return;
+                }
+                saved_files += 1;
+            }
+            let report = validate::validate(&shell.path);
+            shell.reset_saved();
+            shell.guide = None;
+            app.set_show_guide(false);
+            app.set_dirty(false);
+            app.set_changed_count(0);
+            match report {
+                Ok(report) if report.is_ok() => {
+                    app.set_validate_note(String::new().into());
+                    app.set_status("Config saved, Umbriel picks it up automatically.".into());
+                }
+                Ok(report) => {
+                    let messages: Vec<String> = report
+                        .diagnostics
+                        .iter()
+                        .map(|d| d.message().to_owned())
+                        .collect();
+                    app.set_validate_note(messages.join("; ").into());
+                    app.set_status(
+                        format!("Config saved ({saved_files} file(s)); umbriel reported problems.")
+                            .into(),
+                    );
+                }
+                Err(err) => {
+                    app.set_validate_note(err.to_string().into());
+                    app.set_status(format!("Config saved ({saved_files} file(s)).").into());
+                }
+            }
+        });
+    }
     {
         let weak = app.as_weak();
         let env = env.clone();
@@ -551,12 +856,18 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str) {
             let formatted = {
                 let shell = shell.borrow();
-                let kind = shell
-                    .schema
-                    .iter()
-                    .find(|entry| entry.path.join(".") == key)
-                    .map(|entry| &entry.kind);
-                commit_value(kind, raw)
+                if key.starts_with("output.") {
+                    // Output fields aren't schema-backed; their fixed
+                    // vocabulary formats the input instead.
+                    format_output_value(&shell, key, raw)
+                } else {
+                    let kind = shell
+                        .schema
+                        .iter()
+                        .find(|entry| entry.path.join(".") == key)
+                        .map(|entry| &entry.kind);
+                    commit_value(kind, raw)
+                }
             };
             let value_text = match formatted {
                 Ok(value_text) => value_text,
@@ -592,6 +903,12 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             let shell = shell.borrow();
             app.set_dirty(shell.any_modified());
             refresh_row(app, &shell, key);
+            // A new resolution changes which refreshes exist — rebuild
+            // that dropdown too, even if its text stayed the same.
+            if key.starts_with("output.") && key.ends_with(".resolution") {
+                let name = &key["output.".len()..key.len() - ".resolution".len()];
+                rebuild_row(app, &shell, &format!("output.{name}.refresh"), true);
+            }
             app.set_changed_count(changed_count(&shell));
         }
     }
@@ -886,22 +1203,7 @@ fn section_groups(shell: &Shell, section: &str) -> Vec<FileGroup> {
         if entry.section.split('.').next() != Some(section) {
             continue;
         }
-        let dotted = entry.path.join(".");
-        let home = entry_home(&sets, &dotted);
-        let mut row = file_row(doc_at(shell, home.unwrap_or(main)), entry);
-        row.is_new = shell.new_keys.contains(dotted.as_str());
-        row.available = home.is_none();
-        row.home = home.map_or(-1, |home| home as i32);
-        if let Some(label) = home.and_then(|home| labels.get(home)) {
-            row.home_label = label.clone();
-        }
-        row.changed = match home {
-            Some(home) => {
-                current.get(home).and_then(|values| values.get(&dotted))
-                    != shell.saved.get(home).and_then(|values| values.get(&dotted))
-            }
-            None => false,
-        };
+        let row = schema_row(shell, &sets, &labels, &current, entry);
         groups.entry(entry.section.clone()).or_default().push(row);
     }
 
@@ -1000,23 +1302,66 @@ fn file_row(doc: &ConfigDocument, entry: &schema::Entry) -> FileRow {
 }
 
 fn refresh_row(app: &AppWindow, shell: &Shell, key: &str) {
+    rebuild_row(app, shell, key, false);
+}
+
+/// Rebuild a row and overwrite it even when the text is unchanged — for
+/// when a sibling edit changes this row's options (resolution → refresh).
+fn rebuild_row(app: &AppWindow, shell: &Shell, key: &str, force: bool) {
     let sets = chain_path_sets(shell);
     let labels = file_labels(shell);
-    let Some(entry) = shell
+    let row = if let Some(entry) = shell
         .schema
         .iter()
         .find(|entry| entry.path.join(".") == key)
-    else {
+    {
+        let home = entry_home(&sets, key).unwrap_or(shell.includes.docs.len());
+        let current: BTreeMap<String, String> =
+            doc_at(shell, home).leaf_values().into_iter().collect();
+        let mut row = file_row(doc_at(shell, home), entry);
+        row.home = home as i32;
+        if let Some(label) = labels.get(home) {
+            row.home_label = label.clone();
+        }
+        row.changed = current.get(key) != shell.saved.get(home).and_then(|values| values.get(key));
+        row
+    } else if let Some(rest) = key.strip_prefix("output.") {
+        let Some((name, field_key)) = rest.rsplit_once('.') else {
+            return;
+        };
+        let monitor = shell
+            .guide_monitors
+            .iter()
+            .find(|monitor| monitor.name == name);
+        let current: BTreeMap<String, String> = doc_at(shell, shell.includes.docs.len())
+            .leaf_values()
+            .into_iter()
+            .collect();
+        let mut row = match field_key {
+            "resolution" => {
+                let Some(monitor) = monitor else { return };
+                resolution_choice_row(shell, name, monitor, &current)
+            }
+            "refresh" => {
+                let Some(monitor) = monitor else { return };
+                refresh_choice_row(shell, name, monitor, &current)
+            }
+            _ => {
+                let Some(field) = outputs::FIELDS.iter().find(|field| field.key == field_key)
+                else {
+                    return;
+                };
+                output_row(shell, name, field, &current)
+            }
+        };
+        row.home_label = labels
+            .get(shell.includes.docs.len())
+            .cloned()
+            .unwrap_or_default();
+        row
+    } else {
         return;
     };
-    let home = entry_home(&sets, key).unwrap_or(shell.includes.docs.len());
-    let current: BTreeMap<String, String> = doc_at(shell, home).leaf_values().into_iter().collect();
-    let mut row = file_row(doc_at(shell, home), entry);
-    row.home = home as i32;
-    if let Some(label) = labels.get(home) {
-        row.home_label = label.clone();
-    }
-    row.changed = current.get(key) != shell.saved.get(home).and_then(|values| values.get(key));
 
     let groups = app.get_file_groups();
     let Some(groups) = groups.as_any().downcast_ref::<VecModel<FileGroup>>() else {
@@ -1034,8 +1379,9 @@ fn refresh_row(app: &AppWindow, shell: &Shell, key: &str) {
                 continue;
             };
             if old.key.as_str() == key {
-                // Same text = nothing to re-render; keeps the editor's focus.
-                if old.value != row.value {
+                // Same text = nothing to re-render; keeps the editor's
+                // focus. A forced rebuild also swaps changed options.
+                if force || old.value != row.value {
                     rows.set_row_data(ri, row);
                 }
                 return;
@@ -1265,5 +1611,538 @@ fn strip_decor(raw: &str) -> String {
     match trimmed.split_once(" #") {
         Some((value, _)) => value.trim_end().to_owned(),
         None => trimmed.to_owned(),
+    }
+}
+
+/// Card heading for one guided-setup step.
+fn guide_title(section: &str, step: usize, total: usize) -> String {
+    let display = if section == "output" {
+        "outputs".to_owned()
+    } else {
+        let mut owned = section.to_owned();
+        if let Some(first) = owned.get_mut(..1) {
+            first.make_ascii_uppercase();
+        }
+        owned
+    };
+    format!("Guided setup — {display} (step {step} of {total})")
+}
+
+/// Arm the guided walk: the schema sections get suggested defaults, and
+/// any detected monitors become an outputs step with their live state
+/// (enabled, mode, scale, position) plus umbriel's defaults filled in.
+/// `false` when there is no schema at all (no umbriel detected).
+fn start_guide(shell: &mut Shell) -> bool {
+    // Pre-existing values are never clobbered: suggested defaults and
+    // detected state only fill settings that are still unset. That makes
+    // the walk safe to re-run from Settings.
+    let main = shell.includes.docs.len();
+    let current: BTreeMap<String, String> = doc_at(shell, main).leaf_values().into_iter().collect();
+    let mut steps: Vec<(String, Vec<&'static GuideKey>)> = Vec::new();
+    for (title, metas) in GUIDE_STEPS {
+        let mut keys: Vec<&'static GuideKey> = Vec::new();
+        for meta in metas.iter() {
+            let Some(entry) = shell.schema.iter().find(|entry| entry.dotted() == meta.key) else {
+                continue; // not in this umbriel's schema
+            };
+            keys.push(meta);
+            if current.contains_key(meta.key) {
+                continue;
+            }
+            let Some(default) = entry.default.as_ref() else {
+                continue;
+            };
+            let default_text = match default {
+                schema::Value::Bool(v) => format!("{v}"),
+                schema::Value::Integer(v) => format!("{v}"),
+                schema::Value::Float(v) => format!("{v}"),
+                schema::Value::Text(v) => v.clone(),
+            };
+            let Ok(value_text) = commit_value(Some(&entry.kind), &default_text) else {
+                continue;
+            };
+            shell.doc.set_leaf_text(meta.key, &value_text);
+        }
+        if !keys.is_empty() {
+            steps.push(((*title).to_owned(), keys));
+        }
+    }
+    // Everything the app can detect is filled in the same way: each
+    // connected monitor joins the walk as an outputs card — first, since
+    // output setup is the most important decision.
+    let monitors = live::outputs().unwrap_or_default();
+    for monitor in &monitors {
+        let name = monitor.name.as_str();
+        let is_set = |field: &str| current.contains_key(&format!("output.{name}.{field}"));
+        if !is_set("enabled") {
+            shell
+                .doc
+                .set_bool(&["output", name, "enabled"], monitor.enabled);
+        }
+        if !is_set("mode")
+            && let Some(mode) = monitor.current.and_then(|index| monitor.modes.get(index))
+        {
+            shell
+                .doc
+                .set_string(&["output", name, "mode"], &mode.label());
+        }
+        if !is_set("scale") {
+            shell
+                .doc
+                .set_float(&["output", name, "scale"], monitor.scale);
+        }
+        if !is_set("position") {
+            shell.doc.set_integers(
+                &["output", name, "position"],
+                &[i64::from(monitor.position.0), i64::from(monitor.position.1)],
+            );
+        }
+        for field in outputs::FIELDS {
+            if matches!(field.key, "enabled" | "mode" | "scale" | "position") {
+                continue; // detection fills these
+            }
+            if is_set(field.key) {
+                continue;
+            }
+            let path = ["output", name, field.key];
+            match &field.default {
+                Some(outputs::DefaultValue::Bool(value)) => {
+                    shell.doc.set_bool(&path, *value);
+                }
+                Some(outputs::DefaultValue::Float(value)) => {
+                    shell.doc.set_float(&path, *value);
+                }
+                Some(outputs::DefaultValue::Text(value)) => {
+                    shell.doc.set_string(&path, value);
+                }
+                None => {}
+            }
+        }
+    }
+    if !monitors.is_empty() {
+        steps.insert(0, ("output".to_owned(), Vec::new()));
+    }
+    if steps.is_empty() {
+        return false;
+    }
+    // The filled-in values become the saved baseline: a row only shows
+    // its dot once the user moves away from the suggestion.
+    shell.reset_saved();
+    shell.guide_monitors = monitors;
+    shell.guide = Some(Guide { steps, index: 0 });
+    true
+}
+
+/// Render the guide's current step into the file-groups model and update
+/// the card heading/controls.
+fn guide_show_step(app: &AppWindow, shell: &Shell) {
+    let Some(guide) = shell.guide.as_ref() else {
+        return;
+    };
+    let (title, metas) = &guide.steps[guide.index];
+    if title == "output" {
+        app.set_file_groups(Rc::new(VecModel::from(output_groups(shell))).into());
+    } else {
+        app.set_file_groups(Rc::new(VecModel::from(guide_groups(shell, metas))).into());
+    }
+    app.set_guide_title(guide_title(title, guide.index + 1, guide.steps.len()).into());
+    app.set_guide_first(guide.index == 0);
+    app.set_guide_last(guide.index == guide.steps.len() - 1);
+}
+
+/// One guided-setup card: the step's curated keys in order, resolved to
+/// schema rows (keys this umbriel's schema lacks are skipped). The
+/// curated label and description replace the mined ones — the guide
+/// speaks human, not config-file.
+fn guide_groups(shell: &Shell, metas: &[&'static GuideKey]) -> Vec<FileGroup> {
+    let sets = chain_path_sets(shell);
+    let labels = file_labels(shell);
+    let main = shell.includes.docs.len();
+    let current: Vec<BTreeMap<String, String>> = (0..=main)
+        .map(|i| doc_at(shell, i).leaf_values().into_iter().collect())
+        .collect();
+    let rows: Vec<FileRow> = metas
+        .iter()
+        .filter_map(|meta| shell.schema.iter().find(|entry| entry.dotted() == meta.key))
+        .map(|entry| {
+            let mut row = schema_row(shell, &sets, &labels, &current, entry);
+            if let Some(meta) = metas.iter().find(|meta| meta.key == entry.dotted()) {
+                row.label = meta.label.into();
+                row.hint = meta.description.into();
+            }
+            row
+        })
+        .collect();
+    vec![FileGroup {
+        title: String::new().into(),
+        rows: Rc::new(VecModel::from(rows)).into(),
+    }]
+}
+
+/// One schema row resolved against the chain: owner badge, changed dot,
+/// NEW badge, availability.
+fn schema_row(
+    shell: &Shell,
+    sets: &[BTreeSet<String>],
+    labels: &[SharedString],
+    current: &[BTreeMap<String, String>],
+    entry: &schema::Entry,
+) -> FileRow {
+    let main = shell.includes.docs.len();
+    let dotted = entry.dotted();
+    let home = entry_home(sets, &dotted);
+    let mut row = file_row(doc_at(shell, home.unwrap_or(main)), entry);
+    row.is_new = shell.new_keys.contains(dotted.as_str());
+    row.available = home.is_none();
+    row.home = home.map_or(-1, |home| home as i32);
+    if let Some(label) = home.and_then(|home| labels.get(home)) {
+        row.home_label = label.clone();
+    }
+    row.changed = match home {
+        Some(home) => {
+            current.get(home).and_then(|values| values.get(&dotted))
+                != shell.saved.get(home).and_then(|values| values.get(&dotted))
+        }
+        None => false,
+    };
+    row
+}
+
+/// The outputs guide step: one card per configured monitor, its fields
+/// editable through the standard row editors.
+fn output_groups(shell: &Shell) -> Vec<FileGroup> {
+    let main = shell.includes.docs.len();
+    let doc = doc_at(shell, main);
+    let current: BTreeMap<String, String> = doc.leaf_values().into_iter().collect();
+    let home_label = file_labels(shell).get(main).cloned().unwrap_or_default();
+    outputs::configured(doc)
+        .iter()
+        .map(|name| {
+            let monitor = shell
+                .guide_monitors
+                .iter()
+                .find(|monitor| monitor.name == *name);
+            let mut rows: Vec<FileRow> = Vec::new();
+            for field in outputs::FIELDS {
+                if field.key == "mode" {
+                    // With detected modes the single mode string splits
+                    // into two welcoming dropdowns instead.
+                    if let Some(monitor) = monitor.filter(|monitor| !monitor.modes.is_empty()) {
+                        rows.push(resolution_choice_row(shell, name, monitor, &current));
+                        rows.push(refresh_choice_row(shell, name, monitor, &current));
+                        continue;
+                    }
+                }
+                rows.push(output_row(shell, name, field, &current));
+            }
+            for row in &mut rows {
+                row.home_label = home_label.clone();
+            }
+            FileGroup {
+                title: name.clone().into(),
+                rows: Rc::new(VecModel::from(rows)).into(),
+            }
+        })
+        .collect()
+}
+
+/// Distinct resolutions (width x height) a monitor reports, in report order.
+fn resolutions(monitor: &live::LiveOutput) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for mode in &monitor.modes {
+        let label = format!("{}x{}", mode.width, mode.height);
+        if !out.contains(&label) {
+            out.push(label);
+        }
+    }
+    out
+}
+
+/// Refresh texts a monitor offers at one resolution, formatted like the
+/// mode labels ("164.977").
+fn refreshes(monitor: &live::LiveOutput, resolution: &str) -> Vec<String> {
+    monitor
+        .modes
+        .iter()
+        .filter(|mode| format!("{}x{}", mode.width, mode.height) == resolution)
+        .map(|mode| (mode.refresh_mhz as f64 / 1000.0).to_string())
+        .collect()
+}
+
+/// The mode string of one configured output, split into resolution and
+/// refresh halves.
+fn mode_parts(doc: &ConfigDocument, name: &str) -> (String, String) {
+    match doc
+        .get_string(&["output", name, "mode"])
+        .unwrap_or_default()
+        .split_once('@')
+    {
+        Some((resolution, refresh)) => (resolution.to_owned(), refresh.to_owned()),
+        None => (String::new(), String::new()),
+    }
+}
+
+fn resolution_choice_row(
+    shell: &Shell,
+    name: &str,
+    monitor: &live::LiveOutput,
+    current: &BTreeMap<String, String>,
+) -> FileRow {
+    let main = shell.includes.docs.len();
+    let doc = doc_at(shell, main);
+    let (resolution, _) = mode_parts(doc, name);
+    let key = format!("output.{name}.resolution");
+    let mut row = blank_output_row(shell, key.clone(), "Resolution");
+    row.kind = ValueKind::Choice;
+    row.choices = Rc::new(VecModel::from(
+        resolutions(monitor)
+            .iter()
+            .map(SharedString::from)
+            .collect::<Vec<_>>(),
+    ))
+    .into();
+    row.value = resolution.into();
+    row.hint = "Modes your monitor reports — the detected one is selected.".into();
+    row.changed = current.get(&key) != shell.saved.get(main).and_then(|values| values.get(&key));
+    row
+}
+
+fn refresh_choice_row(
+    shell: &Shell,
+    name: &str,
+    monitor: &live::LiveOutput,
+    current: &BTreeMap<String, String>,
+) -> FileRow {
+    let main = shell.includes.docs.len();
+    let doc = doc_at(shell, main);
+    let (resolution, refresh) = mode_parts(doc, name);
+    let key = format!("output.{name}.refresh");
+    let mut row = blank_output_row(shell, key.clone(), "Refresh rate");
+    row.kind = ValueKind::Choice;
+    row.choices = Rc::new(VecModel::from(
+        refreshes(monitor, &resolution)
+            .iter()
+            .map(SharedString::from)
+            .collect::<Vec<_>>(),
+    ))
+    .into();
+    row.value = refresh.into();
+    row.hint = "Refresh rates your monitor supports at this resolution, in Hz.".into();
+    row.changed = current.get(&key) != shell.saved.get(main).and_then(|values| values.get(&key));
+    row
+}
+
+/// Row scaffold shared by every output editor row: owned by the main
+/// config, no metadata yet.
+fn blank_output_row(shell: &Shell, key: String, label: &str) -> FileRow {
+    let main = shell.includes.docs.len();
+    FileRow {
+        label: label.into(),
+        value: String::new().into(),
+        key: key.into(),
+        kind: ValueKind::Text,
+        choices: Rc::new(VecModel::<SharedString>::from(Vec::new())).into(),
+        swatch: slint::Color::from_argb_u8(0, 0, 0, 0).into(),
+        checked: false,
+        hint: String::new().into(),
+        min: 0.0,
+        max: 0.0,
+        home: main as i32,
+        home_label: String::new().into(),
+        changed: false,
+        available: false,
+        is_new: false,
+    }
+}
+
+/// Plain-language description of an output field, shown under the label.
+fn output_field_hint(key: &str) -> &'static str {
+    match key {
+        "enabled" => "This monitor is active, untick to switch it off.",
+        "mode" => "Resolution and refresh rate combined, e.g. 3440x1440@164.977.",
+        "position" => "Where the monitor sits, as x, y. Filled from your current layout.",
+        "scale" => "Zoom level; 1.0 is native size.",
+        "vrr" => {
+            "Variable refresh rate (FreeSync/G-Sync). Recommended: fullscreen while gaming, otherwise disabled."
+        }
+        "hdr" => "HDR when the content supports it. Recommended: auto on HDR monitors.",
+        "sdr_white" => "Brightness of normal (SDR) content in HDR mode, in nits. Recommended: 203.",
+        "transform" => "Rotate or flip the display. Recommended: normal.",
+        "tearing" => "Allow tearing for lower input lag. Recommended: off.",
+        "direct_scanout" => "Send fullscreen apps straight to the display. Recommended: on.",
+        "workspaces" => "Workspace names for this monitor; dynamic keeps them automatic.",
+        _ => "",
+    }
+}
+
+/// One output field as a row: the fixed vocabulary mapped onto editors
+/// (toggle → checkbox, choice → dropdown, float → slider, the rest text).
+fn output_row(
+    shell: &Shell,
+    name: &str,
+    field: &outputs::Field,
+    current: &BTreeMap<String, String>,
+) -> FileRow {
+    let main = shell.includes.docs.len();
+    let doc = doc_at(shell, main);
+    let path = ["output", name, field.key];
+    let key = format!("output.{name}.{}", field.key);
+    let mut row = blank_output_row(shell, key.clone(), field.label);
+    row.hint = output_field_hint(field.key).into();
+    match &field.kind {
+        outputs::FieldKind::Toggle => {
+            let value = doc.get_bool(&path).unwrap_or(false);
+            row.kind = ValueKind::Boolean;
+            row.checked = value;
+            row.value = value.to_string().into();
+        }
+        outputs::FieldKind::Choice(vocab) => {
+            row.kind = ValueKind::Choice;
+            row.choices = Rc::new(VecModel::from(
+                vocab
+                    .iter()
+                    .map(|value| SharedString::from(*value))
+                    .collect::<Vec<_>>(),
+            ))
+            .into();
+            row.value = doc.get_string(&path).unwrap_or_default().into();
+        }
+        outputs::FieldKind::Position => {
+            row.kind = ValueKind::Text;
+            row.value = match doc.get_integers(&path).unwrap_or_default().as_slice() {
+                [x, y] => format!("{x}, {y}").into(),
+                _ => String::new().into(),
+            };
+        }
+        outputs::FieldKind::Float { min, max } => {
+            row.kind = ValueKind::Float;
+            row.min = *min as f32;
+            row.max = *max as f32;
+            if let Some(value) = doc.get_float(&path) {
+                row.value = value.to_string().into();
+            }
+        }
+        outputs::FieldKind::Text | outputs::FieldKind::Workspaces => {
+            row.value = doc.get_string(&path).unwrap_or_default().into();
+        }
+    }
+    row.changed = current.get(&key) != shell.saved.get(main).and_then(|values| values.get(&key));
+    row
+}
+
+/// Format raw editor input for an output field (not schema-backed) into
+/// its TOML text form.
+fn format_output_value(shell: &Shell, key: &str, raw: &str) -> Result<String, String> {
+    let field_key = key.rsplit('.').next().unwrap_or_default();
+    let name = &key["output.".len()..key.len() - field_key.len() - 1];
+    // The detected mode string splits into two dropdowns; both compose
+    // the full mode this output saves.
+    match field_key {
+        "resolution" => {
+            let Some(monitor) = shell
+                .guide_monitors
+                .iter()
+                .find(|monitor| monitor.name == name)
+            else {
+                return Err("no detected monitor for this output".to_owned());
+            };
+            let matching: Vec<&live::LiveMode> = monitor
+                .modes
+                .iter()
+                .filter(|mode| format!("{}x{}", mode.width, mode.height) == raw)
+                .collect();
+            let Some(mode) = matching
+                .iter()
+                .find(|mode| mode.preferred)
+                .or_else(|| matching.first())
+            else {
+                return Err(format!("'{raw}' is not a mode this monitor reports"));
+            };
+            let refresh = (mode.refresh_mhz as f64 / 1000.0).to_string();
+            return Ok(format!("{raw}@{refresh}"));
+        }
+        "refresh" => {
+            let doc = doc_at(shell, shell.includes.docs.len());
+            let (resolution, _) = mode_parts(doc, name);
+            if resolution.is_empty() {
+                return Err("pick a resolution first".to_owned());
+            }
+            return Ok(format!("{resolution}@{raw}"));
+        }
+        _ => {}
+    }
+    let Some(field) = outputs::FIELDS.iter().find(|field| field.key == field_key) else {
+        return Err(format!("unknown output field in {key}"));
+    };
+    let raw = raw.trim();
+    match &field.kind {
+        outputs::FieldKind::Toggle => match raw {
+            "true" | "false" => Ok(raw.to_owned()),
+            _ => Err(format!("'{raw}' is not true or false")),
+        },
+        outputs::FieldKind::Float { min, max } => {
+            let value: f64 = raw
+                .parse()
+                .map_err(|_| format!("'{raw}' is not a number"))?;
+            Ok(value.clamp(*min, *max).to_string())
+        }
+        outputs::FieldKind::Position => {
+            let mut parts = raw.split(',');
+            let mut xy = [0_i32, 0];
+            for slot in &mut xy {
+                *slot = parts
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("'{raw}' is not an x, y position"))?;
+            }
+            Ok(format!("[{}, {}]", xy[0], xy[1]))
+        }
+        outputs::FieldKind::Choice(_)
+        | outputs::FieldKind::Text
+        | outputs::FieldKind::Workspaces => commit_value(Some(&schema::Kind::Text), raw),
+    }
+}
+
+/// The four startup states (plan-onboarding.md): only the plain install
+/// gets the first-run panel; a configured machine without umbriel gets
+/// the quiet banner.
+#[derive(Debug, PartialEq, Eq)]
+enum SetupMode {
+    Normal,
+    FreshWithUmbriel,
+    PlainInstall,
+    MissingUmbriel,
+}
+
+/// "Umbriel present" is the packaged default being installed; "config
+/// exists" is the main config file being on disk.
+fn setup_mode(umbriel_present: bool, config_exists: bool) -> SetupMode {
+    match (umbriel_present, config_exists) {
+        (true, true) => SetupMode::Normal,
+        (true, false) => SetupMode::FreshWithUmbriel,
+        (false, true) => SetupMode::MissingUmbriel,
+        (false, false) => SetupMode::PlainInstall,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_mode_covers_the_four_states() {
+        assert_eq!(setup_mode(true, true), SetupMode::Normal);
+        assert_eq!(setup_mode(true, false), SetupMode::FreshWithUmbriel);
+        assert_eq!(setup_mode(false, true), SetupMode::MissingUmbriel);
+        assert_eq!(setup_mode(false, false), SetupMode::PlainInstall);
+    }
+
+    #[test]
+    fn starter_config_loads_as_empty_healthy_document() {
+        let doc = ConfigDocument::from_str(STARTER_CONFIG).expect("starter parses");
+        assert!(doc.leaf_values().is_empty());
+        assert!(!doc.is_modified());
     }
 }
