@@ -77,20 +77,27 @@ straight from the repository (tracks `main`):
 cargo install --git https://github.com/GhostEagle68/umbriel-config
 ```
 
-Living even closer to development? Track the `dev` branch instead:
+Want the latest, unreleased changes? The `dev` branch is work-in-progress,
+expect rough edges and it has no releases, so the clean way to follow it
+is from a clone:
 
 ```sh
-cargo install --git https://github.com/GhostEagle68/umbriel-config --branch dev
+git clone --branch dev https://github.com/GhostEagle68/umbriel-config
+cd umbriel-config
+cargo run --release
 ```
 
-`dev` is work-in-progress, expect rough edges. There are no dev releases:
-installing grabs the current tip of the branch, and "updating" means re-running
-the command so it rebuilds from the newest commits. There is no update
-notification to see what changed since your install, compare the
-[dev branch history](https://github.com/GhostEagle68/umbriel-config/commits/dev/)
-with the file time of `~/.cargo/bin/umbriel-config` (your install date).
-Each install replaces the previous `umbriel-config` binary. A specific
-release can be pinned with `--tag`, e.g. `--tag v0.1.2-alpha.3`.
+Updating is `git pull` plus a rebuild, and `git log HEAD..origin/dev` shows
+exactly what changed since your last build — something a plain install can
+never tell you. To keep the dev build on your PATH next to a stable install,
+copy it under a dev name:
+
+```sh
+cp target/release/umbriel-config ~/.local/bin/umbriel-config-dev
+```
+
+`cargo install --git … --branch dev` also works, but it replaces your existing
+`umbriel-config` binary and can't tell you what's new.
 
 ## Uninstall
 
