@@ -41,7 +41,7 @@ jobs:
           sha256sum umbriel-config-${{ matrix.arch }}-linux.tar.gz > umbriel-config-${{ matrix.arch }}-linux.tar.gz.sha256
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: umbriel-config-${{ matrix.arch }}-linux
           path: |
