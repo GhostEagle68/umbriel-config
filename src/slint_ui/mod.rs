@@ -258,6 +258,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     app.set_dirty(false);
     app.set_app_version(env!("CARGO_PKG_VERSION").into());
     app.set_check_updates_on_start(settings.check_updates_on_start);
+    app.set_dark_mode(settings.dark);
+    app.global::<Theme>().set_dark(settings.dark);
 
     // First-run state (plan-onboarding.md): a machine without a config
     // gets the panel — with the guided walk when umbriel is present.
@@ -673,6 +675,18 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             let _ = app_settings::store(&env, &settings);
         });
     }
+    {
+        let weak = app.as_weak();
+        let env = env.clone();
+        app.on_theme_selected(move |dark| {
+            let Some(app) = weak.upgrade() else { return };
+            app.set_dark_mode(dark);
+            app.global::<Theme>().set_dark(dark);
+            let mut settings = app_settings::load(&env);
+            settings.dark = dark;
+            let _ = app_settings::store(&env, &settings);
+        });
+    }
     app.on_open_url(|url| {
         let _ = std::process::Command::new("xdg-open")
             .arg(url.as_str())
@@ -968,6 +982,7 @@ fn store_window_settings(app: &AppWindow, env: &discovery::Env) {
             check_updates_on_start: app.get_check_updates_on_start(),
             window_width: (size.width as f32 / scale) as u32,
             window_height: (size.height as f32 / scale) as u32,
+            dark: app.get_dark_mode(),
         },
     );
 }
@@ -1296,7 +1311,7 @@ fn section_nav(shell: &Shell) -> Vec<SectionNav> {
     }
     for group in catalog::GROUPS.iter().filter(|group| **group != "outputs") {
         nav.push(SectionNav {
-            label: catalog::group_title(group).into(),
+            label: catalog::group_title(group).to_uppercase().into(),
             id: String::new().into(),
             new_count: 0,
             is_header: true,
@@ -1312,7 +1327,9 @@ fn section_nav(shell: &Shell) -> Vec<SectionNav> {
         .collect();
     if !more.is_empty() {
         nav.push(SectionNav {
-            label: catalog::group_title(catalog::MORE_GROUP).into(),
+            label: catalog::group_title(catalog::MORE_GROUP)
+                .to_uppercase()
+                .into(),
             id: String::new().into(),
             new_count: 0,
             is_header: true,

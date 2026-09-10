@@ -10,12 +10,15 @@ pub struct Settings {
     pub check_updates_on_start: bool,
     pub window_width: u32,
     pub window_height: u32,
+    /// true = dark design, false = light design.
+    pub dark: bool,
 }
 
 pub const DEFAULT: Settings = Settings {
     check_updates_on_start: true,
     window_width: 960,
     window_height: 640,
+    dark: true,
 };
 
 pub fn path(env: &discovery::Env) -> PathBuf {
@@ -50,6 +53,7 @@ fn parse(text: &str) -> Settings {
             "window_height" => {
                 settings.window_height = value.parse().unwrap_or(DEFAULT.window_height)
             }
+            "dark" => settings.dark = value.parse().unwrap_or(DEFAULT.dark),
             _ => {}
         }
     }
@@ -64,8 +68,11 @@ pub fn store(env: &discovery::Env, settings: &Settings) -> std::io::Result<()> {
     std::fs::write(
         path,
         format!(
-            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\n",
-            settings.check_updates_on_start, settings.window_width, settings.window_height
+            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\ndark = {}\n",
+            settings.check_updates_on_start,
+            settings.window_width,
+            settings.window_height,
+            settings.dark
         ),
     )
 }
@@ -94,6 +101,7 @@ mod tests {
                 check_updates_on_start: false,
                 window_width: 1280,
                 window_height: 800,
+                dark: false,
             },
         )
         .unwrap();
@@ -103,6 +111,7 @@ mod tests {
                 check_updates_on_start: false,
                 window_width: 1280,
                 window_height: 800,
+                dark: false,
             }
         );
         store(&e, &DEFAULT).unwrap();
@@ -113,10 +122,14 @@ mod tests {
     #[test]
     fn parse_ignores_unknown_keys_and_bad_values() {
         let settings = parse(
-            "unknown = 1\ncheck_updates_on_start = false\nwindow_width = oops\nwindow_height = 700\n",
+            "unknown = 1\ncheck_updates_on_start = false\nwindow_width = oops\nwindow_height = 700\ndark = false\nbad_dark = maybe\n",
         );
         assert!(!settings.check_updates_on_start);
         assert_eq!(settings.window_width, DEFAULT.window_width);
         assert_eq!(settings.window_height, 700);
+        assert!(!settings.dark);
+        // A malformed `dark` line falls back to the default (dark).
+        let settings = parse("dark = maybe\n");
+        assert!(settings.dark);
     }
 }

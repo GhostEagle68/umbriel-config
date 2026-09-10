@@ -3,6 +3,9 @@
 // everything visual reads tokens from theme.slint.
 
 import { Theme } from "theme.slint";
+import { Palette } from "std-widgets.slint";
+// Re-export so the generated Rust code exposes the global (set_dark).
+export { Theme }
 import {
     AboutSlint,
     CheckBox,
@@ -93,7 +96,9 @@ component ActionButton inherits Rectangle {
 
     label := Text {
         text: root.text;
-        color: root.primary ? white : Theme.text-1;
+        // White only rides on the accent; a disabled primary sits on the
+        // neutral card color and must stay readable in both designs.
+        color: root.primary && root.enabled ? white : Theme.text-1;
         font-size: Theme.font-body;
         vertical-alignment: center;
         horizontal-alignment: center;
@@ -105,7 +110,9 @@ component ActionButton inherits Rectangle {
     }
 }
 
-// One sidebar navigation row (group header or page).
+// One sidebar navigation row (group header or page). Headers are small-caps
+// captions (uppercase label comes from the shell); pages indent under them
+// and the selected page carries the accent bar.
 component NavRow inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
@@ -113,20 +120,29 @@ component NavRow inherits Rectangle {
     in property <bool> header: false;
     callback selected-fired();
 
-    height: root.header ? 20px : 30px;
+    height: root.header ? 22px : 30px;
     border-radius: Theme.radius-s;
     background: root.header ? transparent
-        : root.selected ? Theme.bg-2
+        : root.selected ? Theme.accent-soft
         : ta.has-hover ? Theme.bg-2
         : transparent;
 
+    // Selected page: accent bar hugging the row's left edge.
+    if root.selected && !root.header: Rectangle {
+        x: 0;
+        width: 3px;
+        border-radius: Theme.radius-s;
+        background: Theme.accent;
+    }
+
     Text {
-        x: Theme.space-m;
+        x: root.header ? Theme.space-m : Theme.space-m + 16px;
         text: root.label;
         color: root.header ? Theme.text-2
             : root.selected ? Theme.text-1
             : Theme.text-2;
         font-size: root.header ? Theme.font-small : Theme.font-body;
+        letter-spacing: root.header ? 1px : 0px;
         font-weight: root.header ? 700 : 400;
         vertical-alignment: center;
     }
@@ -431,8 +447,10 @@ component SettingsPage inherits Rectangle {
     in property <bool> update-available;
     in property <string> upstream-note;
     in property <bool> umbriel-missing;
+    in property <bool> dark-mode: true;
     callback check-now();
     callback toggled(bool);
+    callback theme-selected(bool);
     callback open-url(string);
     callback relaunch();
 
@@ -446,6 +464,38 @@ component SettingsPage inherits Rectangle {
             color: Theme.text-1;
             font-size: Theme.font-title;
             font-weight: 700;
+        }
+
+        // ── appearance ──────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+
+            Text {
+                text: "Appearance";
+                color: Theme.text-1;
+                font-size: Theme.font-large;
+                font-weight: 700;
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-m;
+
+                Text {
+                    text: "Theme";
+                    color: Theme.text-2;
+                    vertical-alignment: center;
+                }
+
+                ComboBox {
+                    width: 140px;
+                    model: ["Dark", "Light"];
+                    current-index: root.dark-mode ? 0 : 1;
+                    selected => {
+                        root.theme-selected(self.current-index == 0);
+                    }
+                }
+            }
         }
 
         // ── updates ─────────────────────────────────────────
@@ -638,12 +688,22 @@ export component AppWindow inherits Window {
     // Settings page
     in property <string> app-version;
     in-out property <bool> check-updates-on-start: true;
+    in-out property <bool> dark-mode: true;
+    // Standard widgets (LineEdit, CheckBox, ComboBox, AboutSlint) follow
+    // Slint's builtin palette, not our tokens — keep it in step.
+    init => {
+        Palette.color-scheme = root.dark-mode ? ColorScheme.dark : ColorScheme.light;
+    }
+    changed dark-mode => {
+        Palette.color-scheme = root.dark-mode ? ColorScheme.dark : ColorScheme.light;
+    }
     in property <string> update-note;
     in property <bool> update-available: false;
     in property <string> upstream-note;
     callback settings-requested();
     callback check-updates-requested();
     callback check-updates-toggled(bool);
+    callback theme-selected(bool);
     callback open-url(string);
 
     // First-run onboarding (plain install) + missing-umbriel banner.
@@ -786,9 +846,10 @@ export component AppWindow inherits Window {
                             alignment: start;
 
                             Text {
-                                text: "SECTIONS";
-                                color: Theme.text-2;
-                                font-size: Theme.font-small;
+                                text: "Settings";
+                                color: Theme.text-1;
+                                font-size: Theme.font-large;
+                                font-weight: 700;
                             }
 
                             for section in root.sections: NavRow {
@@ -887,11 +948,13 @@ export component AppWindow inherits Window {
                         app-version: root.app-version;
                         umbriel-missing: root.umbriel-missing;
                         check-updates-on-start: root.check-updates-on-start;
+                        dark-mode: root.dark-mode;
                         update-note: root.update-note;
                         update-available: root.update-available;
                         upstream-note: root.upstream-note;
                         check-now => { root.check-updates-requested(); }
                         toggled(v) => { root.check-updates-toggled(v); }
+                        theme-selected(d) => { root.theme-selected(d); }
                         open-url(u) => { root.open-url(u); }
                         relaunch => { root.guide-relaunch(); }
                     }
