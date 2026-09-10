@@ -76,7 +76,7 @@ export struct SectionNav {
     is-header: bool,
 }
 
-export enum Page { section, search, settings }
+export enum Page { section, search, settings, backups }
 
 // Small token-driven button; std-widgets are avoided until the styled-page
 // pass so the whole shell carries one identity from day one.
@@ -634,6 +634,232 @@ component SettingsPage inherits Rectangle {
     }
 }
 
+// Backups page: settings-style cards for retention/location, the list of
+// backups, and the selected backup's diff. Feedback is inline on the page
+// (owner directive: no popups, no toasts).
+component BackupsPage inherits Rectangle {
+    in property <string> backup-note;
+    in property <[string]> backups;
+    in-out property <int> selected-backup: 0;
+    in property <bool> restore-possible: false;
+    in property <string> restore-diff;
+    in property <string> action-note;
+    in-out property <string> count-text;
+    in-out property <string> dir-text;
+    callback backup-now();
+    callback backup-chosen(int);
+    callback restore-backup();
+    callback count-chosen(string);
+    callback dir-chosen(string);
+    callback browse-location();
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: "Backups";
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        Text {
+            text: "Every save snapshots your config before it is overwritten. Restoring first backs up the current files, so a restore is itself reversible. Press Enter in a field to apply it.";
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+
+        // ── backup settings ─────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Backup settings";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Save backups to";
+                            width: 260px;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        LineEdit {
+                            horizontal-stretch: 1;
+                            text <=> root.dir-text;
+                            placeholder-text: "default location";
+                            accepted(t) => { root.dir-chosen(t); }
+                        }
+
+                        ActionButton {
+                            text: "Browse…";
+                            clicked => { root.browse-location(); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Keep";
+                            width: 260px;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        LineEdit {
+                            width: 72px;
+                            text <=> root.count-text;
+                            input-type: number;
+                            accepted(t) => { root.count-chosen(t); }
+                        }
+
+                        Text {
+                            text: "backups";
+                            color: Theme.text-2;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── backups ─────────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            HorizontalLayout {
+                spacing: Theme.space-m;
+
+                Text {
+                    text: "Backups";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.backup-note;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    wrap: TextWrap.word-wrap;
+                    horizontal-stretch: 1;
+                }
+
+                ActionButton {
+                    text: "Back up now";
+                    clicked => { root.backup-now(); }
+                }
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+
+                    for backup[idx] in backups: NavRow {
+                        label: backup;
+                        selected: idx == root.selected-backup;
+                        selected-fired => { root.backup-chosen(idx); }
+                    }
+
+                    Text {
+                        text: "No backups yet, they appear here after your first save or \"Back up now\".";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        visible: backups.length == 0;
+                    }
+                }
+            }
+        }
+
+        // ── restore ─────────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Restore";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Diff of the selected backup against the current files:";
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        ActionButton {
+                            text: "Restore this backup";
+                            primary: true;
+                            enabled: root.restore-possible;
+                            clicked => { root.restore-backup(); }
+                        }
+                    }
+
+                    Text {
+                        text: root.action-note;
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        wrap: TextWrap.word-wrap;
+                        visible: root.action-note != "";
+                    }
+
+                    Text {
+                        text: root.restore-diff;
+                        color: Theme.text-1;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-small;
+                        wrap: TextWrap.word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     preferred-width: 960px;
     preferred-height: 640px;
@@ -684,6 +910,23 @@ export component AppWindow inherits Window {
     callback save-requested();
     callback sync-schema-requested();
     callback exit-requested();
+
+    // Backups page
+    in property <[string]> backup-choices;
+    in-out property <int> backup-selected: 0;
+    in property <bool> restore-possible: false;
+    in property <string> restore-diff;
+    in property <string> backup-action-note;
+    in property <string> backup-note;
+    in-out property <string> backup-count-text;
+    in-out property <string> backup-dir-text;
+    callback backups-requested();
+    callback backup-now();
+    callback backup-chosen(int);
+    callback restore-backup();
+    callback backup-count-chosen(string);
+    callback backup-dir-chosen(string);
+    callback browse-location();
 
     // Settings page
     in property <string> app-version;
@@ -870,6 +1113,12 @@ export component AppWindow inherits Window {
                         spacing: Theme.space-xs;
 
                         NavRow {
+                            label: "Backups";
+                            selected: root.page == Page.backups;
+                            selected-fired => { root.backups-requested(); }
+                        }
+
+                        NavRow {
                             label: "Settings" + (root.update-available ? " •" : "");
                             selected: root.page == Page.settings;
                             selected-fired => { root.settings-requested(); }
@@ -957,6 +1206,34 @@ export component AppWindow inherits Window {
                         theme-selected(d) => { root.theme-selected(d); }
                         open-url(u) => { root.open-url(u); }
                         relaunch => { root.guide-relaunch(); }
+                    }
+                }
+
+                if root.page == Page.backups: bsv := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: backups-page.preferred-height;
+
+                    backups-page := BackupsPage {
+                        width: bsv.visible-width;
+                        backup-note: root.backup-note;
+                        backups: root.backup-choices;
+                        selected-backup: root.backup-selected;
+                        restore-possible: root.restore-possible;
+                        restore-diff: root.restore-diff;
+                        action-note: root.backup-action-note;
+                        // Two-way: one-way bindings detach once the user
+                        // edits a field (the slider bug again) — after
+                        // that, a reset or Browse could no longer update
+                        // the field.
+                        count-text <=> root.backup-count-text;
+                        dir-text <=> root.backup-dir-text;
+                        backup-now => { root.backup-now(); }
+                        backup-chosen(i) => { root.backup-chosen(i); }
+                        restore-backup => { root.restore-backup(); }
+                        count-chosen(t) => { root.backup-count-chosen(t); }
+                        dir-chosen(t) => { root.backup-dir-chosen(t); }
+                        browse-location => { root.browse-location(); }
                     }
                 }
 

@@ -12,8 +12,10 @@ categories = ["gui", "config"]
 
 [dependencies]
 anyhow = "1.0.104"
+rfd = "0.15"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
+similar = "2"
 slint = "1"
 thiserror = "2.0.20"
 toml_edit = "0.25.13"
