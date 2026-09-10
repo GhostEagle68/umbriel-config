@@ -35,11 +35,14 @@ struct Release {
 
 pub fn check() -> Result<Verdict, String> {
     let releases: Vec<Release> = ureq::get(RELEASES_URL)
-        .set("User-Agent", USER_AGENT)
-        .timeout(std::time::Duration::from_secs(10))
+        .header("User-Agent", USER_AGENT)
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(10)))
+        .build()
         .call()
         .map_err(|err| err.to_string())?
-        .into_json()
+        .body_mut()
+        .read_json()
         .map_err(|err| err.to_string())?;
     let Some(release) = releases.first() else {
         return Err("no releases published yet".to_owned());
