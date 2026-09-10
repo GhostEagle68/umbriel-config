@@ -77,6 +77,21 @@ straight from the repository (tracks `main`):
 cargo install --git https://github.com/GhostEagle68/umbriel-config
 ```
 
+Living even closer to development? Track the `dev` branch instead:
+
+```sh
+cargo install --git https://github.com/GhostEagle68/umbriel-config --branch dev
+```
+
+`dev` is work-in-progress, expect rough edges. There are no dev releases:
+installing grabs the current tip of the branch, and "updating" means re-running
+the command so it rebuilds from the newest commits. There is no update
+notification to see what changed since your install, compare the
+[dev branch history](https://github.com/GhostEagle68/umbriel-config/commits/dev/)
+with the file time of `~/.cargo/bin/umbriel-config` (your install date).
+Each install replaces the previous `umbriel-config` binary. A specific
+release can be pinned with `--tag`, e.g. `--tag v0.1.2-alpha.3`.
+
 ## Uninstall
 
 How to remove umbriel-config depends on how it was installed.
