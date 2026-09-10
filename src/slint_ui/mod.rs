@@ -251,8 +251,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
 
     {
         let shell = shell.borrow();
-        app.set_config_path(shell.path.display().to_string().into());
-        app.set_include_count(shell.includes.docs.len() as i32);
+        app.set_config_path(pretty_path(&shell.path, &env).into());
+        refresh_include_files(&app, &shell, &env);
         app.set_include_note(shell.includes.notes.join("; ").into());
     }
     app.set_dirty(false);
@@ -630,15 +630,20 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             let _ = state::store(&state::snapshot_path(&env), &fresh_set);
             shell.new_keys = drift.added.iter().cloned().collect();
             let empty = fresh.is_empty();
-            let status = if empty {
-                SharedString::from("No packaged default found; install umbriel and sync again.")
+            let (note, clean) = if empty {
+                (
+                    "No packaged default found; install umbriel and sync again.".to_owned(),
+                    false,
+                )
             } else if drift.is_empty() {
-                SharedString::from("Schema is up to date.")
+                ("Schema is up to date.".to_owned(), true)
             } else {
-                SharedString::from(format!("Synced from umbriel: {}.", drift.summary()))
+                (format!("Synced from umbriel: {}.", drift.summary()), false)
             };
             shell.schema = fresh;
-            app.set_status(status);
+            app.set_sync_note(note.clone().into());
+            app.set_sync_clean(clean);
+            app.set_status(note.into());
             app.set_schema_empty(empty);
             app.set_sections(Rc::new(VecModel::from(section_nav(&shell))).into());
             let section = app.get_current_section().to_string();
@@ -796,8 +801,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             };
             {
                 let shell = shell.borrow();
-                app.set_config_path(shell.path.display().to_string().into());
-                app.set_include_count(shell.includes.docs.len() as i32);
+                app.set_config_path(pretty_path(&shell.path, &env).into());
+                refresh_include_files(&app, &shell, &env);
                 app.set_include_note(shell.includes.notes.join("; ").into());
                 app.set_dirty(false);
                 app.set_changed_count(0);
@@ -1307,6 +1312,32 @@ fn refresh_backup_runs(
     *runs_out.borrow_mut() = found;
 }
 
+/// Mirror the include chain into the Settings page's file list.
+fn refresh_include_files(app: &AppWindow, shell: &Shell, env: &discovery::Env) {
+    let files: Vec<SharedString> = shell
+        .includes
+        .docs
+        .iter()
+        .map(|inc| pretty_path(&inc.path, env).into())
+        .collect();
+    app.set_include_files(Rc::new(VecModel::from(files)).into());
+}
+
+/// Home-collapsed path for display: `$HOME/…` becomes `~/…`.
+fn pretty_path(path: &Path, env: &discovery::Env) -> String {
+    let text = path.to_string_lossy().into_owned();
+    match env.home.as_deref() {
+        Some(home) => {
+            let home = home.to_string_lossy();
+            match text.strip_prefix(home.as_ref()) {
+                Some(rest) => format!("~{rest}"),
+                None => text,
+            }
+        }
+        None => text,
+    }
+}
+
 /// Store a new backup location (empty = default), refresh the list, and
 /// say so inline. Shared by the text field and the Browse dialog.
 fn apply_backup_dir(
@@ -1399,11 +1430,14 @@ fn fetch_latest_commit() -> Result<String, String> {
     }
     let commits: Vec<Commit> =
         ureq::get("https://api.github.com/repos/noctalia-dev/umbriel/commits?per_page=1")
-            .set("User-Agent", "umbriel-config")
-            .timeout(std::time::Duration::from_secs(10))
+            .header("User-Agent", "umbriel-config")
+            .config()
+            .timeout_global(Some(std::time::Duration::from_secs(10)))
+            .build()
             .call()
             .map_err(|err| err.to_string())?
-            .into_json()
+            .body_mut()
+            .read_json()
             .map_err(|err| err.to_string())?;
     let Some(latest) = commits.first() else {
         return Err("no commits found".to_owned());

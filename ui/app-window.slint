@@ -448,11 +448,16 @@ component SettingsPage inherits Rectangle {
     in property <string> upstream-note;
     in property <bool> umbriel-missing;
     in property <bool> dark-mode: true;
+    in property <string> config-path;
+    in property <[string]> include-files;
+    in property <string> sync-note;
+    in property <bool> sync-clean: true;
     callback check-now();
     callback toggled(bool);
     callback theme-selected(bool);
     callback open-url(string);
     callback relaunch();
+    callback sync-schema();
 
     VerticalLayout {
         padding: Theme.space-l;
@@ -464,6 +469,115 @@ component SettingsPage inherits Rectangle {
             color: Theme.text-1;
             font-size: Theme.font-title;
             font-weight: 700;
+        }
+
+        // ── your config ─────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Your config";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Config file";
+                            width: 260px;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.config-path;
+                            color: Theme.text-1;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Includes";
+                            width: 260px;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        VerticalLayout {
+                            spacing: 2px;
+
+                            for file in root.include-files: Text {
+                                text: file;
+                                color: Theme.text-1;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                wrap: TextWrap.word-wrap;
+                            }
+
+                            Text {
+                                text: "none";
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                visible: root.include-files.length == 0;
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Schema";
+                            width: 260px;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "Sync schema";
+                            clicked => { root.sync-schema(); }
+                        }
+
+                        Text {
+                            text: root.sync-note;
+                            color: root.sync-clean ? Theme.success : Theme.accent;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            visible: root.sync-note != "";
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
         }
 
         // ── appearance ──────────────────────────────────────
@@ -871,7 +985,9 @@ export component AppWindow inherits Window {
     default-font-size: Theme.font-body;
 
     in property <string> config-path;
-    in property <int> include-count;
+    in property <[string]> include-files;
+    in property <string> sync-note;
+    in property <bool> sync-clean: true;
     in property <string> include-note;
     in property <bool> dirty;
     in property <[SectionNav]> sections;
@@ -987,35 +1103,14 @@ export component AppWindow inherits Window {
                     vertical-alignment: center;
                 }
 
-                Text {
-                    text: root.config-path;
-                    color: Theme.text-2;
-                    font-family: Theme.font-mono;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
-                }
-
-                Text {
-                    text: "+" + root.include-count + " included";
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
-                    visible: root.include-count > 0;
+                Rectangle {
+                    horizontal-stretch: 1;
                 }
 
                 LineEdit {
                     width: 200px;
                     placeholder-text: "Search Settings";
                     edited(t) => { root.search-edited(t); }
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-
-                ActionButton {
-                    text: "Sync schema";
-                    clicked => { root.sync-schema-requested(); }
                 }
 
                 ActionButton {
@@ -1198,6 +1293,10 @@ export component AppWindow inherits Window {
                         umbriel-missing: root.umbriel-missing;
                         check-updates-on-start: root.check-updates-on-start;
                         dark-mode: root.dark-mode;
+                        config-path: root.config-path;
+                        include-files: root.include-files;
+                        sync-note: root.sync-note;
+                        sync-clean: root.sync-clean;
                         update-note: root.update-note;
                         update-available: root.update-available;
                         upstream-note: root.upstream-note;
@@ -1206,6 +1305,7 @@ export component AppWindow inherits Window {
                         theme-selected(d) => { root.theme-selected(d); }
                         open-url(u) => { root.open-url(u); }
                         relaunch => { root.guide-relaunch(); }
+                        sync-schema => { root.sync-schema-requested(); }
                     }
                 }
 
