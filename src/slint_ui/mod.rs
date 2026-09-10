@@ -13,8 +13,8 @@ use slint::{
     CloseRequestResponse, ComponentHandle, LogicalSize, Model, SharedString, VecModel, WindowSize,
 };
 use umbriel_config::config::{
-    discovery, document::ConfigDocument, includes, outputs, schema, settings as app_settings,
-    state, validate,
+    backups, discovery, document::ConfigDocument, includes, outputs, schema,
+    settings as app_settings, state, validate,
 };
 use umbriel_config::{live, update};
 
@@ -496,6 +496,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(&shell);
+        let env = env.clone();
         app.on_save_confirmed(move || {
             let Some(app) = weak.upgrade() else { return };
             let mut shell = shell.borrow_mut();
@@ -546,6 +547,13 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                     };
                     source.remove_table(&parts);
                 }
+            }
+
+            // Backup the on-disk chain before any of it is overwritten.
+            if shell.doc.is_modified()
+                || shell.includes.docs.iter().any(|inc| inc.doc.is_modified())
+            {
+                snapshot_before_save(&shell, &env, "save");
             }
 
             // Write every modified doc, then validate through umbriel.
@@ -775,6 +783,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(&shell);
+        let env = env.clone();
         app.on_guide_next(move || {
             let Some(app) = weak.upgrade() else { return };
             // Advance one step, or — on the last — write the config and
@@ -795,6 +804,11 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             // Finish: write every modified doc, then validate through
             // umbriel (absent installs skip validation gracefully).
             let mut shell = shell.borrow_mut();
+            if shell.doc.is_modified()
+                || shell.includes.docs.iter().any(|inc| inc.doc.is_modified())
+            {
+                snapshot_before_save(&shell, &env, "save");
+            }
             let mut saved_files = 0;
             for inc in &mut shell.includes.docs {
                 if inc.doc.is_modified() {
@@ -971,20 +985,44 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
 }
 
 /// Persist the app settings with the current window size (logical px).
+/// Snapshot the on-disk chain into a backup run before a save overwrites
+/// it. Best effort: a backup failure is never allowed to block a save.
+fn snapshot_before_save(shell: &Shell, env: &discovery::Env, trigger: &str) {
+    let settings = app_settings::load(env);
+    let base = match settings.backup_dir.as_deref() {
+        Some(dir) => PathBuf::from(dir),
+        None => backups::default_base(env),
+    };
+    let mut chain = vec![shell.path.clone()];
+    chain.extend(shell.includes.docs.iter().map(|inc| inc.path.clone()));
+    let files: Vec<(PathBuf, String)> = chain
+        .into_iter()
+        .filter_map(|path| {
+            let content = std::fs::read_to_string(&path).ok()?;
+            Some((path, content))
+        })
+        .collect();
+    if files.is_empty() {
+        return;
+    }
+    if backups::snapshot_run(&base, &shell.path, trigger, &files).is_ok() {
+        backups::prune_runs(&base, settings.backup_count.max(1) as usize);
+    }
+}
+
 /// The toggle is read from the live property so a change made on the
 /// Settings page survives exit.
 fn store_window_settings(app: &AppWindow, env: &discovery::Env) {
     let scale = app.window().scale_factor();
     let size = app.window().size();
-    let _ = app_settings::store(
-        env,
-        &app_settings::Settings {
-            check_updates_on_start: app.get_check_updates_on_start(),
-            window_width: (size.width as f32 / scale) as u32,
-            window_height: (size.height as f32 / scale) as u32,
-            dark: app.get_dark_mode(),
-        },
-    );
+    // Load-mutate-store: fields without a live property (backup prefs)
+    // must survive a window-settings save untouched.
+    let mut settings = app_settings::load(env);
+    settings.check_updates_on_start = app.get_check_updates_on_start();
+    settings.window_width = (size.width as f32 / scale) as u32;
+    settings.window_height = (size.height as f32 / scale) as u32;
+    settings.dark = app.get_dark_mode();
+    let _ = app_settings::store(env, &settings);
 }
 
 /// Background update check; results land on the UI thread. `env` is only

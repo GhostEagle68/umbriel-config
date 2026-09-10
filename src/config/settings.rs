@@ -5,13 +5,17 @@ use super::discovery;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub check_updates_on_start: bool,
     pub window_width: u32,
     pub window_height: u32,
     /// true = dark design, false = light design.
     pub dark: bool,
+    /// Backup runs kept per location (minimum 1).
+    pub backup_count: u32,
+    /// Custom backup location; None = the state-directory default.
+    pub backup_dir: Option<String>,
 }
 
 pub const DEFAULT: Settings = Settings {
@@ -19,6 +23,8 @@ pub const DEFAULT: Settings = Settings {
     window_width: 960,
     window_height: 640,
     dark: true,
+    backup_count: 10,
+    backup_dir: None,
 };
 
 pub fn path(env: &discovery::Env) -> PathBuf {
@@ -54,6 +60,8 @@ fn parse(text: &str) -> Settings {
                 settings.window_height = value.parse().unwrap_or(DEFAULT.window_height)
             }
             "dark" => settings.dark = value.parse().unwrap_or(DEFAULT.dark),
+            "backup_count" => settings.backup_count = value.parse().unwrap_or(DEFAULT.backup_count),
+            "backup_dir" => settings.backup_dir = (!value.is_empty()).then(|| value.to_owned()),
             _ => {}
         }
     }
@@ -68,11 +76,13 @@ pub fn store(env: &discovery::Env, settings: &Settings) -> std::io::Result<()> {
     std::fs::write(
         path,
         format!(
-            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\ndark = {}\n",
+            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\ndark = {}\nbackup_count = {}\nbackup_dir = {}\n",
             settings.check_updates_on_start,
             settings.window_width,
             settings.window_height,
-            settings.dark
+            settings.dark,
+            settings.backup_count,
+            settings.backup_dir.as_deref().unwrap_or(""),
         ),
     )
 }
@@ -102,6 +112,8 @@ mod tests {
                 window_width: 1280,
                 window_height: 800,
                 dark: false,
+                backup_count: 3,
+                backup_dir: Some("/tmp/b".to_owned()),
             },
         )
         .unwrap();
@@ -112,6 +124,8 @@ mod tests {
                 window_width: 1280,
                 window_height: 800,
                 dark: false,
+                backup_count: 3,
+                backup_dir: Some("/tmp/b".to_owned()),
             }
         );
         store(&e, &DEFAULT).unwrap();
@@ -122,14 +136,18 @@ mod tests {
     #[test]
     fn parse_ignores_unknown_keys_and_bad_values() {
         let settings = parse(
-            "unknown = 1\ncheck_updates_on_start = false\nwindow_width = oops\nwindow_height = 700\ndark = false\nbad_dark = maybe\n",
+            "unknown = 1\ncheck_updates_on_start = false\nwindow_width = oops\nwindow_height = 700\ndark = false\nbackup_count = 3\nbackup_dir = /tmp/b\nbad_dark = maybe\n",
         );
         assert!(!settings.check_updates_on_start);
         assert_eq!(settings.window_width, DEFAULT.window_width);
         assert_eq!(settings.window_height, 700);
         assert!(!settings.dark);
-        // A malformed `dark` line falls back to the default (dark).
-        let settings = parse("dark = maybe\n");
+        assert_eq!(settings.backup_count, 3);
+        assert_eq!(settings.backup_dir.as_deref(), Some("/tmp/b"));
+        // Malformed values fall back to the defaults per field.
+        let settings = parse("dark = maybe\nbackup_count = oops\n");
         assert!(settings.dark);
+        assert_eq!(settings.backup_count, DEFAULT.backup_count);
+        assert_eq!(settings.backup_dir, None);
     }
 }
