@@ -253,7 +253,33 @@ pub fn assemble(packaged: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
     walk_table(doc.as_table(), &mut Vec::new(), &mut entries);
     mine_comments(packaged, &mut entries);
+    share_vocabularies(&mut entries);
     entries
+}
+
+/// The same key often appears in several sections with the vocabulary
+/// documented only once (`input.touchpad.accel_profile` documents what
+/// `input.mouse.accel_profile` accepts). Text-kind entries inherit the
+/// vocabulary of any Choice-kind entry with the same key name.
+fn share_vocabularies(entries: &mut [Entry]) {
+    let vocabularies: Vec<(String, Vec<String>)> = entries
+        .iter()
+        .filter_map(|entry| match &entry.kind {
+            Kind::Choice(values) => Some((entry.path.last()?.clone(), values.clone())),
+            _ => None,
+        })
+        .collect();
+    for entry in entries.iter_mut() {
+        if !matches!(entry.kind, Kind::Text) {
+            continue;
+        }
+        let Some(key) = entry.path.last().cloned() else {
+            continue;
+        };
+        if let Some((_, values)) = vocabularies.iter().rev().find(|(name, _)| name == &key) {
+            entry.kind = Kind::Choice(values.clone());
+        }
+    }
 }
 
 fn walk_table(table: &toml_edit::Table, path: &mut Vec<String>, out: &mut Vec<Entry>) {
@@ -374,16 +400,20 @@ fn mine_range(decor: &str) -> Option<(f64, f64, Option<String>)> {
 
 /// Best-effort vocabulary from a value's trailing comment: comma-separated
 /// words (`# popin, zoom, fade`) or ` or `-separated words
-/// (`# "scrolling" or "dwindle"`). Any piece that is not a single word
-/// rejects the whole comment, so prose never becomes a dropdown.
+/// (`# "scrolling" or "dwindle"`). Pieces that are not single words are
+/// dropped rather than rejecting the comment — `# flat, adaptive, or
+/// custom <step> <points...>` still yields `flat, adaptive, custom` — but
+/// prose like `# see this or that guide, please` falls below the two-word
+/// floor and stays free text.
 fn mine_choices(comment: &str) -> Option<Vec<String>> {
     let body = comment.split('#').nth(1)?.trim();
-    let separator = if body.contains(" or ") { " or " } else { "," };
     let words: Vec<String> = body
-        .split(separator)
+        .replace(" or ", ",")
+        .split(',')
         .map(|word| word.trim().trim_matches('"').to_owned())
+        .filter(|word| is_word_like(word))
         .collect();
-    (words.len() >= 2 && words.iter().all(|word| is_word_like(word))).then_some(words)
+    (words.len() >= 2).then_some(words)
 }
 
 fn is_word_like(word: &str) -> bool {
@@ -812,6 +842,23 @@ focus_on_activate = false
         let found = entries.iter().find(|e| e.dotted() == "notes.x").unwrap();
         assert_eq!(found.kind, Kind::Text);
         assert_eq!(found.default, Some(Value::Text("a".into())));
+    }
+
+    #[test]
+    fn vocabularies_share_across_sections_and_survive_extra_words() {
+        let entries = assemble(
+            "[a]\n# mode = \"flat\" # flat, adaptive, or custom <args>\n\
+             [b]\n# mode = \"flat\" # Omit to preserve the libinput default\n",
+        );
+        for dotted in ["a.mode", "b.mode"] {
+            let found = entries.iter().find(|e| e.dotted() == dotted).unwrap();
+            // "custom <args>" needs arguments, so it is correctly dropped
+            // from a dropdown vocabulary.
+            assert_eq!(
+                found.kind,
+                Kind::Choice(vec!["flat".to_owned(), "adaptive".to_owned()])
+            );
+        }
     }
 
     #[test]

@@ -12,11 +12,21 @@ categories = ["gui", "config"]
 
 [dependencies]
 anyhow = "1.0.104"
-eframe = "0.36.1"
+rfd = "0.15"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
+similar = "2"
+slint = "1"
 thiserror = "2.0.20"
 toml_edit = "0.25.13"
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3", features = ["json"] }
 wayland-client = "0.31.15"
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+
+[build-dependencies]
+slint-build = "1"
+
+# Shipped-binary size: symbols stripped, cross-crate optimization on.
+[profile.release]
+strip = true
+lto = "thin"

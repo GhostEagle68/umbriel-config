@@ -293,8 +293,8 @@ impl ConfigDocument {
     }
 
     /// Every leaf outside `[keybinds]` as `(dotted path, raw TOML text)`;
-    /// binds are diffed as whole entries (see `diff`), so their table is
-    /// skipped here. Array-of-tables count as one leaf with a summary.
+    /// binds count as whole entries, so their table is skipped here.
+    /// Array-of-tables count as one leaf with a summary.
     pub fn leaf_values(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         for (key, item) in self.doc.as_table().iter() {
@@ -547,19 +547,10 @@ impl ConfigDocument {
     /// `index`; returns whether anything was removed.
     pub fn rule_unset(&mut self, name: &str, index: usize, key: &str) -> bool {
         let parts: Vec<&str> = key.split('.').collect();
-        let Some((last, parents)) = parts.split_last() else {
+        let Some(table) = self.rule_table_mut(name, index) else {
             return false;
         };
-        let Some(mut table) = self.rule_table_mut(name, index) else {
-            return false;
-        };
-        for parent in parents {
-            table = match table.get_mut(parent).map(Item::as_table_mut) {
-                Some(Some(child)) => child,
-                _ => return false,
-            };
-        }
-        table.remove(last).is_some()
+        remove_dotted(table, &parts)
     }
 
     /// All `[keybinds]` entries in file order. Plain string actions have
@@ -629,6 +620,35 @@ impl ConfigDocument {
             Value::InlineTable(inline),
         );
     }
+
+    /// Delete the bind whose stored key is exactly `chord` — the
+    /// `[keybinds]` table's keys are the chords. Returns whether anything
+    /// was removed.
+    pub fn remove_keybind(&mut self, chord: &str) -> bool {
+        self.remove_table(&["keybinds", chord])
+    }
+}
+
+/// Remove `parts` (dotted) from `table`, pruning parent tables that
+/// become empty — unsetting a rule field leaves no litter behind.
+fn remove_dotted(table: &mut Table, parts: &[&str]) -> bool {
+    let Some((first, rest)) = parts.split_first() else {
+        return false;
+    };
+    if rest.is_empty() {
+        return table.remove(first).is_some();
+    }
+    let Some(child) = table.get_mut(first) else {
+        return false;
+    };
+    let Some(child) = child.as_table_mut() else {
+        return false;
+    };
+    let removed = remove_dotted(child, rest);
+    if removed && child.is_empty() {
+        table.remove(first);
+    }
+    removed
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -945,6 +965,19 @@ curve = \"easeout\"
         doc.set_keybind("Mod+R", "config-reload", None, None, None);
         assert_eq!(doc.keybinds()[1].action, "config-reload");
         assert!(!doc.text().contains("repeat = false"));
+    }
+
+    #[test]
+    fn remove_keybind_deletes_only_that_chord() {
+        let text = "# binds\n[keybinds]\n\"Mod+Q\" = \"window-close\"\n\"Mod+Return\" = { action = \"spawn:kitty\" }\n";
+        let mut doc = ConfigDocument::from_str(text).unwrap();
+        assert!(doc.remove_keybind("Mod+Q"));
+        assert!(!doc.text().contains("window-close"));
+        assert!(doc.text().contains("spawn:kitty"));
+        assert!(doc.text().contains("# binds"));
+        // Exact-match: a different case is not the stored chord.
+        assert!(!doc.remove_keybind("mod+return"));
+        assert!(doc.remove_keybind("Mod+Return"));
     }
 
     #[test]

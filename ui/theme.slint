@@ -1,0 +1,47 @@
+// Design tokens for the Slint shell. Every component reads colors, spacing,
+// radii, and type sizes from this global — restyling happens here, nowhere
+// else. Colors come in a dark and a light design; `dark` flips the whole
+// app (set from Rust at startup and by the Settings page switcher).
+
+export global Theme {
+    // true = dark design, false = light design.
+    in property <bool> dark: true;
+
+    // Backgrounds: three elevation levels, window → panel → card/hover.
+    out property <color> bg-0: root.dark ? #1e2027 : #f6f7f9;
+    out property <color> bg-1: root.dark ? #23252d : #eef0f4;
+    out property <color> bg-2: root.dark ? #2c2f3a : #e3e6ec;
+
+    // Text.
+    out property <color> text-1: root.dark ? #f5f6f8 : #1e2027;
+    out property <color> text-2: root.dark ? #9aa0ae : #5b6270;
+
+    // One accent + semantic colors.
+    out property <color> accent: root.dark ? #7c9aff : #3d63dd;
+    out property <color> accent-hover: root.dark ? #93adff : #5a7ce8;
+    // Accent wash for selected rows (sidebar highlight).
+    out property <color> accent-soft: root.dark ? #7c9aff26 : #3d63dd1a;
+    out property <color> danger: root.dark ? #e06c75 : #c2404b;
+    out property <color> warning: root.dark ? #e5b567 : #a4741c;
+    out property <color> success: root.dark ? #98c379 : #3f7d3c;
+    out property <color> border: root.dark ? #3a3e4a : #d3d7e0;
+
+    // Spacing on a 4/8 grid.
+    out property <length> space-xs: 4px;
+    out property <length> space-s: 8px;
+    out property <length> space-m: 12px;
+    out property <length> space-l: 16px;
+    out property <length> space-xl: 24px;
+
+    // Radius vocabulary: exactly three.
+    out property <length> radius-s: 4px;
+    out property <length> radius-m: 6px;
+    out property <length> radius-l: 10px;
+
+    // Type scale: Inter for UI (default via Window), mono for values.
+    out property <length> font-small: 12px;
+    out property <length> font-body: 13px;
+    out property <length> font-large: 16px;
+    out property <length> font-title: 20px;
+    out property <string> font-mono: "JetBrains Mono";
+}

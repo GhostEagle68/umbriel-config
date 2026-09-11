@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use umbriel_config::config::{discovery, document::ConfigDocument, validate};
 use umbriel_config::live;
 
-mod ui;
+mod slint_ui;
 
 fn main() -> ExitCode {
     match run() {
@@ -36,7 +36,7 @@ fn run() -> Result<()> {
     let path = config.unwrap_or_else(discovery::resolve_process);
 
     match command.as_str() {
-        "gui" => ui::run(path),
+        "gui" => slint_ui::run(path),
         "path" => {
             println!("{}", path.display());
             Ok(())

@@ -6,7 +6,7 @@ Wayland compositor by the Noctalia team.
 Open your config, click through the settings, hit **Save** — Umbriel
 live-reloads and the change applies immediately.
 
-> **Status: alpha.** The core is usable but has rough edges, recommended for using as testing right now.
+> **Status: beta.** The core is usable but may encounter rough edges.
 > [Bug reports and ideas are welcome](https://github.com/GhostEagle68/umbriel-config/issues).
 
 ## Disclaimer
@@ -25,7 +25,13 @@ Zcode GLM 5.3 models are used to help plan, review code and research only. All c
 - **Understands split configs** — follows your `[include]` chain
 - **Changes you can audit** — every unsaved edit is one row: what changed,
   before vs after, with a per-option reset. Discard anything before saving.
-- **Outputs, window rules, layer rules** — including live monitor scanning.
+- **Backups you can restore** — every save snapshots your config into
+  dated backup runs with a keep-limit, restoring first backs up the
+  current files, and the restore browser shows a per-file diff before
+  you commit.
+- **Outputs, window rules, layer rules, security contexts** — including
+  live monitor scanning and add-output; collapsible cards keep long
+  lists readable.
 - **Your file stays yours** — lossless TOML editing keeps every comment and
   piece of formatting; saves are atomic with a one-time `.bak` backup, and
   `umbriel validate` runs on every save.
@@ -68,11 +74,36 @@ Then build and install umbriel-config, either from crates.io:
 cargo install umbriel-config@0.1.2-alpha.3
 ```
 
-or straight from the repository (tracks `main`):
+While every release is a prerelease, the version must be named since cargo's
+plain `cargo install umbriel-config` skips prerelease versions by rule.
+From the first stable release on, the unversioned command works. Or go
+straight from the repository (tracks `main`):
 
 ```sh
 cargo install --git https://github.com/GhostEagle68/umbriel-config
 ```
+
+Want the latest, unreleased changes? The `dev` branch is work-in-progress,
+expect rough edges and it has no releases, so the clean way to follow it
+is from a clone:
+
+```sh
+git clone --branch dev https://github.com/GhostEagle68/umbriel-config
+cd umbriel-config
+cargo run --release
+```
+
+Updating is `git pull` plus a rebuild, and `git log HEAD..origin/dev` shows
+exactly what changed since your last build — something a plain install can
+never tell you. To keep the dev build on your PATH next to a stable install,
+copy it under a dev name:
+
+```sh
+cp target/release/umbriel-config ~/.local/bin/umbriel-config-dev
+```
+
+`cargo install --git … --branch dev` also works, but it replaces your existing
+`umbriel-config` binary and can't tell you what's new.
 
 ## Uninstall
 
@@ -108,11 +139,11 @@ umbriel-config get|set ...    # debug CLI for single keys
 umbriel-config outputs        # list outputs reported by the compositor
 ```
 
-## Alpha caveats
+## Beta caveats
 
 - Core settings work
-- Expect bugs, missing features and bare bones UI
-- Eye-candy and polish pass still pending.
+- Expect bugs and missing features.
+- Umbriel Config may have frequent updates due to how fast Umbriel changes, staying up-to-date is highly recommended.
 - Installs from GitHub release tarballs (x86_64 and aarch64), crates.io, or
   `cargo install --git`. AUR packaging is planned but not started.
 
@@ -125,4 +156,15 @@ just test
 ```
 
 Conventions and architecture: [CONTRIBUTING.md](CONTRIBUTING.md).
-Licensed under [MIT](LICENSE.md).
+
+## License
+
+umbriel-config is [MIT](LICENSE.md)-licensed. The binary embeds two
+typefaces under the [SIL Open Font License 1.1](https://openfontlicense.org)
+(Inter, JetBrains Mono — full license texts in `assets/fonts/`) and is
+built on the [Slint](https://slint.dev) UI toolkit, which SixtyFPS GmbH
+distributes under its own licenses; this project uses and ships Slint
+under the Slint Royalty-free Desktop, Mobile, and Web Applications
+License 2.0 — attribution is given via the `AboutSlint` widget on the
+Settings → About screen. Full details in the third-party notices at the
+end of [LICENSE.md](LICENSE.md).
