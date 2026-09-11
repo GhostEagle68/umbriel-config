@@ -41,7 +41,7 @@ Zcode GLM 5.3 models are used to help plan, review code and research only. All c
 Prebuilt binaries are attached to every release, no compiler needed.
 
 ```sh
-curl -fLO https://github.com/GhostEagle68/umbriel-config/releases/download/v0.1.2-alpha.3/umbriel-config-x86_64-linux.tar.gz
+curl -fLO https://github.com/GhostEagle68/umbriel-config/releases/download/v0.2.0-beta.1/umbriel-config-x86_64-linux.tar.gz
 tar -xzf umbriel-config-x86_64-linux.tar.gz -C ~/.local
 ```
 
@@ -71,7 +71,7 @@ source $HOME/.cargo/env
 Then build and install umbriel-config, either from crates.io:
 
 ```sh
-cargo install umbriel-config@0.1.2-alpha.3
+cargo install umbriel-config@0.2.0-beta.1
 ```
 
 While every release is a prerelease, the version must be named since cargo's
