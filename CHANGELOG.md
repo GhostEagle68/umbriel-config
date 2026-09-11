@@ -2,18 +2,58 @@
 
 ## [Unreleased]
 
+## [0.2.0-beta.1] — 2026-09-11
+
+First release on the Slint interface. The old EGUI interface is gone, and a lot
+arrived with the new one.
+
+### Features
+
+- **Backups you can restore.** Every save snapshots your config into a
+  dated backup run (keeping the last ten by default), the restore
+  browser shows a per-file diff before you commit, and restoring first
+  backs up the current files; a restore is itself reversible.
+- **Keybinds editor.** Your binds and the compositor defaults in one
+  searchable list, grouped by family. Press the keys to capture a chord,
+  pick actions from your installed umbriel's live vocabulary, and
+  conflicts are caught before they land; removing your bind restores the
+  default.
+- **Window rules, layer rules, and security contexts.** Visual editors
+  for every rule family including rules that live in split-out files
+  like windowrules.toml, which open and edit in place. Add or remove
+  rules.
+- **Outputs, per monitor.** One card per connected display with
+  resolution and refresh offered from the modes it actually reports,
+  HDR, VRR, scale and more, plus Add output for displays not yet
+  configured.
+- **Guided setup.** A short walk through the settings people change
+  most, offered when umbriel is detected; values you already set are
+  left alone.
+- **What's new in the app.** Release notes are bundled into the binary:
+  shown once per version after an update, and readable any time from
+  Settings → View changelog. Update checks now also show the new
+  version's notes.
+- **Dark and light theme**, switchable in Settings.
+
 ### Changed
 
 - The entire interface is rebuilt with Slint: a cleaner shell, a real
-  theme system with bundled fonts, and settings pages grouped into
-  cards instead of dense tables.
-- Ranged number settings (opacity, timeouts, sizes) get a slider beside
-  the value box — the box shows the value live while you drag.
-- Editing now commits when you press Enter *or* click anywhere else, so
-  a half-finished edit is never silently lost.
-- The sidebar scrolls on short windows, its highlight follows the page
-  you are on, and dropdown vocabularies (like pointer acceleration
-  profiles) populate reliably.
+  theme system with bundled fonts, sidebar navigation with curated
+  pages, and settings grouped into collapsible cards instead of dense
+  tables.
+- The shipped binary is about 27% smaller.
+- Chain-wide search finds a setting by name across every page, and
+  each row shows which file it lives in.
+- Editing commits on Enter or when you click elsewhere, so a
+  half-finished edit is never silently lost.
+
+### Fixed
+
+- Output workspace lists stored as TOML arrays are read and written
+  correctly instead of falling back to "dynamic".
+- Slider reset works and sliders hold their values at the extremes.
+- The sidebar highlight follows dedicated pages (keybinds, outputs,
+  rules) as well as regular settings pages.
 
 ## [0.1.2-alpha.3] — 2026-09-06
 
