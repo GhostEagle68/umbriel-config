@@ -34,7 +34,9 @@ jobs:
         run: |
           mkdir -p stage/bin stage/share/applications stage/share/icons/hicolor/scalable/apps
           cp target/release/umbriel-config stage/bin/
-          cp README.md LICENSE.md stage/
+          cp README.md LICENSE.md LICENSE-Slint.md stage/
+          cp assets/fonts/LICENSE-Inter.txt stage/share/licenses/
+          cp assets/fonts/LICENSE-JetBrainsMono.txt stage/share/licenses/
           cp assets/umbriel-config.desktop stage/share/applications/
           cp assets/umbriel-config.svg stage/share/icons/hicolor/scalable/apps/
           tar -czf umbriel-config-${{ matrix.arch }}-linux.tar.gz -C stage .
