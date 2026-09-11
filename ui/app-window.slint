@@ -54,6 +54,11 @@ export  struct SettingRow {
 
 export struct SettingsCard {
     title: string,
+    // Stable identity for the expansion map; also what toggle-card
+    // sends back.
+    key: string,
+    // Collapsible cards remember their state across rebuilds.
+    expanded: bool,
     rows: [SettingRow],
 }
 
@@ -73,6 +78,7 @@ export struct MonitorCard {
     connected: bool,
     configured: bool,
     removable: bool,
+    expanded: bool,
     rows: [SettingRow],
 }
 
@@ -82,6 +88,7 @@ export struct RuleCard {
     // Chain document this rule lives in (main = include count).
     file: int,
     file-label: string,
+    expanded: bool,
     match-rows: [SettingRow],
     setting-rows: [SettingRow],
 }
@@ -243,6 +250,60 @@ component DraftEdit inherits LineEdit {
         if (!self.has-focus && self.draft != root.value) {
             root.commit(self.draft);
         }
+    }
+}
+
+// Collapsible card header: disclosure chevron, title, dim caption,
+// then page-specific extras (a Remove button) on the right. Clicking
+// anywhere outside those extras toggles the card.
+component CardHeader inherits Rectangle {
+    in property <string> title;
+    in property <string> caption;
+    in property <bool> expanded;
+    callback toggle();
+    height: 30px;
+    border-radius: Theme.radius-s;
+    background: ta.has-hover ? Theme.bg-2 : transparent;
+
+    ta := TouchArea {
+        clicked => { root.toggle(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-s;
+        padding-right: Theme.space-m;
+        spacing: Theme.space-m;
+
+        Text {
+            width: 18px;
+            text: root.expanded ? "▾" : "▸";
+            color: Theme.text-2;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.title;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+
+        if root.caption != "": Text {
+            text: root.caption;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            opacity: 0.7;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        if root.caption == "": Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        @children
     }
 }
 
@@ -429,6 +490,7 @@ component CategoryPage inherits Rectangle {
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
     callback view-file(int);
+    callback toggle-card(string);
 
     // Click-away focus: empty page space falls through to the TouchArea,
     // which hands focus to the sink and thereby blurs (committing) any
@@ -462,14 +524,13 @@ component CategoryPage inherits Rectangle {
         for card in root.cards: VerticalLayout {
             spacing: Theme.space-xs;
 
-            Text {
-                text: card.title;
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                font-weight: 700;
+            CardHeader {
+                title: card.title;
+                expanded: card.expanded;
+                toggle => { root.toggle-card(card.key); }
             }
 
-            Rectangle {
+            if card.expanded: Rectangle {
                 background: Theme.bg-1;
                 border-radius: Theme.radius-m;
 
@@ -1430,6 +1491,7 @@ component OutputsPage inherits Rectangle {
     callback refresh();
     callback add(string);
     callback remove(string);
+    callback toggle-monitor(string);
     callback set-value(string, string);
     callback reset-key(string);
     callback set-slider-value(string, float);
@@ -1476,29 +1538,11 @@ component OutputsPage inherits Rectangle {
         for monitor in root.monitors: VerticalLayout {
             spacing: Theme.space-xs;
 
-            HorizontalLayout {
-                spacing: Theme.space-m;
-
-                Text {
-                    text: monitor.name + (monitor.connected ? "" : " (not connected)");
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                }
-
-                if monitor.info != "": Text {
-                    text: monitor.info;
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
-                    wrap: TextWrap.word-wrap;
-                    horizontal-stretch: 1;
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
+            CardHeader {
+                title: monitor.name + (monitor.connected ? "" : " (not connected)");
+                caption: monitor.info;
+                expanded: monitor.expanded;
+                toggle => { root.toggle-monitor(monitor.name); }
 
                 if monitor.configured && monitor.removable: ActionButton {
                     text: "Remove";
@@ -1506,7 +1550,7 @@ component OutputsPage inherits Rectangle {
                 }
             }
 
-            Rectangle {
+            if monitor.expanded: Rectangle {
                 background: Theme.bg-1;
                 border-radius: Theme.radius-m;
 
@@ -1588,6 +1632,7 @@ component RulePage inherits Rectangle {
     in property <[RuleCard]> rule-cards;
     callback add-rule();
     callback remove-rule(int, int);
+    callback toggle-rule(int, int);
     callback set-value(string, string);
     callback reset-key(string);
     callback set-slider-value(string, float);
@@ -1630,24 +1675,11 @@ component RulePage inherits Rectangle {
         for card in root.rule-cards: VerticalLayout {
             spacing: Theme.space-xs;
 
-            HorizontalLayout {
-                spacing: Theme.space-m;
-
-                Text {
-                    text: card.title;
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-
-                if card.file-label != "": Text {
-                    text: "in " + card.file-label;
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
-                }
+            CardHeader {
+                title: card.title;
+                caption: card.file-label != "" ? "in " + card.file-label : "";
+                expanded: card.expanded;
+                toggle => { root.toggle-rule(card.file, card.index); }
 
                 ActionButton {
                     text: "Remove";
@@ -1655,7 +1687,7 @@ component RulePage inherits Rectangle {
                 }
             }
 
-            Rectangle {
+            if card.expanded: Rectangle {
                 background: Theme.bg-1;
                 border-radius: Theme.radius-m;
 
@@ -1763,6 +1795,9 @@ export component AppWindow inherits Window {
     callback output-remove(string);
     callback rule-add();
     callback rule-remove(int, int);
+    callback toggle-card(string);
+    callback toggle-monitor(string);
+    callback toggle-rule(int, int);
 
     // Keybinds page
     in property <[KeybindRow]> keybind-rows;
@@ -2051,6 +2086,7 @@ export component AppWindow inherits Window {
                         refresh => { root.outputs-refresh(); }
                         add(n) => { root.output-add(n); }
                         remove(n) => { root.output-remove(n); }
+                        toggle-monitor(n) => { root.toggle-monitor(n); }
                         set-value(k, v) => { root.set-value(k, v); }
                         reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
@@ -2071,6 +2107,7 @@ export component AppWindow inherits Window {
                         rule-cards: root.rule-cards;
                         add-rule => { root.rule-add(); }
                         remove-rule(f, i) => { root.rule-remove(f, i); }
+                        toggle-rule(f, i) => { root.toggle-rule(f, i); }
                         set-value(k, v) => { root.set-value(k, v); }
                         reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
@@ -2098,6 +2135,7 @@ export component AppWindow inherits Window {
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
                         view-file(i) => { root.view-file(i); }
+                        toggle-card(title) => { root.toggle-card(title); }
                     }
                 }
 

@@ -52,6 +52,8 @@ struct Shell {
     guide_monitors: Vec<live::LiveOutput>,
     // Last live-scan failure note; empty when detection is healthy.
     live_note: String,
+    // Collapsed/expanded cards by stable key; absent = page default.
+    card_expanded: BTreeMap<String, bool>,
 }
 
 /// One guided-setup walk: the curated cards, in visit order. Each step is
@@ -227,6 +229,7 @@ impl Shell {
             guide: None,
             guide_monitors: Vec::new(),
             live_note: String::new(),
+            card_expanded: BTreeMap::new(),
         };
         shell.reset_saved();
         shell
@@ -961,6 +964,66 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(&shell);
+        app.on_toggle_card(move |key| {
+            let Some(app) = weak.upgrade() else { return };
+            let open = {
+                let shell = shell.borrow();
+                // The guide renders through the same cards; its step
+                // must survive the rebuild.
+                let in_guide = shell.guide.is_some();
+                (in_guide, !card_expanded(&shell, &key, true))
+            };
+            shell
+                .borrow_mut()
+                .card_expanded
+                .insert(key.to_string(), open.1);
+            let shell = shell.borrow();
+            if open.0 {
+                guide_show_step(&app, &shell);
+            } else {
+                refill_page(&app, &shell, &app.get_current_section());
+            }
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_toggle_monitor(move |name| {
+            let Some(app) = weak.upgrade() else { return };
+            let key = format!("monitor:{name}");
+            let open = !card_expanded(&shell.borrow(), &key, true);
+            shell.borrow_mut().card_expanded.insert(key, open);
+            let shell = shell.borrow();
+            rebuild_outputs(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_toggle_rule(move |file, index| {
+            let Some(app) = weak.upgrade() else { return };
+            let Some(family) = rule_family(&app.get_current_section()) else {
+                return;
+            };
+            let key = format!("rule:{family}:{file}:{index}");
+            // The default (open when alone) depends on the card count,
+            // so flip whatever the model shows right now.
+            let open = {
+                let shell = shell.borrow();
+                rule_cards(&shell, family)
+                    .into_iter()
+                    .find(|card| card.file == file && card.index == index)
+                    .map(|card| !card.expanded)
+            };
+            let Some(open) = open else { return };
+            shell.borrow_mut().card_expanded.insert(key, open);
+            let shell = shell.borrow();
+            rebuild_rule_page(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
         app.on_outputs_refresh(move || {
             let Some(app) = weak.upgrade() else { return };
             scan_outputs(&mut shell.borrow_mut());
@@ -996,6 +1059,10 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 .borrow_mut()
                 .doc
                 .set_bool(&["output", &name, "enabled"], true);
+            shell
+                .borrow_mut()
+                .card_expanded
+                .insert(format!("monitor:{name}"), true);
             app.set_outputs_add_name(String::new().into());
             let shell = shell.borrow();
             app.set_dirty(shell.any_modified());
@@ -1036,6 +1103,13 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             };
             let target = rule_add_target(&shell.borrow(), family);
             doc_at_mut(&mut shell.borrow_mut(), target).add_rule(family);
+            // The new rule sits at the end of its file; open it so the
+            // fields are right there to fill in.
+            let new_index = doc_at(&shell.borrow(), target).rule_count(family) - 1;
+            shell
+                .borrow_mut()
+                .card_expanded
+                .insert(format!("rule:{family}:{target}:{new_index}"), true);
             let shell = shell.borrow();
             app.set_dirty(shell.any_modified());
             rebuild_rule_page(&app, &shell);
@@ -2338,8 +2412,11 @@ fn catalog_page_cards(shell: &Shell, page: &catalog::Page) -> Vec<SettingsCard> 
             .map(|entry| schema_row(shell, &sets, &labels, &current, entry))
             .collect();
         if !rows.is_empty() {
+            let key = format!("card:{}:{}", page.id, card.title);
             cards.push(SettingsCard {
                 title: card.title.into(),
+                key: key.clone().into(),
+                expanded: card_expanded(shell, &key, true),
                 rows: Rc::new(VecModel::from(rows)).into(),
             });
         }
@@ -2356,7 +2433,10 @@ fn catalog_page_cards(shell: &Shell, page: &catalog::Page) -> Vec<SettingsCard> 
         auto.entry(prettify(&entry.section)).or_default().push(row);
     }
     for (title, rows) in auto {
+        let key = format!("card:{}:{title}", page.id);
         cards.push(SettingsCard {
+            key: key.clone().into(),
+            expanded: card_expanded(shell, &key, true),
             title: title.into(),
             rows: Rc::new(VecModel::from(rows)).into(),
         });
@@ -2387,6 +2467,8 @@ fn fallback_page_cards(shell: &Shell, top: &str) -> Vec<SettingsCard> {
     let mut out: Vec<SettingsCard> = cards
         .into_iter()
         .map(|(title, rows)| SettingsCard {
+            key: title.clone().into(),
+            expanded: true,
             title: title.into(),
             rows: Rc::new(VecModel::from(rows)).into(),
         })
@@ -2459,6 +2541,8 @@ fn other_card(
         return None;
     }
     Some(SettingsCard {
+        key: "other".into(),
+        expanded: true,
         title: "other".into(),
         rows: Rc::new(VecModel::from(other.into_values().collect::<Vec<_>>())).into(),
     })
@@ -2971,6 +3055,8 @@ fn guide_cards(shell: &Shell, metas: &[&'static GuideKey]) -> Vec<SettingsCard> 
         .collect();
     vec![SettingsCard {
         title: String::new().into(),
+        key: String::new().into(),
+        expanded: true,
         rows: Rc::new(VecModel::from(rows)).into(),
     }]
 }
@@ -3013,9 +3099,14 @@ fn output_cards(shell: &Shell) -> Vec<SettingsCard> {
         .collect();
     output_names(shell)
         .iter()
-        .map(|name| SettingsCard {
-            title: name.clone().into(),
-            rows: Rc::new(VecModel::from(output_monitor_rows(shell, name, &current))).into(),
+        .map(|name| {
+            let key = format!("card:output:{name}");
+            SettingsCard {
+                title: name.clone().into(),
+                key: key.clone().into(),
+                expanded: card_expanded(shell, &key, true),
+                rows: Rc::new(VecModel::from(output_monitor_rows(shell, name, &current))).into(),
+            }
         })
         .collect()
 }
@@ -3091,11 +3182,18 @@ fn monitor_cards(shell: &Shell) -> Vec<MonitorCard> {
                 info: info.join(" · ").into(),
                 connected: monitor.is_some(),
                 configured: configured.contains(name),
+                expanded: card_expanded(shell, &format!("monitor:{name}"), true),
                 removable,
                 rows: Rc::new(VecModel::from(output_monitor_rows(shell, name, &current))).into(),
             }
         })
         .collect()
+}
+
+/// A card's expansion: the user's choice wins, else the default
+/// (settings and monitor cards open, rule cards open only when alone).
+fn card_expanded(shell: &Shell, key: &str, default: bool) -> bool {
+    shell.card_expanded.get(key).copied().unwrap_or(default)
 }
 
 /// Rescan the compositor's monitors; failures become the page's note.
@@ -3235,10 +3333,19 @@ fn rule_cards(shell: &Shell, family: &str) -> Vec<RuleCard> {
                 index: index as i32,
                 file: doc_index as i32,
                 file_label: labels.get(doc_index).cloned().unwrap_or_default(),
+                expanded: false,
                 match_rows: Rc::new(VecModel::from(rows(match_fields))).into(),
                 setting_rows: Rc::new(VecModel::from(rows(setting_fields))).into(),
             });
         }
+    }
+    // A lone rule opens by default; otherwise the titles read like a
+    // collapsed list until a card is expanded.
+    let default = cards.len() == 1;
+    let family_key = family.to_owned();
+    for (position, card) in cards.iter_mut().enumerate() {
+        let key = format!("rule:{family_key}:{}:{}", card.file, card.index);
+        card.expanded = card_expanded(shell, &key, default && position == 0);
     }
     cards
 }
@@ -3685,6 +3792,30 @@ mod tests {
         // Empty and comma-only input are rejected, not written.
         assert!(workspaces_parse("").is_err());
         assert!(workspaces_parse(" , ").is_err());
+    }
+
+    #[test]
+    fn rule_card_expansion_defaults_and_persists() {
+        let dir = std::env::temp_dir().join(format!("umbriel-expand-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let main_path = dir.join("config.toml");
+        std::fs::write(&main_path, "[[window_rule]]\nmatch.app_id = \"kitty\"\n").unwrap();
+        let env = discovery::Env::from_process();
+
+        // A lone rule card opens by default.
+        let mut shell = Shell::load(&main_path, &env);
+        assert!(rule_cards(&shell, "window_rule")[0].expanded);
+
+        // A second rule collapses the list — and the user's choice
+        // survives the rebuild that every edit triggers.
+        shell.doc.add_rule("window_rule");
+        let cards = rule_cards(&shell, "window_rule");
+        assert!(cards.iter().all(|card| !card.expanded));
+        let key = format!("rule:window_rule:{}:{}", cards[0].file, cards[0].index);
+        shell.card_expanded.insert(key, true);
+        assert!(rule_cards(&shell, "window_rule")[0].expanded);
+        assert!(!rule_cards(&shell, "window_rule")[1].expanded);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
