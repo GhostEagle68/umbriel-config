@@ -27,6 +27,11 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # fontique (Slint's font stack) needs fontconfig's dev headers at
+      # build time; the arm runner image doesn't preinstall them.
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+
       - name: Build release binary
         run: cargo build --release --locked
 
