@@ -85,6 +85,11 @@ jobs:
           fi
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
 
+      # The publish step verifies by building the packaged crate, which
+      # needs fontconfig's dev headers (fontique) — same as the build job.
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+
       - name: Publish to crates.io
         # Runs on the pristine checkout — before artifacts and notes dirty
         # the tree — and before the release object exists, so a publish
