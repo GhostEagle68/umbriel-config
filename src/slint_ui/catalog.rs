@@ -38,6 +38,13 @@ pub const PAGES: &[Page] = &[
         cards: &[],
     },
     Page {
+        id: "keybinds",
+        title: "Keybinds",
+        description: "Your keyboard shortcuts. Edit, add, or restore the compositor defaults.",
+        group: "desktop",
+        cards: &[],
+    },
+    Page {
         id: "workspaces",
         title: "Workspaces",
         description: "Workspace behavior and numbering.",

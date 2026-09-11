@@ -629,6 +629,13 @@ impl ConfigDocument {
             Value::InlineTable(inline),
         );
     }
+
+    /// Delete the bind whose stored key is exactly `chord` — the
+    /// `[keybinds]` table's keys are the chords. Returns whether anything
+    /// was removed.
+    pub fn remove_keybind(&mut self, chord: &str) -> bool {
+        self.remove_table(&["keybinds", chord])
+    }
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -945,6 +952,19 @@ curve = \"easeout\"
         doc.set_keybind("Mod+R", "config-reload", None, None, None);
         assert_eq!(doc.keybinds()[1].action, "config-reload");
         assert!(!doc.text().contains("repeat = false"));
+    }
+
+    #[test]
+    fn remove_keybind_deletes_only_that_chord() {
+        let text = "# binds\n[keybinds]\n\"Mod+Q\" = \"window-close\"\n\"Mod+Return\" = { action = \"spawn:kitty\" }\n";
+        let mut doc = ConfigDocument::from_str(text).unwrap();
+        assert!(doc.remove_keybind("Mod+Q"));
+        assert!(!doc.text().contains("window-close"));
+        assert!(doc.text().contains("spawn:kitty"));
+        assert!(doc.text().contains("# binds"));
+        // Exact-match: a different case is not the stored chord.
+        assert!(!doc.remove_keybind("mod+return"));
+        assert!(doc.remove_keybind("Mod+Return"));
     }
 
     #[test]
