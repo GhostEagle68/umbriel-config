@@ -67,6 +67,25 @@ export struct KeybindRow {
     shadowing: bool,
     index: int,
 }
+export struct MonitorCard {
+    name: string,
+    info: string,
+    connected: bool,
+    configured: bool,
+    removable: bool,
+    rows: [SettingRow],
+}
+
+export struct RuleCard {
+    title: string,
+    index: int,
+    // Chain document this rule lives in (main = include count).
+    file: int,
+    file-label: string,
+    match-rows: [SettingRow],
+    setting-rows: [SettingRow],
+}
+
 
 // One changed key, as shown in the save popup.
 export struct SaveEntry {
@@ -87,7 +106,7 @@ export struct SectionNav {
     is-header: bool,
 }
 
-export enum Page { section, search, settings, backups, keybinds }
+export enum Page { section, search, settings, backups, keybinds, outputs, rules }
 
 // Small token-driven button; std-widgets are avoided until the styled-page
 // pass so the whole shell carries one identity from day one.
@@ -227,6 +246,178 @@ component DraftEdit inherits LineEdit {
     }
 }
 
+// One setting row: changed dot, label, editor, then hint + ownership
+// badge. Extracted from the category pages so the outputs and rules
+// pages render rows with the same tested widgets.
+component SettingRowView inherits Rectangle {
+    in property <SettingRow> setting;
+    callback set-value(string, string);
+    callback reset-key(string);
+    callback set-slider-value(string, float);
+    callback slider-preview(string, float);
+    callback view-file(int);
+
+    VerticalLayout {
+        spacing: 2px;
+        opacity: setting.available ? 0.55 : 1.0;
+
+        HorizontalLayout {
+            min-height: 32px;
+            spacing: Theme.space-m;
+
+            if setting.changed: Rectangle {
+                width: 7px;
+                VerticalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: 7px;
+                        height: 7px;
+                        border-radius: 4px;
+                        background: Theme.accent;
+                    }
+                }
+            }
+
+            Text {
+                text: setting.label;
+                width: 260px;
+                wrap: TextWrap.word-wrap;
+                vertical-alignment: center;
+            }
+
+            if setting.is-new: Text {
+                text: "NEW";
+                color: Theme.accent;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            if setting.kind == ValueKind.boolean: CheckBox {
+                checked: setting.checked;
+                toggled => { root.set-value(setting.key, self.checked ? "true" : "false"); }
+            }
+            if setting.kind == ValueKind.integer || setting.kind == ValueKind.float: HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+
+                if setting.max > setting.min && setting.value.to-float() == setting.value.to-float(): Slider {
+                    width: 160px;
+                    minimum: setting.min;
+                    maximum: setting.max;
+                    value: setting.value.to-float();
+                        // A drag detaches the slider's value
+                        // from the binding above, so watch the
+                        // row and push resets/external edits
+                        // back into the thumb.
+                        property <string> watched: setting.value;
+                    changed watched => {
+                        self.value = setting.value.to-float();
+                    }
+                    changed(v) => { root.slider-preview(setting.key, v); }
+                    released(v) => { root.set-slider-value(setting.key, v); }
+                }
+
+                DraftEdit {
+                    width: 140px;
+                    value: setting.preview == "" ? setting.value : setting.preview;
+                    commit(t) => { root.set-value(setting.key, t); }
+                }
+
+                if setting.changed: ActionButton {
+                    text: "Reset";
+                    clicked => { root.reset-key(setting.key); }
+                }
+            }
+            if setting.kind == ValueKind.color: HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+
+                Rectangle {
+                    width: 28px;
+                    border-radius: Theme.radius-s;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: setting.swatch;
+                }
+
+                DraftEdit {
+                    width: 140px;
+                    value: setting.value;
+                    commit(t) => { root.set-value(setting.key, t); }
+                }
+            }
+            if setting.kind == ValueKind.curve: ComboBox {
+                width: 180px;
+                model: setting.choices;
+                current-value: setting.value;
+                selected(v) => { root.set-value(setting.key, v); }
+            }
+            if setting.kind == ValueKind.list: DraftEdit {
+                width: 220px;
+                value: setting.value;
+                commit(t) => { root.set-value(setting.key, t); }
+            }
+            if setting.kind == ValueKind.text: DraftEdit {
+                width: 220px;
+                value: setting.value;
+                commit(t) => { root.set-value(setting.key, t); }
+            }
+            if setting.kind == ValueKind.choice: ComboBox {
+                width: 180px;
+                model: setting.choices;
+                current-value: setting.value;
+                selected(v) => { root.set-value(setting.key, v); }
+            }
+            if setting.kind == ValueKind.unset: Text {
+                text: setting.value;
+                color: Theme.text-2;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+
+            if setting.hint != "": Text {
+                text: setting.hint;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                opacity: 0.7;
+                vertical-alignment: center;
+            }
+
+            // Ownership badge: click to view the file that
+                // owns this key (read-only).
+                if setting.home >= 0: Rectangle {
+                width: badge-text.preferred-width + 10px;
+                height: badge-text.preferred-height + 4px;
+                border-radius: Theme.radius-s;
+
+                badge-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.view-file(setting.home); }
+                }
+
+                badge-text := Text {
+                    text: "in " + setting.home-label;
+                    color: badge-ta.has-hover ? Theme.accent : Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}
+
 // One settings category page: curated cards of rows, label left /
 // editor right, descriptions under the labels.
 component CategoryPage inherits Rectangle {
@@ -285,164 +476,13 @@ component CategoryPage inherits Rectangle {
                 VerticalLayout {
                     padding: Theme.space-m;
 
-                    for row in card.rows: VerticalLayout {
-                        spacing: 2px;
-                        opacity: row.available ? 0.55 : 1.0;
-
-                        HorizontalLayout {
-                            min-height: 32px;
-                            spacing: Theme.space-m;
-
-                            if row.changed: Rectangle {
-                                width: 7px;
-                                VerticalLayout {
-                                    alignment: center;
-
-                                    Rectangle {
-                                        width: 7px;
-                                        height: 7px;
-                                        border-radius: 4px;
-                                        background: Theme.accent;
-                                    }
-                                }
-                            }
-
-                            Text {
-                                text: row.label;
-                                width: 260px;
-                                wrap: TextWrap.word-wrap;
-                                vertical-alignment: center;
-                            }
-
-                            if row.is-new: Text {
-                                text: "NEW";
-                                color: Theme.accent;
-                                font-size: Theme.font-small;
-                                vertical-alignment: center;
-                            }
-
-                            Rectangle {
-                                horizontal-stretch: 1;
-                            }
-
-                            if row.kind == ValueKind.boolean: CheckBox {
-                                checked: row.checked;
-                                toggled => { root.set-value(row.key, self.checked ? "true" : "false"); }
-                            }
-                            if row.kind == ValueKind.integer || row.kind == ValueKind.float: HorizontalLayout {
-                                spacing: Theme.space-s;
-                                alignment: start;
-
-                                if row.max > row.min && row.value.to-float() == row.value.to-float(): Slider {
-                                    width: 160px;
-                                    minimum: row.min;
-                                    maximum: row.max;
-                                    value: row.value.to-float();
-                                    // A drag detaches the slider's value
-                                    // from the binding above, so watch the
-                                    // row and push resets/external edits
-                                    // back into the thumb.
-                                    property <string> watched: row.value;
-                                    changed watched => {
-                                        self.value = row.value.to-float();
-                                    }
-                                    changed(v) => { root.slider-preview(row.key, v); }
-                                    released(v) => { root.set-slider-value(row.key, v); }
-                                }
-
-                                DraftEdit {
-                                    width: 140px;
-                                    value: row.preview == "" ? row.value : row.preview;
-                                    commit(t) => { root.set-value(row.key, t); }
-                                }
-
-                                if row.changed: ActionButton {
-                                    text: "Reset";
-                                    clicked => { root.reset-key(row.key); }
-                                }
-                            }
-                            if row.kind == ValueKind.color: HorizontalLayout {
-                                spacing: Theme.space-s;
-                                alignment: start;
-
-                                Rectangle {
-                                    width: 28px;
-                                    border-radius: Theme.radius-s;
-                                    border-width: 1px;
-                                    border-color: Theme.border;
-                                    background: row.swatch;
-                                }
-
-                                DraftEdit {
-                                    width: 140px;
-                                    value: row.value;
-                                    commit(t) => { root.set-value(row.key, t); }
-                                }
-                            }
-                            if row.kind == ValueKind.curve: ComboBox {
-                                width: 180px;
-                                model: row.choices;
-                                current-value: row.value;
-                                selected(v) => { root.set-value(row.key, v); }
-                            }
-                            if row.kind == ValueKind.list: DraftEdit {
-                                width: 220px;
-                                value: row.value;
-                                commit(t) => { root.set-value(row.key, t); }
-                            }
-                            if row.kind == ValueKind.text: DraftEdit {
-                                width: 220px;
-                                value: row.value;
-                                commit(t) => { root.set-value(row.key, t); }
-                            }
-                            if row.kind == ValueKind.choice: ComboBox {
-                                width: 180px;
-                                model: row.choices;
-                                current-value: row.value;
-                                selected(v) => { root.set-value(row.key, v); }
-                            }
-                            if row.kind == ValueKind.unset: Text {
-                                text: row.value;
-                                color: Theme.text-2;
-                                font-family: Theme.font-mono;
-                                font-size: Theme.font-small;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: Theme.space-s;
-                            alignment: start;
-
-                            if row.hint != "": Text {
-                                text: row.hint;
-                                color: Theme.text-2;
-                                font-size: Theme.font-small;
-                                opacity: 0.7;
-                                vertical-alignment: center;
-                            }
-
-                            // Ownership badge: click to view the file that
-                            // owns this key (read-only).
-                            if row.home >= 0: Rectangle {
-                                width: badge-text.preferred-width + 10px;
-                                height: badge-text.preferred-height + 4px;
-                                border-radius: Theme.radius-s;
-
-                                badge-ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.view-file(row.home); }
-                                }
-
-                                badge-text := Text {
-                                    text: "in " + row.home-label;
-                                    color: badge-ta.has-hover ? Theme.accent : Theme.text-2;
-                                    font-size: Theme.font-small;
-                                    vertical-alignment: center;
-                                    horizontal-alignment: center;
-                                }
-                            }
-                        }
+                    for row in card.rows: SettingRowView {
+                        setting: row;
+                        set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
                     }
                 }
             }
@@ -1378,6 +1418,294 @@ component KeybindsPage inherits Rectangle {
     }
 }
 
+// Outputs page: one card per monitor (live-detected first, then
+// configured-but-away), the fields underneath, and the add-output card.
+// Removing an output deletes its block — the last one stays.
+component OutputsPage inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <[MonitorCard]> monitors;
+    in property <string> live-note;
+    in-out property <string> add-name;
+    callback refresh();
+    callback add(string);
+    callback remove(string);
+    callback set-value(string, string);
+    callback reset-key(string);
+    callback set-slider-value(string, float);
+    callback slider-preview(string, float);
+    callback view-file(int);
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            ActionButton {
+                text: "Refresh";
+                clicked => { root.refresh(); }
+            }
+
+            if root.live-note != "": Text {
+                text: root.live-note;
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                wrap: TextWrap.word-wrap;
+                horizontal-stretch: 1;
+            }
+        }
+
+        for monitor in root.monitors: VerticalLayout {
+            spacing: Theme.space-xs;
+
+            HorizontalLayout {
+                spacing: Theme.space-m;
+
+                Text {
+                    text: monitor.name + (monitor.connected ? "" : " (not connected)");
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                if monitor.info != "": Text {
+                    text: monitor.info;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                    wrap: TextWrap.word-wrap;
+                    horizontal-stretch: 1;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                if monitor.configured && monitor.removable: ActionButton {
+                    text: "Remove";
+                    clicked => { root.remove(monitor.name); }
+                }
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+
+                    for row in monitor.rows: SettingRowView {
+                        setting: row;
+                        set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
+                    }
+                }
+            }
+        }
+
+        if root.monitors.length == 0: Text {
+            text: "No outputs connected or configured. Add one below to set its mode, scale, or workspaces, umbriel's defaults apply until then.";
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+
+        // ── add output ──────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Add output";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                HorizontalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-m;
+
+                    Text {
+                        text: "Connector name";
+                        width: 260px;
+                        vertical-alignment: center;
+                    }
+
+                    LineEdit {
+                        width: 220px;
+                        text <=> root.add-name;
+                        placeholder-text: "e.g. DP-3 or eDP-1";
+                        accepted(t) => { root.add(t); }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    ActionButton {
+                        text: "Add";
+                        primary: true;
+                        clicked => { root.add(root.add-name); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Rule page: one card per rule, Match fields then Settings. Every field
+// starts unset — clearing one (or picking "(unset)") removes it from the
+// config. Rules living in an include show a pointer instead of editors.
+component RulePage inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <[RuleCard]> rule-cards;
+    callback add-rule();
+    callback remove-rule(int, int);
+    callback set-value(string, string);
+    callback reset-key(string);
+    callback set-slider-value(string, float);
+    callback slider-preview(string, float);
+    callback view-file(int);
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            ActionButton {
+                text: "Add rule";
+                primary: true;
+                clicked => { root.add-rule(); }
+            }
+        }
+
+        for card in root.rule-cards: VerticalLayout {
+            spacing: Theme.space-xs;
+
+            HorizontalLayout {
+                spacing: Theme.space-m;
+
+                Text {
+                    text: card.title;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                if card.file-label != "": Text {
+                    text: "in " + card.file-label;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+
+                ActionButton {
+                    text: "Remove";
+                    clicked => { root.remove-rule(card.file, card.index); }
+                }
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+
+                    Text {
+                        text: "Match";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        font-weight: 700;
+                    }
+
+                    for row in card.match-rows: SettingRowView {
+                        setting: row;
+                        set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
+                    }
+
+                    Text {
+                        text: "Settings";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        font-weight: 700;
+                    }
+
+                    for row in card.setting-rows: SettingRowView {
+                        setting: row;
+                        set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
+                    }
+                }
+            }
+        }
+
+        if root.rule-cards.length == 0: Text {
+            text: "No rules yet. Add one, every field starts unset, and only what you fill in is written.";
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     preferred-width: 960px;
     preferred-height: 640px;
@@ -1430,6 +1758,11 @@ export component AppWindow inherits Window {
     callback save-requested();
     callback sync-schema-requested();
     callback exit-requested();
+    callback outputs-refresh();
+    callback output-add(string);
+    callback output-remove(string);
+    callback rule-add();
+    callback rule-remove(int, int);
 
     // Keybinds page
     in property <[KeybindRow]> keybind-rows;
@@ -1438,6 +1771,10 @@ export component AppWindow inherits Window {
     in-out property <bool> kb-editor-open;
     in-out property <bool> kb-capturing;
     in-out property <bool> keybind-editing;
+    in property <[MonitorCard]> monitors;
+    in property <string> outputs-live-note;
+    in-out property <string> outputs-add-name;
+    in property <[RuleCard]> rule-cards;
     in-out property <string> kb-draft-chord;
     in-out property <bool> kb-draft-use-mod;
     in-out property <string> kb-draft-scope;
@@ -1624,8 +1961,11 @@ export component AppWindow inherits Window {
                                 count: section.new-count;
                                 header: section.is-header;
                                 selected: !section.is-header
-                                    && root.page == Page.section
-                                    && section.id == root.current-section;
+                                    && section.id == root.current-section
+                                    && (root.page == Page.section
+                                    || root.page == Page.keybinds
+                                    || root.page == Page.outputs
+                                    || root.page == Page.rules);
                                 selected-fired => { root.section-selected(section.id); }
                             }
                         }
@@ -1693,6 +2033,49 @@ export component AppWindow inherits Window {
                         edit(i) => { root.keybind-edit(i); }
                         remove(i) => { root.keybind-remove(i); }
                         apply => { root.keybind-apply(); }
+                    }
+                }
+
+                if root.page == Page.outputs: opsv := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: outputs-page.preferred-height;
+
+                    outputs-page := OutputsPage {
+                        width: opsv.visible-width;
+                        title: root.page-title;
+                        description: root.page-description;
+                        monitors: root.monitors;
+                        live-note: root.outputs-live-note;
+                        add-name <=> root.outputs-add-name;
+                        refresh => { root.outputs-refresh(); }
+                        add(n) => { root.output-add(n); }
+                        remove(n) => { root.output-remove(n); }
+                        set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
+                    }
+                }
+
+                if root.page == Page.rules: rpv := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: rule-page.preferred-height;
+
+                    rule-page := RulePage {
+                        width: rpv.visible-width;
+                        title: root.page-title;
+                        description: root.page-description;
+                        rule-cards: root.rule-cards;
+                        add-rule => { root.rule-add(); }
+                        remove-rule(f, i) => { root.rule-remove(f, i); }
+                        set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
                     }
                 }
 

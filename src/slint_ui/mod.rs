@@ -14,7 +14,7 @@ use slint::{
     CloseRequestResponse, ComponentHandle, LogicalSize, Model, SharedString, VecModel, WindowSize,
 };
 use umbriel_config::config::{
-    backups, discovery, document::ConfigDocument, includes, keybinds, outputs, schema,
+    backups, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema,
     settings as app_settings, state, validate,
 };
 use umbriel_config::{live, update};
@@ -50,6 +50,8 @@ struct Shell {
     // Monitors detected when the guide was armed: feeds the outputs
     // card's resolution/refresh dropdowns and its recommendation hints.
     guide_monitors: Vec<live::LiveOutput>,
+    // Last live-scan failure note; empty when detection is healthy.
+    live_note: String,
 }
 
 /// One guided-setup walk: the curated cards, in visit order. Each step is
@@ -224,6 +226,7 @@ impl Shell {
             new_keys,
             guide: None,
             guide_monitors: Vec::new(),
+            live_note: String::new(),
         };
         shell.reset_saved();
         shell
@@ -347,13 +350,32 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         let shell = Rc::clone(&shell);
         app.on_section_selected(move |name| {
             let Some(app) = weak.upgrade() else { return };
-            // Outputs page: rescan on open — fast-fails when no
-            // compositor is reachable and keeps the last detection.
+            // Outputs page: its own surface; rescan on open —
+            // fast-fails when no compositor is reachable and keeps the
+            // last detection.
             if name.as_str() == catalog::OUTPUTS_ID {
-                shell.borrow_mut().guide_monitors = live::outputs().unwrap_or_default();
+                scan_outputs(&mut shell.borrow_mut());
+                app.set_current_section(name.clone());
+                let (title, description) = page_meta(&name);
+                app.set_page_title(title.into());
+                app.set_page_description(description.into());
+                app.set_page(Page::Outputs);
+                rebuild_outputs(&app, &shell.borrow());
+                return;
+            }
+            // Rule pages: their own surface, one family per page.
+            if rule_family(&name).is_some() {
+                app.set_current_section(name.clone());
+                let (title, description) = page_meta(&name);
+                app.set_page_title(title.into());
+                app.set_page_description(description.into());
+                app.set_page(Page::Rules);
+                rebuild_rule_page(&app, &shell.borrow());
+                return;
             }
             // Keybinds page: its own surface, not a CategoryPage.
             if name.as_str() == "keybinds" {
+                app.set_current_section(name.clone());
                 app.set_page(Page::Keybinds);
                 let shell = shell.borrow();
                 rebuild_keybind_rows(
@@ -939,6 +961,104 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(&shell);
+        app.on_outputs_refresh(move || {
+            let Some(app) = weak.upgrade() else { return };
+            scan_outputs(&mut shell.borrow_mut());
+            let shell = shell.borrow();
+            rebuild_outputs(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_output_add(move |name| {
+            let Some(app) = weak.upgrade() else { return };
+            let name = name.trim().to_owned();
+            let taken = {
+                let shell = shell.borrow();
+                let mut names = outputs::configured(&shell.doc);
+                for monitor in &shell.guide_monitors {
+                    if !names.contains(&monitor.name) {
+                        names.push(monitor.name.clone());
+                    }
+                }
+                names.contains(&name) || name.is_empty()
+            };
+            if taken {
+                app.set_status(if name.is_empty() {
+                    "Enter a connector name first, e.g. DP-3.".into()
+                } else {
+                    format!("{name} is already listed").into()
+                });
+                return;
+            }
+            shell
+                .borrow_mut()
+                .doc
+                .set_bool(&["output", &name, "enabled"], true);
+            app.set_outputs_add_name(String::new().into());
+            let shell = shell.borrow();
+            app.set_dirty(shell.any_modified());
+            rebuild_outputs(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_output_remove(move |name| {
+            let Some(app) = weak.upgrade() else { return };
+            let removed = {
+                let mut shell = shell.borrow_mut();
+                let only = outputs::configured(&shell.doc).len() <= 1;
+                if only {
+                    None
+                } else {
+                    shell.doc.remove_table(&["output", &name]).then_some(())
+                }
+            };
+            if removed.is_none() {
+                app.set_status("The only configured output cannot be removed.".into());
+                return;
+            }
+            let shell = shell.borrow();
+            app.set_dirty(shell.any_modified());
+            rebuild_outputs(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_rule_add(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let section = app.get_current_section().to_string();
+            let Some(family) = rule_family(&section) else {
+                return;
+            };
+            let target = rule_add_target(&shell.borrow(), family);
+            doc_at_mut(&mut shell.borrow_mut(), target).add_rule(family);
+            let shell = shell.borrow();
+            app.set_dirty(shell.any_modified());
+            rebuild_rule_page(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_rule_remove(move |file, index| {
+            let Some(app) = weak.upgrade() else { return };
+            let section = app.get_current_section().to_string();
+            let Some(family) = rule_family(&section) else {
+                return;
+            };
+            doc_at_mut(&mut shell.borrow_mut(), file as usize).remove_rule(family, index as usize);
+            let shell = shell.borrow();
+            app.set_dirty(shell.any_modified());
+            rebuild_rule_page(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
         let keybind_binds = Rc::clone(&keybind_binds);
         let kb_actions = Arc::clone(&kb_actions);
         app.on_keybind_search_edited(move |text| {
@@ -1376,6 +1496,39 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         /// Shared write path for text edits and slider releases: format the raw
         /// input per Kind, write through set_leaf_text, then refresh the row.
         fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str) {
+            // Rule fields ("window_rule[0].match.app_id") write straight
+            // to the owning document — no schema formatting, no
+            // save-popup destination.
+            if let Some((family, doc, index, field_key)) = rules::parse_rule_key(key) {
+                let field = rules::fields(family)
+                    .0
+                    .iter()
+                    .chain(rules::fields(family).1)
+                    .find(|field| field.key == field_key);
+                let Some(field) = field else { return };
+                let target = {
+                    let shell = shell.borrow();
+                    doc.unwrap_or_else(|| rule_target(&shell, family))
+                };
+                let result = {
+                    let mut shell = shell.borrow_mut();
+                    rules::apply_field_text(
+                        doc_at_mut(&mut shell, target),
+                        family,
+                        index,
+                        field,
+                        raw,
+                    )
+                };
+                if let Err(err) = result {
+                    app.set_status(err.into());
+                    return;
+                }
+                let shell = shell.borrow();
+                app.set_dirty(shell.any_modified());
+                rebuild_rule_page(app, &shell);
+                return;
+            }
             let formatted = {
                 let shell = shell.borrow();
                 if key.starts_with("output.") {
@@ -2854,46 +3007,259 @@ fn schema_row(
 /// The outputs guide step: one card per configured monitor, its fields
 /// editable through the standard row editors.
 fn output_cards(shell: &Shell) -> Vec<SettingsCard> {
+    let current: BTreeMap<String, String> = doc_at(shell, shell.includes.docs.len())
+        .leaf_values()
+        .into_iter()
+        .collect();
+    output_names(shell)
+        .iter()
+        .map(|name| SettingsCard {
+            title: name.clone().into(),
+            rows: Rc::new(VecModel::from(output_monitor_rows(shell, name, &current))).into(),
+        })
+        .collect()
+}
+
+/// Detected-then-configured output names, deduplicated.
+fn output_names(shell: &Shell) -> Vec<String> {
     let main = shell.includes.docs.len();
-    let doc = doc_at(shell, main);
-    let current: BTreeMap<String, String> = doc.leaf_values().into_iter().collect();
-    let home_label = setting_labels(shell).get(main).cloned().unwrap_or_default();
-    // Configured monitors plus anything detected but not configured yet.
-    let mut names: Vec<String> = outputs::configured(doc);
+    let mut names = outputs::configured(doc_at(shell, main));
     for monitor in &shell.guide_monitors {
         if !names.contains(&monitor.name) {
             names.push(monitor.name.clone());
         }
     }
     names
+}
+
+/// One monitor's field rows; with detected modes the single mode string
+/// splits into resolution and refresh dropdowns.
+fn output_monitor_rows(
+    shell: &Shell,
+    name: &str,
+    current: &BTreeMap<String, String>,
+) -> Vec<SettingRow> {
+    let monitor = shell
+        .guide_monitors
+        .iter()
+        .find(|monitor| monitor.name == name);
+    let mut rows: Vec<SettingRow> = Vec::new();
+    for field in outputs::FIELDS {
+        if field.key == "mode"
+            && let Some(detected) = monitor.filter(|monitor| !monitor.modes.is_empty())
+        {
+            rows.push(resolution_choice_row(shell, name, detected, current));
+            rows.push(refresh_choice_row(shell, name, detected, current));
+            continue;
+        }
+        rows.push(output_row(shell, name, field, current));
+    }
+    let home_label = setting_labels(shell)
+        .get(shell.includes.docs.len())
+        .cloned()
+        .unwrap_or_default();
+    for row in &mut rows {
+        row.home_label = home_label.clone();
+    }
+    rows
+}
+
+/// The outputs page model: one card per monitor with its live info.
+fn monitor_cards(shell: &Shell) -> Vec<MonitorCard> {
+    let main = shell.includes.docs.len();
+    let current: BTreeMap<String, String> = doc_at(shell, main).leaf_values().into_iter().collect();
+    let configured = outputs::configured(doc_at(shell, main));
+    let removable = configured.len() > 1;
+    output_names(shell)
         .iter()
         .map(|name| {
             let monitor = shell
                 .guide_monitors
                 .iter()
                 .find(|monitor| monitor.name == *name);
-            let mut rows: Vec<SettingRow> = Vec::new();
-            for field in outputs::FIELDS {
-                if field.key == "mode" {
-                    // With detected modes the single mode string splits
-                    // into two welcoming dropdowns instead.
-                    if let Some(monitor) = monitor.filter(|monitor| !monitor.modes.is_empty()) {
-                        rows.push(resolution_choice_row(shell, name, monitor, &current));
-                        rows.push(refresh_choice_row(shell, name, monitor, &current));
-                        continue;
-                    }
+            let mut info: Vec<String> = Vec::new();
+            if let Some(monitor) = monitor {
+                if !monitor.description.is_empty() {
+                    info.push(monitor.description.clone());
                 }
-                rows.push(output_row(shell, name, field, &current));
+                if let Some(mode) = monitor.current.and_then(|index| monitor.modes.get(index)) {
+                    info.push(format!("Currently {}", mode.label()));
+                }
             }
-            for row in &mut rows {
-                row.home_label = home_label.clone();
-            }
-            SettingsCard {
-                title: name.clone().into(),
-                rows: Rc::new(VecModel::from(rows)).into(),
+            MonitorCard {
+                name: name.clone().into(),
+                info: info.join(" · ").into(),
+                connected: monitor.is_some(),
+                configured: configured.contains(name),
+                removable,
+                rows: Rc::new(VecModel::from(output_monitor_rows(shell, name, &current))).into(),
             }
         })
         .collect()
+}
+
+/// Rescan the compositor's monitors; failures become the page's note.
+fn scan_outputs(shell: &mut Shell) {
+    match live::outputs() {
+        Ok(list) => {
+            shell.guide_monitors = list;
+            shell.live_note = String::new();
+        }
+        Err(err) => shell.live_note = format!("live state unavailable: {err}"),
+    }
+}
+
+fn rebuild_outputs(app: &AppWindow, shell: &Shell) {
+    app.set_monitors(Rc::new(VecModel::from(monitor_cards(shell))).into());
+    app.set_outputs_live_note(shell.live_note.clone().into());
+    app.set_changed_count(changed_count(shell));
+}
+
+/// Which rule family a section page edits, if any.
+fn rule_family(section: &str) -> Option<&'static str> {
+    match section {
+        "window-rules" => Some("window_rule"),
+        "layer-rules" => Some("layer_rule"),
+        "security-contexts" => Some("security_context_rule"),
+        _ => None,
+    }
+}
+
+/// The chain document that owns a rule family: the first include with
+/// rules of that family in it, else the main config.
+fn rule_target(shell: &Shell, family: &str) -> usize {
+    let main = shell.includes.docs.len();
+    shell
+        .includes
+        .docs
+        .iter()
+        .position(|inc| inc.doc.rule_count(family) > 0)
+        .unwrap_or(main)
+}
+
+fn doc_at_mut(shell: &mut Shell, file_index: usize) -> &mut ConfigDocument {
+    if file_index == shell.includes.docs.len() {
+        &mut shell.doc
+    } else {
+        &mut shell.includes.docs[file_index].doc
+    }
+}
+
+/// One rule field as a settings row. Rules have no defaults: unset
+/// fields show blank, choices offer "(unset)", and only what the user
+/// fills in is written. The key carries the chain document so edits
+/// land where the rule lives; the badge opens that file.
+fn rule_row(
+    shell: &Shell,
+    doc_index: usize,
+    family: &str,
+    index: usize,
+    field: &rules::Field,
+) -> SettingRow {
+    let doc = doc_at(shell, doc_index);
+    let mut row = blank_row(
+        rules::rule_key(family, doc_index, index, field.key),
+        field.label,
+        doc_index as i32,
+    );
+    row.home_label = setting_labels(shell)
+        .get(doc_index)
+        .cloned()
+        .unwrap_or_default();
+    let text = rules::field_text(doc, family, index, field);
+    match &field.kind {
+        rules::FieldKind::Text
+        | rules::FieldKind::List
+        | rules::FieldKind::Size
+        | rules::FieldKind::Position => {
+            row.value = text.into();
+        }
+        rules::FieldKind::Toggle => {
+            row.kind = ValueKind::Boolean;
+            row.checked = text == "true";
+            row.value = text.into();
+        }
+        rules::FieldKind::Choice(options) => {
+            row.kind = ValueKind::Choice;
+            let mut choices: Vec<SharedString> = vec!["(unset)".into()];
+            choices.extend(options.iter().map(|option| (*option).into()));
+            row.choices = Rc::new(VecModel::from(choices)).into();
+            row.value = if text.is_empty() {
+                "(unset)".into()
+            } else {
+                text.into()
+            };
+        }
+        rules::FieldKind::Float { min, max } => {
+            row.kind = ValueKind::Float;
+            row.min = *min as f32;
+            row.max = *max as f32;
+            row.value = if text.is_empty() {
+                min.to_string().into()
+            } else {
+                text.into()
+            };
+        }
+        rules::FieldKind::Integer { min, max } => {
+            row.kind = ValueKind::Integer;
+            row.min = *min as f32;
+            row.max = *max as f32;
+            row.value = if text.is_empty() {
+                min.to_string().into()
+            } else {
+                text.into()
+            };
+        }
+    }
+    row
+}
+
+/// The rule page model: every chain document's rules of the family,
+/// includes first then the main config — all editable in place.
+fn rule_cards(shell: &Shell, family: &str) -> Vec<RuleCard> {
+    let main = shell.includes.docs.len();
+    let labels = setting_labels(shell);
+    let (match_fields, setting_fields) = rules::fields(family);
+    let mut cards: Vec<RuleCard> = Vec::new();
+    for doc_index in 0..=main {
+        let doc = doc_at(shell, doc_index);
+        for index in 0..doc.rule_count(family) {
+            let rows = |fields: &[rules::Field]| {
+                fields
+                    .iter()
+                    .map(|field| rule_row(shell, doc_index, family, index, field))
+                    .collect::<Vec<_>>()
+            };
+            cards.push(RuleCard {
+                title: rules::rule_title(doc, family, index, match_fields).into(),
+                index: index as i32,
+                file: doc_index as i32,
+                file_label: labels.get(doc_index).cloned().unwrap_or_default(),
+                match_rows: Rc::new(VecModel::from(rows(match_fields))).into(),
+                setting_rows: Rc::new(VecModel::from(rows(setting_fields))).into(),
+            });
+        }
+    }
+    cards
+}
+
+/// New rules join the file where that family already has the most
+/// rules — where the user keeps them; a tie (or no rules anywhere)
+/// goes to the main config.
+fn rule_add_target(shell: &Shell, family: &str) -> usize {
+    let main = shell.includes.docs.len();
+    (0..=main)
+        .max_by_key(|doc_index| doc_at(shell, *doc_index).rule_count(family))
+        .unwrap_or(main)
+}
+
+fn rebuild_rule_page(app: &AppWindow, shell: &Shell) {
+    let section = app.get_current_section().to_string();
+    let Some(family) = rule_family(&section) else {
+        return;
+    };
+    app.set_rule_cards(Rc::new(VecModel::from(rule_cards(shell, family))).into());
+    app.set_changed_count(changed_count(shell));
 }
 
 /// Distinct resolutions (width x height) a monitor reports, in report order.
@@ -2947,7 +3313,7 @@ fn resolution_choice_row(
         resolution = format!("{}x{}", mode.width, mode.height);
     }
     let key = format!("output.{name}.resolution");
-    let mut row = blank_output_row(shell, key.clone(), "Resolution");
+    let mut row = blank_row(key.clone(), "Resolution", shell.includes.docs.len() as i32);
     row.kind = ValueKind::Choice;
     row.choices = Rc::new(VecModel::from(
         resolutions(monitor)
@@ -2978,7 +3344,11 @@ fn refresh_choice_row(
         refresh = (mode.refresh_mhz as f64 / 1000.0).to_string();
     }
     let key = format!("output.{name}.refresh");
-    let mut row = blank_output_row(shell, key.clone(), "Refresh rate");
+    let mut row = blank_row(
+        key.clone(),
+        "Refresh rate",
+        shell.includes.docs.len() as i32,
+    );
     row.kind = ValueKind::Choice;
     row.choices = Rc::new(VecModel::from(
         refreshes(monitor, &resolution)
@@ -2995,8 +3365,7 @@ fn refresh_choice_row(
 
 /// Row scaffold shared by every output editor row: owned by the main
 /// config, no metadata yet.
-fn blank_output_row(shell: &Shell, key: String, label: &str) -> SettingRow {
-    let main = shell.includes.docs.len();
+fn blank_row(key: String, label: &str, home: i32) -> SettingRow {
     SettingRow {
         label: label.into(),
         value: String::new().into(),
@@ -3008,7 +3377,7 @@ fn blank_output_row(shell: &Shell, key: String, label: &str) -> SettingRow {
         hint: String::new().into(),
         min: 0.0,
         max: 0.0,
-        home: main as i32,
+        home,
         home_label: String::new().into(),
         changed: false,
         available: false,
@@ -3049,7 +3418,7 @@ fn output_row(
     let doc = doc_at(shell, main);
     let path = ["output", name, field.key];
     let key = format!("output.{name}.{}", field.key);
-    let mut row = blank_output_row(shell, key.clone(), field.label);
+    let mut row = blank_row(key.clone(), field.label, shell.includes.docs.len() as i32);
     row.hint = output_field_hint(field.key).into();
     let default_text = match &field.default {
         Some(outputs::DefaultValue::Bool(value)) => value.to_string(),
@@ -3099,9 +3468,18 @@ fn output_row(
                 .to_string()
                 .into();
         }
-        outputs::FieldKind::Text | outputs::FieldKind::Workspaces => {
+        outputs::FieldKind::Text => {
             row.value = doc
                 .get_string(&path)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(default_text)
+                .into();
+        }
+        outputs::FieldKind::Workspaces => {
+            // The config accepts a count, a name list, or "dynamic" —
+            // a plain string read misses the arrays people actually
+            // have, so read all three shapes.
+            row.value = workspaces_text(doc, &path)
                 .filter(|value| !value.is_empty())
                 .unwrap_or(default_text)
                 .into();
@@ -3180,10 +3558,56 @@ fn format_output_value(shell: &Shell, key: &str, raw: &str) -> Result<String, St
             }
             Ok(format!("[{}, {}]", xy[0], xy[1]))
         }
-        outputs::FieldKind::Choice(_)
-        | outputs::FieldKind::Text
-        | outputs::FieldKind::Workspaces => commit_value(Some(&schema::Kind::Text), raw),
+        outputs::FieldKind::Choice(_) | outputs::FieldKind::Text => {
+            commit_value(Some(&schema::Kind::Text), raw)
+        }
+        // A count stays a number, "dynamic" stays literal, names become
+        // a TOML array — set_leaf_text parses the text as TOML, so the
+        // array form keeps umbriel's list shape.
+        outputs::FieldKind::Workspaces => match workspaces_parse(raw)? {
+            Some(text) => Ok(text),
+            None => {
+                Err("workspaces: use comma-separated names, a count, or \"dynamic\"".to_owned())
+            }
+        },
     }
+}
+
+/// Editor text for an output's workspaces: a bare count, comma-joined
+/// names, or the literal string.
+fn workspaces_text(doc: &ConfigDocument, path: &[&str]) -> Option<String> {
+    if let Some(count) = doc.get_integer(path) {
+        return Some(count.to_string());
+    }
+    if let Some(names) = doc.get_strings(path) {
+        return Some(names.join(", "));
+    }
+    doc.get_string(path)
+}
+
+/// Parse editor input into the TOML text `set_leaf_text` writes; `None`
+/// when nothing sensible remains (empty input).
+fn workspaces_parse(raw: &str) -> Result<Option<String>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("workspaces can't be empty — use names, a count, or \"dynamic\"".to_owned());
+    }
+    if let Ok(count) = trimmed.parse::<i64>() {
+        return Ok(Some(count.to_string()));
+    }
+    if trimmed == "dynamic" {
+        return Ok(Some("\"dynamic\"".to_owned()));
+    }
+    let names: Vec<&str> = trimmed
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect();
+    if names.is_empty() {
+        return Err("workspaces can't be empty — use names, a count, or \"dynamic\"".to_owned());
+    }
+    let listed: Vec<String> = names.iter().map(|name| format!("\"{name}\"")).collect();
+    Ok(Some(format!("[{}]", listed.join(", "))))
 }
 
 /// The four startup states (plan-onboarding.md): only the plain install
@@ -3218,6 +3642,86 @@ mod tests {
         assert_eq!(setup_mode(true, false), SetupMode::FreshWithUmbriel);
         assert_eq!(setup_mode(false, true), SetupMode::MissingUmbriel);
         assert_eq!(setup_mode(false, false), SetupMode::PlainInstall);
+    }
+
+    #[test]
+    fn workspaces_text_reads_count_list_and_literal() {
+        let doc = ConfigDocument::from_str(
+            "[output.\"DP-3\"]\nworkspaces = [\"Games\", \"Steam\"]\n\n[output.\"eDP-1\"]\nworkspaces = 4\n\n[output.\"HDMI-1\"]\nworkspaces = \"dynamic\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            workspaces_text(&doc, &["output", "DP-3", "workspaces"]).unwrap(),
+            "Games, Steam"
+        );
+        assert_eq!(
+            workspaces_text(&doc, &["output", "eDP-1", "workspaces"]).unwrap(),
+            "4"
+        );
+        assert_eq!(
+            workspaces_text(&doc, &["output", "HDMI-1", "workspaces"]).unwrap(),
+            "dynamic"
+        );
+        assert_eq!(
+            workspaces_text(&doc, &["output", "none", "workspaces"]),
+            None
+        );
+    }
+
+    #[test]
+    fn workspaces_parse_emits_toml_set_leaf_text_accepts() {
+        // Names become a TOML array the document can parse back.
+        let formatted = workspaces_parse("Games, Steam , Util").unwrap().unwrap();
+        assert_eq!(formatted, "[\"Games\", \"Steam\", \"Util\"]");
+        let mut doc = ConfigDocument::from_str("[output.\"DP-3\"]\n").unwrap();
+        assert!(doc.set_leaf_text("output.DP-3.workspaces", &formatted));
+        assert_eq!(
+            workspaces_text(&doc, &["output", "DP-3", "workspaces"]).unwrap(),
+            "Games, Steam, Util"
+        );
+        // A count stays a number, the literal stays a string.
+        assert_eq!(workspaces_parse("4").unwrap().unwrap(), "4");
+        assert_eq!(workspaces_parse("dynamic").unwrap().unwrap(), "\"dynamic\"");
+        // Empty and comma-only input are rejected, not written.
+        assert!(workspaces_parse("").is_err());
+        assert!(workspaces_parse(" , ").is_err());
+    }
+
+    #[test]
+    fn rule_cards_collect_every_chain_document() {
+        let dir = std::env::temp_dir().join(format!("umbriel-rules-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let main_path = dir.join("config.toml");
+        let inc_path = dir.join("windowrules.toml");
+        std::fs::write(
+            &inc_path,
+            "[[window_rule]]\nmatch.app_id = \"steam\"\n\n[[window_rule]]\nmatch.app_id = \"discord\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &main_path,
+            "[include]\nfiles = [\"windowrules.toml\"]\n\n[[window_rule]]\ndefault_floating = true\n",
+        )
+        .unwrap();
+        let env = discovery::Env::from_process();
+        let shell = Shell::load(&main_path, &env);
+        let cards = rule_cards(&shell, "window_rule");
+        // Include rules first, then the main config's own rule.
+        assert_eq!(cards.len(), 3);
+        assert_eq!(cards[0].title, "app_id = steam");
+        assert_eq!(cards[0].file, 0);
+        assert_eq!(cards[2].file, 1);
+        assert!(cards[2].file_label.contains("config.toml"));
+        // Editing a card's row writes through the doc-qualified key.
+        let key = rules::rule_key("window_rule", 0, 0, "default_floating");
+        assert_eq!(key, "window_rule[0:0].default_floating");
+        assert_eq!(
+            rules::parse_rule_key(&key),
+            Some(("window_rule", Some(0), 0, "default_floating"))
+        );
+        // New rules join the file holding the most rules of the family.
+        assert_eq!(rule_add_target(&shell, "window_rule"), 0);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

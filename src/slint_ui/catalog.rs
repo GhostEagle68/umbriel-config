@@ -45,6 +45,27 @@ pub const PAGES: &[Page] = &[
         cards: &[],
     },
     Page {
+        id: "window-rules",
+        title: "Window rules",
+        description: "How matching windows open and behave: floating, fullscreen, blur, opacity.",
+        group: "desktop",
+        cards: &[],
+    },
+    Page {
+        id: "layer-rules",
+        title: "Layer rules",
+        description: "The same matching for shell surfaces: bars, launchers, overlays, keyed by namespace.",
+        group: "desktop",
+        cards: &[],
+    },
+    Page {
+        id: "security-contexts",
+        title: "Security contexts",
+        description: "Which Wayland globals sandboxed apps may use, matched by sandbox engine and app id.",
+        group: "desktop",
+        cards: &[],
+    },
+    Page {
         id: "workspaces",
         title: "Workspaces",
         description: "Workspace behavior and numbering.",
