@@ -37,7 +37,7 @@ jobs:
 
       - name: Package release artifacts
         run: |
-          mkdir -p stage/bin stage/share/applications stage/share/icons/hicolor/scalable/apps
+          mkdir -p stage/bin stage/share/licenses stage/share/applications stage/share/icons/hicolor/scalable/apps
           cp target/release/umbriel-config stage/bin/
           cp README.md LICENSE.md LICENSE-Slint.md stage/
           cp assets/fonts/LICENSE-Inter.txt stage/share/licenses/
