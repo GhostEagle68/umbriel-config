@@ -17,7 +17,7 @@ use umbriel_config::config::{
     backups, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema,
     settings as app_settings, state, validate,
 };
-use umbriel_config::{live, update};
+use umbriel_config::{changelog, live, update};
 
 mod catalog;
 
@@ -339,6 +339,22 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         let mut destinations = vec![labels[main].clone()];
         destinations.extend(labels[..main].iter().cloned());
         app.set_destinations(Rc::new(VecModel::from(destinations)).into());
+    }
+
+    // What's new: the bundled changelog section for the running version,
+    // once per version, and only where an update makes sense (a fresh
+    // install has nothing "new" yet). The mode check above already
+    // computed both inputs.
+    if matches!(mode, SetupMode::Normal | SetupMode::MissingUmbriel) {
+        let sections = changelog::parse(changelog::bundled());
+        if changelog::should_show(&env, env!("CARGO_PKG_VERSION"))
+            && let Some(section) = changelog::for_version(&sections, env!("CARGO_PKG_VERSION"))
+        {
+            app.set_whatsnew_title(format!("What's new in {}", env!("CARGO_PKG_VERSION")).into());
+            app.set_whatsnew_body(section.body.clone().into());
+            app.set_show_whatsnew(true);
+            changelog::mark_shown(&env, env!("CARGO_PKG_VERSION"));
+        }
     }
 
     app.window().set_size(WindowSize::Logical(LogicalSize::new(
@@ -959,6 +975,43 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                     app.invoke_backup_dir_chosen(path.to_string_lossy().to_string().into());
                 });
             });
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_view_changelog(move || {
+            let Some(app) = weak.upgrade() else { return };
+            app.set_whatsnew_title("Changelog".into());
+            app.set_whatsnew_body(
+                changelog::full_text(&changelog::parse(changelog::bundled())).into(),
+            );
+            app.set_show_whatsnew(true);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_view_update_notes(move || {
+            let Some(app) = weak.upgrade() else { return };
+            // The fetched notes are the new release's body; fall back to
+            // the bundled section when the check hasn't run.
+            let notes = app.get_update_notes().to_string();
+            if notes.is_empty() {
+                let sections = changelog::parse(changelog::bundled());
+                let section = changelog::for_version(&sections, env!("CARGO_PKG_VERSION"));
+                app.set_whatsnew_title(
+                    format!("What's new in {}", env!("CARGO_PKG_VERSION")).into(),
+                );
+                app.set_whatsnew_body(
+                    section
+                        .map(|section| section.body.clone())
+                        .unwrap_or_default()
+                        .into(),
+                );
+            } else {
+                app.set_whatsnew_title("What's new in this release".into());
+                app.set_whatsnew_body(notes.into());
+            }
+            app.set_show_whatsnew(true);
         });
     }
     {
@@ -2034,11 +2087,12 @@ fn start_update_check(weak: slint::Weak<AppWindow>, env: Option<discovery::Env>)
             let Some(app) = weak.upgrade() else { return };
             match result {
                 Ok(update::Verdict::UpToDate) => app.set_update_note("Up to date.".into()),
-                Ok(update::Verdict::UpdateAvailable(version)) => {
+                Ok(update::Verdict::UpdateAvailable { version, notes }) => {
                     app.set_update_available(true);
-                    app.set_update_note(
-                        format!("Version {version} available — see the releases page.").into(),
-                    );
+                    app.set_update_note(format!("Version {version} available.").into());
+                    if let Some(notes) = notes {
+                        app.set_update_notes(notes.into());
+                    }
                 }
                 Err(err) => app.set_update_note(format!("Couldn't check: {err}").into()),
             }

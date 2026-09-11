@@ -557,6 +557,7 @@ component SettingsPage inherits Rectangle {
     in property <bool> check-updates-on-start;
     in property <string> update-note;
     in property <bool> update-available;
+    in property <string> update-notes;
     in property <string> upstream-note;
     in property <bool> umbriel-missing;
     in property <bool> dark-mode: true;
@@ -570,6 +571,8 @@ component SettingsPage inherits Rectangle {
     callback open-url(string);
     callback relaunch();
     callback sync-schema();
+    callback view-changelog();
+    callback view-update-notes();
 
     VerticalLayout {
         padding: Theme.space-l;
@@ -750,6 +753,11 @@ component SettingsPage inherits Rectangle {
                     clicked => { root.check-now(); }
                 }
 
+                ActionButton {
+                    text: "View changelog";
+                    clicked => { root.view-changelog(); }
+                }
+
                 Text {
                     horizontal-stretch: 1;
                     text: root.update-note == ""
@@ -758,6 +766,19 @@ component SettingsPage inherits Rectangle {
                     color: root.update-available ? Theme.success : Theme.text-2;
                     vertical-alignment: center;
                     wrap: TextWrap.word-wrap;
+                }
+            }
+
+            if root.update-available && root.update-notes != "": HorizontalLayout {
+                spacing: Theme.space-m;
+
+                ActionButton {
+                    text: "What's new in this release";
+                    clicked => { root.view-update-notes(); }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
                 }
             }
         }
@@ -1798,6 +1819,12 @@ export component AppWindow inherits Window {
     callback toggle-card(string);
     callback toggle-monitor(string);
     callback toggle-rule(int, int);
+    // What's new / changelog overlay.
+    in-out property <bool> show-whatsnew;
+    in property <string> whatsnew-title;
+    in property <string> whatsnew-body;
+    callback view-changelog();
+    callback view-update-notes();
 
     // Keybinds page
     in property <[KeybindRow]> keybind-rows;
@@ -1859,6 +1886,7 @@ export component AppWindow inherits Window {
     }
     in property <string> update-note;
     in property <bool> update-available: false;
+    in property <string> update-notes;
     in property <string> upstream-note;
     callback settings-requested();
     callback check-updates-requested();
@@ -2179,6 +2207,9 @@ export component AppWindow inherits Window {
                         sync-clean: root.sync-clean;
                         update-note: root.update-note;
                         update-available: root.update-available;
+                        update-notes: root.update-notes;
+                        view-changelog => { root.view-changelog(); }
+                        view-update-notes => { root.view-update-notes(); }
                         upstream-note: root.upstream-note;
                         check-now => { root.check-updates-requested(); }
                         toggled(v) => { root.check-updates-toggled(v); }
@@ -2579,6 +2610,70 @@ export component AppWindow inherits Window {
                         text: "Quit anyway";
                         primary: true;
                         clicked => { root.exit-requested(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── what's new / changelog overlay ────────────────────
+    if root.show-whatsnew: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+
+        TouchArea {
+            clicked => { root.show-whatsnew = false; }
+        }
+
+        Rectangle {
+            width: min(parent.width - 96px, 560px);
+            height: min(parent.height - 96px, 520px);
+            background: Theme.bg-1;
+            border-radius: Theme.radius-l;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-m;
+
+                HorizontalLayout {
+                    spacing: Theme.space-m;
+
+                    Text {
+                        text: root.whatsnew-title;
+                        color: Theme.text-1;
+                        font-size: Theme.font-large;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+
+                    ActionButton {
+                        text: "Close";
+                        clicked => { root.show-whatsnew = false; }
+                    }
+                }
+
+                Rectangle {
+                    background: Theme.bg-0;
+                    border-radius: Theme.radius-m;
+
+                    sv := ScrollView {
+                        width: 100%;
+                        height: 100%;
+                        viewport-height: changelog-text.preferred-height + 2 * Theme.space-m;
+
+                        changelog-text := Text {
+                            x: Theme.space-m;
+                            width: sv.visible-width - 2 * Theme.space-m;
+                            y: Theme.space-m;
+                            text: root.whatsnew-body;
+                            color: Theme.text-1;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                        }
                     }
                 }
             }
