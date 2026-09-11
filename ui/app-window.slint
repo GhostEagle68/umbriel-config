@@ -697,31 +697,45 @@ component SettingsPage inherits Rectangle {
 
         // ── appearance ──────────────────────────────────────
         VerticalLayout {
-            spacing: Theme.space-s;
-            alignment: start;
+            spacing: Theme.space-xs;
 
             Text {
                 text: "Appearance";
-                color: Theme.text-1;
-                font-size: Theme.font-large;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
                 font-weight: 700;
             }
 
-            HorizontalLayout {
-                spacing: Theme.space-m;
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
 
-                Text {
-                    text: "Theme";
-                    color: Theme.text-2;
-                    vertical-alignment: center;
-                }
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
 
-                ComboBox {
-                    width: 140px;
-                    model: ["Dark", "Light"];
-                    current-index: root.dark-mode ? 0 : 1;
-                    selected => {
-                        root.theme-selected(self.current-index == 0);
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Theme";
+                            width: 260px;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            width: 140px;
+                            model: ["Dark", "Light"];
+                            current-index: root.dark-mode ? 0 : 1;
+                            selected => {
+                                root.theme-selected(self.current-index == 0);
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
                     }
                 }
             }
@@ -729,153 +743,329 @@ component SettingsPage inherits Rectangle {
 
         // ── updates ─────────────────────────────────────────
         VerticalLayout {
-            spacing: Theme.space-s;
-            alignment: start;
+            spacing: Theme.space-xs;
 
             Text {
                 text: "Updates";
-                color: Theme.text-1;
-                font-size: Theme.font-large;
-                font-weight: 700;
-            }
-
-            CheckBox {
-                text: "Check for updates on startup";
-                checked: root.check-updates-on-start;
-                toggled => { root.toggled(self.checked); }
-            }
-
-            HorizontalLayout {
-                spacing: Theme.space-m;
-
-                ActionButton {
-                    text: "Check for update";
-                    clicked => { root.check-now(); }
-                }
-
-                ActionButton {
-                    text: "View changelog";
-                    clicked => { root.view-changelog(); }
-                }
-
-                Text {
-                    horizontal-stretch: 1;
-                    text: root.update-note == ""
-                        ? "Checks against GitHub releases"
-                        : root.update-note;
-                    color: root.update-available ? Theme.success : Theme.text-2;
-                    vertical-alignment: center;
-                    wrap: TextWrap.word-wrap;
-                }
-            }
-
-            if root.update-available && root.update-notes != "": HorizontalLayout {
-                spacing: Theme.space-m;
-
-                ActionButton {
-                    text: "What's new in this release";
-                    clicked => { root.view-update-notes(); }
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-            }
-        }
-
-        // ── Umbriel (the compositor) ────────────────────────
-        VerticalLayout {
-            spacing: Theme.space-s;
-            alignment: start;
-
-            Text {
-                text: "Umbriel Latest Commit";
-                color: Theme.text-1;
-                font-size: Theme.font-large;
-                font-weight: 700;
-            }
-
-            Text {
-                text: root.upstream-note == ""
-                    ? "The compositor's latest commit loads while you're here."
-                    : root.upstream-note;
                 color: Theme.text-2;
                 font-size: Theme.font-small;
-                wrap: TextWrap.word-wrap;
+                font-weight: 700;
             }
 
-            ActionButton {
-                text: "Open repository";
-                clicked => { root.open-url("https://github.com/noctalia-dev/umbriel"); }
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Automatic checks";
+                            width: 260px;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        CheckBox {
+                            text: "Check for updates on startup";
+                            checked: root.check-updates-on-start;
+                            toggled => { root.toggled(self.checked); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Latest version";
+                            width: 260px;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "Check for update";
+                            clicked => { root.check-now(); }
+                        }
+
+                        ActionButton {
+                            text: "View changelog";
+                            clicked => { root.view-changelog(); }
+                        }
+
+                        Text {
+                            horizontal-stretch: 1;
+                            text: root.update-note == ""
+                                ? "Checks against GitHub releases"
+                                : root.update-note;
+                            color: root.update-available ? Theme.success : Theme.text-2;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            wrap: TextWrap.word-wrap;
+                        }
+                    }
+
+                    if root.update-available && root.update-notes != "": HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "New release";
+                            width: 260px;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "What's new in this release";
+                            clicked => { root.view-update-notes(); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
             }
         }
 
-        // ── Umbriel detection ───────────────────────────────
+        // ── umbriel (the compositor) ────────────────────────
         VerticalLayout {
-            spacing: Theme.space-s;
-            alignment: start;
+            spacing: Theme.space-xs;
 
             Text {
                 text: "Umbriel";
-                color: Theme.text-1;
-                font-size: Theme.font-large;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
                 font-weight: 700;
             }
 
-            Text {
-                text: root.umbriel-missing ? "Not detected on this system." : "Detected.";
-                color: root.umbriel-missing ? Theme.warning : Theme.success;
-                font-size: Theme.font-small;
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Compositor";
+                            width: 260px;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.umbriel-missing
+                                ? "Not detected on this system."
+                                : "Umbriel is detected.";
+                            color: root.umbriel-missing ? Theme.warning : Theme.success;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Latest commit";
+                            width: 260px;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.upstream-note == ""
+                                ? "The compositor's latest commit loads while you're here."
+                                : root.upstream-note;
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Repository";
+                            width: 260px;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "Open repository";
+                            clicked => { root.open-url("https://github.com/noctalia-dev/umbriel"); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
             }
         }
 
         // ── guided setup ────────────────────────────────────
         VerticalLayout {
-            spacing: Theme.space-s;
-            alignment: start;
+            spacing: Theme.space-xs;
 
             Text {
                 text: "Guided setup";
-                color: Theme.text-1;
-                font-size: Theme.font-large;
-                font-weight: 700;
-            }
-
-            Text {
-                text: "Walk through the settings people change most — outputs, layout, input, general, appearance. Values you already set are left alone.";
                 color: Theme.text-2;
                 font-size: Theme.font-small;
-                wrap: TextWrap.word-wrap;
-            }
-
-            ActionButton {
-                text: "Run guided setup";
-                clicked => { root.relaunch(); }
-            }
-
-            // ── about ───────────────────────────────────────
-            Text {
-                text: "About";
-                color: Theme.text-1;
-                font-size: Theme.font-large;
                 font-weight: 700;
             }
 
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Walkthrough";
+                            width: 260px;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "Walk through the settings people change most: outputs, layout, input, general, appearance. Values you already set are left alone.";
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Start";
+                            width: 260px;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "Run guided setup";
+                            clicked => { root.relaunch(); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── about ───────────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
             Text {
-                text: "umbriel-config v" + root.app-version;
-                color: Theme.text-1;
+                text: "About";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
             }
 
-            ActionButton {
-                text: "Source & issue tracker";
-                clicked => { root.open-url("https://github.com/GhostEagle68/umbriel-config"); }
-            }
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
 
-            // The widget asks for 100% of its parent — pin it to badge
-            // size or it swallows the whole page.
-            AboutSlint {
-                width: 200px;
-                height: 100px;
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Version";
+                            width: 260px;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "umbriel-config v" + root.app-version;
+                            color: Theme.text-1;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Links";
+                            width: 260px;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "Source & issue tracker";
+                            clicked => { root.open-url("https://github.com/GhostEagle68/umbriel-config"); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Toolkit";
+                            width: 260px;
+                            vertical-alignment: center;
+                        }
+
+                        // The widget asks for 100% of its parent — pin
+                        // it to badge size or it swallows the page.
+                        AboutSlint {
+                            width: 200px;
+                            height: 100px;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
             }
         }
     }
