@@ -1,8 +1,11 @@
 //! Post-save validation through the compositor's own checker.
 //!
-//! Wraps `umbriel validate -c <path>`: exit 0 means accepted (warnings
-//! allowed); `error: ` / `warning: ` lines on stderr become diagnostics
-//! (compositor: `src/main.cpp`, `validateConfig`).
+//! Wraps `umbriel validate -c <path>`: `error: ` / `warning: ` lines on
+//! stderr become diagnostics (compositor: `src/main.cpp`,
+//! `validateConfig`). umbriel exits nonzero whenever it reports any
+//! diagnostic, warnings included (docs/user/configuration.md), but a
+//! warning-only config still applies — the compositor falls back per
+//! setting — so warnings are shown yet never block a save.
 
 use std::path::Path;
 use std::process::Command;
@@ -39,8 +42,9 @@ pub struct Report {
 }
 
 impl Report {
-    /// Accepted by umbriel: no errors (warnings allowed), mirroring its
-    /// warnings-only exit-success behavior.
+    /// Accepted by umbriel: no errors. Warnings don't block — the
+    /// compositor applies warning-only configs (per-setting fallback),
+    /// even though `umbriel validate` exits nonzero for them.
     pub fn is_ok(&self) -> bool {
         !self.diagnostics.iter().any(Diagnostic::is_error)
     }
@@ -61,8 +65,9 @@ pub fn validate(path: &Path) -> Result<Report, ValidateError> {
 }
 
 // Turn `error: ` / `warning: ` stderr lines into diagnostics; other lines
-// are noise and dropped. A failing run that reported no errors is treated
-// as an error so crashes cannot read as "config ok".
+// are noise and dropped. umbriel exits nonzero for any diagnostic, so a
+// failed run that parsed to nothing is treated as an error — a crash must
+// not read as "config ok".
 fn parse(stderr: &str, exited_cleanly: bool) -> Report {
     let mut diagnostics: Vec<_> = stderr
         .lines()
@@ -75,7 +80,7 @@ fn parse(stderr: &str, exited_cleanly: bool) -> Report {
             }
         })
         .collect();
-    if !exited_cleanly && !diagnostics.iter().any(Diagnostic::is_error) {
+    if !exited_cleanly && diagnostics.is_empty() {
         diagnostics.push(Diagnostic::Error(
             "umbriel validate exited unsuccessfully without reporting diagnostics".to_owned(),
         ));
@@ -117,6 +122,23 @@ mod tests {
         let report = parse("warning: something mild\n", true);
         assert!(report.is_ok());
         assert_eq!(report.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn warnings_survive_validate_failing_exit() {
+        // umbriel exits nonzero for any diagnostic, warnings included;
+        // the warning is kept and no invented error joins it.
+        let report = parse(
+            "warning: config.toml:4:10: cannot read shader file\n",
+            false,
+        );
+        assert!(report.is_ok());
+        assert_eq!(
+            report.diagnostics,
+            vec![Diagnostic::Warning(
+                "config.toml:4:10: cannot read shader file".into()
+            )]
+        );
     }
 
     #[test]

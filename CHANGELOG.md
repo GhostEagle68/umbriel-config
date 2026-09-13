@@ -11,6 +11,14 @@
   flagged before they save, and a shaders.toml your include chain
   ignores is called out with a one-click fix.
 
+### Fixed
+
+- Save-time validation no longer appends "umbriel validate exited
+  unsuccessfully without reporting diagnostics" to ordinary warnings.
+  umbriel exits nonzero for any diagnostic, warnings included, and
+  warning-only configs still apply — warnings now show in the banner
+  by themselves and never block a save.
+
 ## [0.2.0-beta.1] — 2026-09-11
 
 First release on the Slint interface. The old EGUI interface is gone, and a lot

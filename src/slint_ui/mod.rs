@@ -692,7 +692,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             app.set_dirty(false);
             app.set_changed_count(0);
             match report {
-                Ok(report) if report.is_ok() => {
+                Ok(report) if report.diagnostics.is_empty() => {
                     app.set_validate_note(String::new().into());
                     app.set_status(
                         format!("Saved {saved_files} file(s); umbriel has validated the config.")
@@ -706,14 +706,22 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                         .map(|d| d.message().to_owned())
                         .collect();
                     app.set_validate_note(messages.join("; ").into());
+                    // Warnings apply with per-setting fallbacks; only
+                    // errors mean umbriel kept something out.
+                    let verdict = if report.is_ok() {
+                        "umbriel noted warnings"
+                    } else {
+                        "umbriel has complaints"
+                    };
                     app.set_status(
-                        format!("Saved {saved_files} file(s), but umbriel has complaints — see the banner.")
-                            .into(),
+                        format!("Saved {saved_files} file(s); {verdict} — see the banner.").into(),
                     );
                 }
                 Err(err) => {
                     app.set_validate_note(format!("umbriel could not be run: {err}").into());
-                    app.set_status(format!("Saved {saved_files} file(s) without validation.").into());
+                    app.set_status(
+                        format!("Saved {saved_files} file(s) without validation.").into(),
+                    );
                 }
             }
             let section = app.get_current_section().to_string();
@@ -920,7 +928,9 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 refresh_backup_runs(&app, &shell, &env, &backup_runs);
             }
             match validate::validate(&shell.borrow().path) {
-                Ok(report) if report.is_ok() => app.set_validate_note(String::new().into()),
+                Ok(report) if report.diagnostics.is_empty() => {
+                    app.set_validate_note(String::new().into())
+                }
                 Ok(report) => app.set_validate_note(
                     format!(
                         "umbriel: {}.",
@@ -1669,7 +1679,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             app.set_dirty(false);
             app.set_changed_count(0);
             match report {
-                Ok(report) if report.is_ok() => {
+                Ok(report) if report.diagnostics.is_empty() => {
                     app.set_validate_note(String::new().into());
                     app.set_status("Config saved, Umbriel picks it up automatically.".into());
                 }
@@ -1680,9 +1690,13 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                         .map(|d| d.message().to_owned())
                         .collect();
                     app.set_validate_note(messages.join("; ").into());
+                    let verdict = if report.is_ok() {
+                        "umbriel noted warnings"
+                    } else {
+                        "umbriel reported problems"
+                    };
                     app.set_status(
-                        format!("Config saved ({saved_files} file(s)); umbriel reported problems.")
-                            .into(),
+                        format!("Config saved ({saved_files} file(s)); {verdict}.").into(),
                     );
                 }
                 Err(err) => {
