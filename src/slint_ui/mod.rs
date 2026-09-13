@@ -61,6 +61,10 @@ struct Shell {
     shaders_installed: bool,
     // The upstream commit check ran this session (once per launch).
     shaders_update_checked: bool,
+    // The shader being edited in the overlay editor; None = creating new.
+    shader_editing: Option<PathBuf>,
+    // The effect builder's step stack (new-shader mode only).
+    builder_steps: Vec<shaders::builder::BuilderStep>,
 }
 
 /// One guided-setup walk: the curated cards, in visit order. Each step is
@@ -241,6 +245,8 @@ impl Shell {
             shader_note: String::new(),
             shaders_installed: false,
             shaders_update_checked: false,
+            shader_editing: None,
+            builder_steps: Vec::new(),
         };
         shell.reset_saved();
         shell
@@ -350,6 +356,15 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         let mut destinations = vec![labels[main].clone()];
         destinations.extend(labels[..main].iter().cloned());
         app.set_destinations(Rc::new(VecModel::from(destinations)).into());
+    }
+    {
+        // Shader builder: the palette of step kinds the "+ Add step"
+        // dropdown offers.
+        let kinds: Vec<SharedString> = shaders::builder::STEP_DEFS
+            .iter()
+            .map(|def| SharedString::from(def.label))
+            .collect();
+        app.set_shader_step_kinds(Rc::new(VecModel::from(kinds)).into());
     }
 
     // What's new: the bundled changelog section for the running version,
@@ -1200,6 +1215,208 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             app.set_status("Added shaders.toml to [include] — save to apply.".into());
             app.set_dirty(shell.any_modified());
             rebuild_shaders(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_editor_new(move || {
+            let Some(app) = weak.upgrade() else { return };
+            {
+                let mut shell = shell.borrow_mut();
+                shell.shader_editing = None;
+                shell.builder_steps = shaders::builder::default_steps();
+            }
+            app.set_shader_editor_editing(false);
+            app.set_shader_editor_name(String::new().into());
+            regen_builder(&app, &shell);
+            app.set_shader_editor_note(String::new().into());
+            app.set_shader_editor_open(true);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        // Editing loads one of the user's own shaders in place; forking
+        // loads any shader's code into a fresh, unsaved editor.
+        app.on_shader_editor_edit(move |path| {
+            let Some(app) = weak.upgrade() else { return };
+            let own = shell.borrow().shaders.iter().any(|entry| {
+                entry.source == shaders::Source::ConfigDir
+                    && entry.path.to_string_lossy() == path.as_str()
+            });
+            if !own {
+                return;
+            }
+            let stem = Path::new(path.as_str())
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            open_shader_editor(&app, &shell, &path, true, stem);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_editor_fork(move |path, name| {
+            let Some(app) = weak.upgrade() else { return };
+            open_shader_editor(&app, &shell, &path, false, format!("{name}-fork"));
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_editor_save(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let text = app.get_shader_editor_text().to_string();
+            let result = {
+                let shell = shell.borrow_mut();
+                match shell.shader_editing.clone() {
+                    Some(path) => shaders::write_user_shader(&path, &text).map(|_| path),
+                    None => match shell.path.parent().map(Path::to_path_buf) {
+                        Some(dir) => shaders::save_user_shader(
+                            &dir,
+                            app.get_shader_editor_name().as_str(),
+                            &text,
+                        ),
+                        None => Err("could not determine the config directory.".to_owned()),
+                    },
+                }
+            };
+            match result {
+                Ok(path) => {
+                    {
+                        let mut shell = shell.borrow_mut();
+                        shell.shader_editing = Some(path.clone());
+                        scan_shaders(&mut shell);
+                    }
+                    let shell = shell.borrow();
+                    rebuild_shaders(&app, &shell);
+                    // Subsequent saves overwrite the same file.
+                    app.set_shader_editor_editing(true);
+                    app.set_shader_editor_note(String::new().into());
+                    app.set_status(
+                        format!("Saved {} — umbriel live-reloads it.", path.display()).into(),
+                    );
+                }
+                Err(err) => app.set_shader_editor_note(err.into()),
+            }
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_editor_delete(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let Some(path) = shell.borrow().shader_editing.clone() else {
+                return;
+            };
+            let result = shell
+                .borrow()
+                .path
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| "could not determine the config directory.".to_owned())
+                .and_then(|dir| shaders::delete_user_shader(&dir, &path));
+            match result {
+                Ok(()) => {
+                    app.set_shader_editor_open(false);
+                    scan_shaders(&mut shell.borrow_mut());
+                    let shell = shell.borrow();
+                    rebuild_shaders(&app, &shell);
+                    app.set_status(format!("Deleted {}.", path.display()).into());
+                }
+                Err(err) => app.set_shader_editor_note(err.into()),
+            }
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_shader_editor_text_changed(move |text| {
+            let Some(app) = weak.upgrade() else { return };
+            let problems = shaders::lint_source(&text);
+            let note = if problems.is_empty() {
+                String::new()
+            } else {
+                format!("⚠ {}", problems.join("; "))
+            };
+            app.set_shader_editor_note(note.into());
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_shader_editor_close(move || {
+            if let Some(app) = weak.upgrade() {
+                app.set_shader_editor_open(false);
+            }
+        });
+    }
+    {
+        // The builder stack: every mutation regenerates the code.
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_step_add(move |label| {
+            let Some(app) = weak.upgrade() else { return };
+            let Some(def) = shaders::builder::STEP_DEFS
+                .iter()
+                .find(|def| def.label == label.as_str())
+            else {
+                return;
+            };
+            shell.borrow_mut().builder_steps.push(def.default_step());
+            regen_builder(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_step_remove(move |index| {
+            let Some(app) = weak.upgrade() else { return };
+            {
+                let mut shell = shell.borrow_mut();
+                if (index as usize) < shell.builder_steps.len() {
+                    shell.builder_steps.remove(index as usize);
+                }
+            }
+            regen_builder(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_step_move(move |index, delta| {
+            let Some(app) = weak.upgrade() else { return };
+            {
+                let mut shell = shell.borrow_mut();
+                let from = index as usize;
+                let to = from.saturating_add_signed(delta as isize);
+                if to < shell.builder_steps.len() {
+                    shell.builder_steps.swap(from, to);
+                }
+            }
+            regen_builder(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_step_param(move |index, param, value| {
+            let Some(app) = weak.upgrade() else { return };
+            {
+                let mut shell = shell.borrow_mut();
+                let Some(step) = shell.builder_steps.get_mut(index as usize) else {
+                    return;
+                };
+                let Some(def) = shaders::builder::step_def(step.kind) else {
+                    return;
+                };
+                let Some(slot) = def.params.get(param as usize) else {
+                    return;
+                };
+                let clamped = (value as f64).clamp(slot.min, slot.max);
+                step.params[param as usize] = clamped;
+            }
+            regen_builder(&app, &shell);
         });
     }
     {
@@ -3739,6 +3956,81 @@ fn download_community_shaders(target: &Path) -> Result<String, String> {
     })
 }
 
+/// Push the builder stack into the step panel and regenerate the code
+/// pane. Only called in new-shader mode; hand edits to the code are
+/// overwritten by the next stack change — the builder is a starting
+/// point, the code view is for finishing touches.
+fn regen_builder(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    let (steps, code) = {
+        let shell = shell.borrow();
+        let steps = shell.builder_steps.clone();
+        let code = shaders::builder::generate_stack(&steps);
+        (steps, code)
+    };
+    let rows: Vec<ShaderStep> = steps
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| {
+            let def = shaders::builder::step_def(step.kind)?;
+            // Fixed-shape struct: up to three parameter slots, padded.
+            let mut labels: [SharedString; 3] = std::array::from_fn(|_| SharedString::new());
+            let mut values = [0.0f32; 3];
+            let mut mins = [0.0f32; 3];
+            let mut maxs = [0.0f32; 3];
+            for (slot, param) in def.params.iter().enumerate() {
+                labels[slot] = param.label.into();
+                values[slot] = step.params[slot] as f32;
+                mins[slot] = param.min as f32;
+                maxs[slot] = param.max as f32;
+            }
+            Some(ShaderStep {
+                index: index as i32,
+                label: def.label.into(),
+                p1_label: labels[0].clone(),
+                p1_value: values[0],
+                p1_min: mins[0],
+                p1_max: maxs[0],
+                p2_label: labels[1].clone(),
+                p2_value: values[1],
+                p2_min: mins[1],
+                p2_max: maxs[1],
+                p3_label: labels[2].clone(),
+                p3_value: values[2],
+                p3_min: mins[2],
+                p3_max: maxs[2],
+                p_count: def.params.len() as i32,
+            })
+        })
+        .collect();
+    app.set_shader_steps(Rc::new(VecModel::from(rows)).into());
+    app.set_shader_editor_text(code.into());
+}
+
+/// Open the overlay editor pre-loaded with a shader file's content.
+/// `editing` reuses that exact file on save; forking leaves the source
+/// untouched and saves under a new name.
+fn open_shader_editor(
+    app: &AppWindow,
+    shell: &Rc<RefCell<Shell>>,
+    path: &str,
+    editing: bool,
+    name: String,
+) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            app.set_status(format!("could not read {path}: {err}").into());
+            return;
+        }
+    };
+    shell.borrow_mut().shader_editing = editing.then(|| PathBuf::from(path));
+    app.set_shader_editor_editing(editing);
+    app.set_shader_editor_name(name.into());
+    app.set_shader_editor_text(text.into());
+    app.set_shader_editor_note(String::new().into());
+    app.set_shader_editor_open(true);
+}
+
 /// Rescan shader locations: the main config's directory (its
 /// `shaders/` folder holds user copies and the community clone) and
 /// umbriel's installed data directory (bundled effects).
@@ -3769,6 +4061,8 @@ fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
             source: entry.source.label().into(),
             description: entry.description.clone().into(),
             invalid: entry.invalid.clone().unwrap_or_default().into(),
+            path: entry.path.display().to_string().into(),
+            is_own: entry.source == shaders::Source::ConfigDir,
         })
         .collect();
     app.set_shaders(Rc::new(VecModel::from(infos)).into());

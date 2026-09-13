@@ -223,6 +223,360 @@ pub fn missing_include(main: &ConfigDocument, main_path: &Path) -> Option<String
     Some(FILE.to_owned())
 }
 
+// --- The editor ---------------------------------------------------------
+
+/// Where user-created shaders live.
+pub fn user_shaders_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join("shaders")
+}
+
+/// Validate a user-supplied shader file name: trimmed, non-empty, no
+/// path tricks, `.glsl` appended when missing. The result can only name
+/// a file directly inside the shaders directory — `community/` and
+/// subdirectories are unreachable by construction.
+pub fn sanitize_shader_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Shader name is empty.".to_owned());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.starts_with('.') {
+        return Err(format!("Invalid shader name: {trimmed:?}"));
+    }
+    let mut file_name = trimmed.to_owned();
+    if !file_name.ends_with(".glsl") {
+        file_name.push_str(".glsl");
+    }
+    Ok(file_name)
+}
+
+/// Static checks on shader source, shown live while typing. umbriel
+/// refuses a file outright only for the structural rules; the missing
+/// `animation()` signature is a warning — umbriel falls back to the
+/// built-in animation and the author may simply be mid-typing.
+pub fn lint_source(code: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    if code.contains('\0') {
+        problems.push("contains NUL bytes".to_owned());
+    }
+    if code.len() as u64 > MAX_SIZE {
+        problems.push("larger than 256 KiB".to_owned());
+    }
+    if code.bytes().all(|byte| byte.is_ascii_whitespace()) {
+        problems.push("shader is empty".to_owned());
+    }
+    if !problems.is_empty() {
+        return problems;
+    }
+    if !code.contains("vec4 animation(") {
+        problems
+            .push("missing \"vec4 animation(vec2 uv)\" — umbriel calls that function".to_owned());
+    }
+    problems
+}
+
+/// Write shader source atomically to an exact path, creating parent
+/// directories when needed. Structural lints block; signature warnings
+/// do not.
+pub fn write_user_shader(path: &Path, code: &str) -> Result<(), String> {
+    let blockers: Vec<String> = lint_source(code)
+        .into_iter()
+        .filter(|problem| !problem.starts_with("missing"))
+        .collect();
+    if !blockers.is_empty() {
+        return Err(blockers.join("; "));
+    }
+    let Some(dir) = path.parent() else {
+        return Err("shader path has no directory".to_owned());
+    };
+    std::fs::create_dir_all(dir)
+        .map_err(|err| format!("could not create {}: {err}", dir.display()))?;
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = dir.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, code).map_err(|err| format!("could not write: {err}"))?;
+    std::fs::rename(&tmp, path).map_err(|err| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("could not save {}: {err}", path.display())
+    })
+}
+
+/// Sanitize `name` and write the source to `shaders/<name>`.
+pub fn save_user_shader(config_dir: &Path, name: &str, code: &str) -> Result<PathBuf, String> {
+    let file_name = sanitize_shader_name(name)?;
+    let path = user_shaders_dir(config_dir).join(&file_name);
+    write_user_shader(&path, code)?;
+    Ok(path)
+}
+
+/// Delete a user shader by path. Only files inside the shaders
+/// directory qualify — the git-managed community clone is refused.
+pub fn delete_user_shader(config_dir: &Path, path: &Path) -> Result<(), String> {
+    let Ok(relative) = path.strip_prefix(user_shaders_dir(config_dir)) else {
+        return Err(format!("{} is not a user shader", path.display()));
+    };
+    if relative.starts_with("community") {
+        return Err(
+            "community shaders are git-managed — update or remove the clone instead".to_owned(),
+        );
+    }
+    std::fs::remove_file(path).map_err(|err| format!("could not delete {}: {err}", path.display()))
+}
+
+/// The visual effect builder: a stack of named steps the user composes
+/// and reorders, each with its own parameters. The generator emits them
+/// as one shader — motion steps (which move where the window's pixels
+/// are sampled) run first in list order, then color steps in list
+/// order. The output is ordinary shader code the user can keep editing
+/// by hand.
+pub mod builder {
+    /// One step's tunable parameter.
+    pub struct StepParam {
+        pub key: &'static str,
+        pub label: &'static str,
+        pub min: f64,
+        pub max: f64,
+        pub default: f64,
+    }
+
+    /// One step kind in the palette.
+    pub struct StepDef {
+        pub kind: &'static str,
+        pub label: &'static str,
+        /// Color steps retint the sampled pixels; motion steps move
+        /// where they are sampled from.
+        pub color: bool,
+        pub params: &'static [StepParam],
+    }
+
+    /// A step as configured by the user: values are indexed parallel to
+    /// the definition's params.
+    #[derive(Debug, Clone, Copy)]
+    pub struct BuilderStep {
+        pub kind: &'static str,
+        pub params: [f64; 3],
+    }
+
+    pub const STEP_DEFS: &[StepDef] = &[
+        StepDef {
+            kind: "fade",
+            label: "Fade",
+            color: true,
+            params: &[StepParam {
+                key: "to",
+                label: "To opacity",
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+            }],
+        },
+        StepDef {
+            kind: "glow",
+            label: "Glow pulse",
+            color: true,
+            params: &[StepParam {
+                key: "strength",
+                label: "Strength",
+                min: 0.0,
+                max: 1.0,
+                default: 0.3,
+            }],
+        },
+        StepDef {
+            kind: "scale",
+            label: "Scale",
+            color: false,
+            params: &[StepParam {
+                key: "from",
+                label: "From size",
+                min: 0.5,
+                max: 1.0,
+                default: 0.85,
+            }],
+        },
+        StepDef {
+            kind: "slide",
+            label: "Slide",
+            color: false,
+            params: &[StepParam {
+                key: "offset",
+                label: "Offset",
+                min: -0.5,
+                max: 0.5,
+                default: -0.3,
+            }],
+        },
+        StepDef {
+            kind: "shatter",
+            label: "Shatter",
+            color: false,
+            params: &[
+                StepParam {
+                    key: "grid",
+                    label: "Grid",
+                    min: 2.0,
+                    max: 12.0,
+                    default: 6.0,
+                },
+                StepParam {
+                    key: "gravity",
+                    label: "Gravity",
+                    min: 0.0,
+                    max: 0.4,
+                    default: 0.2,
+                },
+                StepParam {
+                    key: "scatter",
+                    label: "Scatter",
+                    min: 0.0,
+                    max: 0.3,
+                    default: 0.1,
+                },
+            ],
+        },
+        StepDef {
+            kind: "wobble",
+            label: "Wobble",
+            color: false,
+            params: &[StepParam {
+                key: "amp",
+                label: "Amplitude",
+                min: 0.0,
+                max: 0.06,
+                default: 0.02,
+            }],
+        },
+    ];
+
+    pub fn step_def(kind: &str) -> Option<&'static StepDef> {
+        STEP_DEFS.iter().find(|def| def.kind == kind)
+    }
+
+    impl StepDef {
+        /// A new step of this kind with every parameter at its default.
+        pub fn default_step(&self) -> BuilderStep {
+            let mut params = [0.0; 3];
+            for (slot, param) in self.params.iter().enumerate() {
+                params[slot] = param.default;
+            }
+            BuilderStep {
+                kind: self.kind,
+                params,
+            }
+        }
+    }
+
+    /// The stack new effects start with: grow in, fade in.
+    pub fn default_steps() -> Vec<BuilderStep> {
+        vec![
+            BuilderStep {
+                kind: "scale",
+                params: [0.85, 0.0, 0.0],
+            },
+            BuilderStep {
+                kind: "fade",
+                params: [0.0, 0.0, 0.0],
+            },
+        ]
+    }
+
+    fn step_value(def: &StepDef, step: &BuilderStep, key: &str) -> f64 {
+        def.params
+            .iter()
+            .enumerate()
+            .find(|(_, param)| param.key == key)
+            .map(|(index, param)| {
+                step.params
+                    .get(index)
+                    .copied()
+                    .unwrap_or(param.default)
+                    .clamp(param.min, param.max)
+            })
+            .unwrap_or(0.0)
+    }
+
+    /// Compose the stack into a full shader.
+    pub fn generate_stack(steps: &[BuilderStep]) -> String {
+        let mut motion = String::new();
+        let mut color = String::new();
+        for step in steps {
+            let Some(def) = step_def(step.kind) else {
+                continue;
+            };
+            let value = |key: &str| step_value(def, step, key);
+            let block = match step.kind {
+                "fade" => format!("    color *= mix(1.0, {:.2}, vis);\n", value("to")),
+                "glow" => format!(
+                    "\
+    float pulse = {:.2} * sin(3.14159265 * p);
+    color = vec4(mix(color.rgb, vec3(1.0, 0.4, 0.1) * color.a, pulse), color.a);
+",
+                    value("strength")
+                ),
+                "scale" => format!(
+                    "    uv = (uv - 0.5) / mix({:.2}, 1.0, vis) + 0.5;\n",
+                    value("from")
+                ),
+                "slide" => format!(
+                    "    uv -= vec2({:.2} * (1.0 - vis), 0.0);\n",
+                    value("offset")
+                ),
+                "shatter" => format!(
+                    "\
+    vec2 cell_id = floor(uv * {:.0}.0);
+    float seed = fract(sin(dot(cell_id, vec2(12.9898, 78.233)) + umbriel_random_seed.x) * 43758.5453);
+    float t = clamp((p - seed * 0.5) / 0.5, 0.0, 1.0);
+    uv -= vec2((seed - 0.5) * {:.2} * t, {:.2} * t * t);
+",
+                    value("grid"),
+                    value("scatter"),
+                    value("gravity")
+                ),
+                "wobble" => format!(
+                    "    uv.y += {:.3} * sin(uv.x * 12.566 + p * 9.0) * (1.0 - abs(2.0 * p - 1.0));\n",
+                    value("amp")
+                ),
+                _ => String::new(),
+            };
+            if def.color {
+                color.push_str(&block);
+            } else {
+                motion.push_str(&block);
+            }
+        }
+        format!(
+            "\
+// Composed with umbriel-config's effect builder.
+// p is the animation progress; vis runs 0 -> 1 in the window's own
+// direction (opening or closing).
+vec4 animation(vec2 uv) {{
+    float p = umbriel_clamped_progress;
+    float vis = umbriel_direction > 0.0 ? p : 1.0 - p;
+{motion}
+    vec4 color = umbriel_sample(uv);
+{color}
+    return color;
+}}
+"
+        )
+    }
+
+    /// The do-nothing shader: documents the contract right in the code.
+    pub const SCAFFOLD: &str = "\
+// umbriel calls animation() for every pixel of the animating window.
+// uv runs (0,0) top-left to (1,1) bottom-right. Useful inputs:
+//   umbriel_clamped_progress  0.0 -> 1.0 over the animation
+//   umbriel_direction         +1 opening, -1 closing
+//   umbriel_size              window size in pixels
+//   umbriel_random_seed       vec4, changes per transition
+//   umbriel_sample(uv)        the window's pixels at uv
+vec4 animation(vec2 uv) {
+    return umbriel_sample(uv);
+}
+";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,6 +675,123 @@ mod tests {
         std::fs::remove_file(dir.join("shaders.toml")).unwrap();
         assert_eq!(missing_include(&listed, &main_path), None);
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn sanitize_rejects_path_tricks_and_appends_extension() {
+        assert_eq!(
+            sanitize_shader_name(" my effect ").as_deref(),
+            Ok("my effect.glsl")
+        );
+        assert_eq!(
+            sanitize_shader_name("already.glsl").as_deref(),
+            Ok("already.glsl"),
+        );
+        assert!(sanitize_shader_name("  ").is_err());
+        assert!(sanitize_shader_name("../evil").is_err());
+        assert!(sanitize_shader_name("a/b").is_err());
+        assert!(sanitize_shader_name(".hidden").is_err());
+    }
+
+    #[test]
+    fn lint_flags_structure_and_missing_signature() {
+        let good = "vec4 animation(vec2 uv) { return umbriel_sample(uv); }\n";
+        assert!(lint_source(good).is_empty());
+        // The missing signature is a single warning, not a blocker.
+        assert_eq!(lint_source("float x = 1.0;\n").len(), 1);
+        assert_eq!(lint_source("   \n\t"), vec!["shader is empty"]);
+    }
+
+    #[test]
+    fn save_edit_and_delete_user_shaders() {
+        let base = std::env::temp_dir().join(format!("umbriel-shaderedit-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let config_dir = base.join("config");
+        let saved = save_user_shader(
+            &config_dir,
+            "my effect",
+            "vec4 animation(vec2 uv) { return umbriel_sample(uv); }\n",
+        )
+        .unwrap();
+        assert_eq!(saved, config_dir.join("shaders/my effect.glsl"));
+        // Overwriting leaves exactly one file and no atomic temp behind.
+        save_user_shader(
+            &config_dir,
+            "my effect",
+            "vec4 animation(vec2 uv) { return umbriel_sample(uv) * 0.5; }\n",
+        )
+        .unwrap();
+        let entries: Vec<String> = std::fs::read_dir(config_dir.join("shaders"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["my effect.glsl".to_owned()]);
+        // Structural blockers refuse the write.
+        assert!(save_user_shader(&config_dir, "broken", "   \n").is_err());
+        // Delete works for user files …
+        assert!(delete_user_shader(&config_dir, &saved).is_ok());
+        // … but never for the community clone or files outside shaders/.
+        let community = config_dir.join("shaders/community/x.glsl");
+        write(&community, GLSL);
+        assert!(delete_user_shader(&config_dir, &community).is_err());
+        assert!(delete_user_shader(&config_dir, &config_dir.join("config.toml")).is_err());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn builder_generates_working_code_for_every_kind() {
+        for def in builder::STEP_DEFS {
+            let shader = builder::generate_stack(&[def.default_step()]);
+            assert!(shader.contains("vec4 animation(vec2 uv)"));
+            assert!(
+                shader.contains("umbriel_sample(uv)"),
+                "{} samples",
+                def.label
+            );
+        }
+        // The parameter lands in the code and moves with the slider.
+        let small = builder::generate_stack(&[builder::BuilderStep {
+            kind: "scale",
+            params: [0.5, 0.0, 0.0],
+        }]);
+        let large = builder::generate_stack(&[builder::BuilderStep {
+            kind: "scale",
+            params: [1.0, 0.0, 0.0],
+        }]);
+        assert!(small.contains("mix(0.50, 1.0, vis)"));
+        assert!(large.contains("mix(1.00, 1.0, vis)"));
+        // Unknown kinds are skipped; out-of-range params clamp.
+        let skipped = builder::generate_stack(&[builder::BuilderStep {
+            kind: "nope",
+            params: [0.0; 3],
+        }]);
+        assert!(skipped.contains("umbriel_sample(uv)"));
+        let clamped = builder::generate_stack(&[builder::BuilderStep {
+            kind: "shatter",
+            params: [99.0, -5.0, 0.1],
+        }]);
+        assert!(clamped.contains("floor(uv * 12.0)"), "grid clamps to max");
+        assert!(clamped.contains("0.00 * t * t"), "gravity clamps to min");
+    }
+
+    #[test]
+    fn builder_motion_runs_before_color() {
+        let shader = builder::generate_stack(&[
+            builder::BuilderStep {
+                kind: "fade",
+                params: [0.5, 0.0, 0.0],
+            },
+            builder::BuilderStep {
+                kind: "slide",
+                params: [0.2, 0.0, 0.0],
+            },
+        ]);
+        let sample = shader.find("umbriel_sample(uv)").unwrap();
+        let slide = shader.find("uv -= vec2(").unwrap();
+        let fade = shader.find("color *= mix(").unwrap();
+        assert!(slide < sample, "motion precedes the sample");
+        assert!(sample < fade, "color follows the sample");
     }
 
     #[test]

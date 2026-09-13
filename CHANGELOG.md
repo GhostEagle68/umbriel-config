@@ -12,6 +12,14 @@
   your include chain ignores is called out with a one-click fix. The
   download button flips to Update, with an installed marker and an
   update-available hint, once the collection is on disk.
+- **Shader editor with a visual effect builder.** Create your own GLSL
+  effects without writing code with stack steps: Fade, Scale, Slide,
+  Shatter, Wobble, Glow pulse, each with its own sliders, reorder
+  them, and the shader composes itself, with the generated code in
+  view for hand-tweaking. Your own shaders open for editing, community
+  and bundled ones fork into editable copies, and saving live-reloads
+  in umbriel, which is the preview loop. A rendered preview scrubber is
+  planned next.
 
 ### Fixed
 

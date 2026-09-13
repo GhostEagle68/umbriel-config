@@ -13,6 +13,7 @@ import {
     LineEdit,
     ScrollView,
     Slider,
+    TextEdit,
 } from "std-widgets.slint";
 
 // Embedded fonts (compiler bakes these into the binary). Family names are
@@ -101,6 +102,31 @@ export struct ShaderInfo {
     description: string,
     // Why umbriel would reject the file; empty when usable.
     invalid: string,
+    // Absolute file location; is-own marks the user's own shaders
+    // (config directory, outside the community clone) — the only ones
+    // the editor opens for in-place editing and deletion.
+    path: string,
+    is-own: bool,
+}
+
+// One effect-builder step with its (up to three) parameters, padded
+// into a fixed shape for the model.
+export struct ShaderStep {
+    index: int,
+    label: string,
+    p1-label: string,
+    p1-value: float,
+    p1-min: float,
+    p1-max: float,
+    p2-label: string,
+    p2-value: float,
+    p2-min: float,
+    p2-max: float,
+    p3-label: string,
+    p3-value: float,
+    p3-min: float,
+    p3-max: float,
+    p-count: int,
 }
 
 // One animation event's shader assignment row.
@@ -1991,6 +2017,10 @@ component ShadersPage inherits Rectangle {
     callback assign(string, string);
     callback clear(string);
     callback fix-include();
+    callback editor-new();
+    callback editor-edit(string);
+    callback editor-fork(string, string);
+    callback editor-delete(string);
 
     VerticalLayout {
         padding: Theme.space-l;
@@ -2013,6 +2043,11 @@ component ShadersPage inherits Rectangle {
 
         HorizontalLayout {
             spacing: Theme.space-m;
+
+            ActionButton {
+                text: "New shader";
+                clicked => { root.editor-new(); }
+            }
 
             ActionButton {
                 text: root.downloading
@@ -2204,6 +2239,26 @@ component ShadersPage inherits Rectangle {
                             font-size: Theme.font-small;
                             wrap: TextWrap.word-wrap;
                         }
+
+                        HorizontalLayout {
+                            spacing: Theme.space-s;
+                            alignment: start;
+
+                            if shader.is-own: ActionButton {
+                                text: "Edit";
+                                clicked => { root.editor-edit(shader.path); }
+                            }
+
+                            if shader.is-own: ActionButton {
+                                text: "Delete";
+                                clicked => { root.editor-delete(shader.path); }
+                            }
+
+                            if !shader.is-own: ActionButton {
+                                text: "Fork";
+                                clicked => { root.editor-fork(shader.path, shader.name); }
+                            }
+                        }
                     }
                 }
             }
@@ -2306,6 +2361,25 @@ export component AppWindow inherits Window {
     in property <bool> shader-community-installed;
     in property <bool> shader-update-available;
     in-out property <bool> shader-downloading;
+    // Shader editor overlay.
+    in-out property <bool> shader-editor-open;
+    in property <bool> shader-editor-editing;
+    in-out property <string> shader-editor-name;
+    in-out property <string> shader-editor-text;
+    in property <string> shader-editor-note;
+    in property <[ShaderStep]> shader-steps;
+    in property <[string]> shader-step-kinds;
+    callback shader-editor-new();
+    callback shader-editor-edit(string);
+    callback shader-editor-fork(string, string);
+    callback shader-editor-save();
+    callback shader-editor-delete();
+    callback shader-editor-close();
+    callback shader-editor-text-changed(string);
+    callback shader-step-add(string);
+    callback shader-step-remove(int);
+    callback shader-step-move(int, int);
+    callback shader-step-param(int, int, float);
     in-out property <string> kb-draft-chord;
     in-out property <bool> kb-draft-use-mod;
     in-out property <string> kb-draft-scope;
@@ -2636,6 +2710,10 @@ export component AppWindow inherits Window {
                         // Without this wiring the dropdowns silently no-op:
                         // no edit, no dirty flag, nothing to save.
                         assign(k, v) => { root.set-value(k, v); }
+                        editor-new => { root.shader-editor-new(); }
+                        editor-edit(p) => { root.shader-editor-edit(p); }
+                        editor-fork(p, n) => { root.shader-editor-fork(p, n); }
+                        editor-delete(p) => { root.shader-editor-delete(); }
                     }
                 }
 
@@ -3258,6 +3336,265 @@ export component AppWindow inherits Window {
                         wrap: no-wrap;
                         width: self.preferred-width;
                         height: self.preferred-height;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── shader editor overlay (create, edit, fork, delete own shaders) ──
+    // Saving writes the .glsl file; umbriel live-reloads it, which is the
+    // preview loop. Assign the shader to an event to see it run.
+    if root.shader-editor-open: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+
+        TouchArea {
+            clicked => { root.shader-editor-close(); }
+        }
+
+        Rectangle {
+            width: 720px;
+            height: parent.height - 60px;
+            x: (parent.width - self.width) / 2;
+            y: 30px;
+            background: Theme.bg-1;
+            border-radius: Theme.radius-l;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            // Absorb clicks so the scrim underneath doesn't fire.
+            TouchArea { }
+
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: root.shader-editor-editing ? "Edit shader" : "New shader";
+                    color: Theme.text-1;
+                    font-size: Theme.font-large;
+                    font-weight: 700;
+                }
+
+                HorizontalLayout {
+                    spacing: Theme.space-m;
+                    alignment: start;
+
+                    Text {
+                        text: "Name";
+                        color: Theme.text-2;
+                        vertical-alignment: center;
+                    }
+
+                    LineEdit {
+                        width: 260px;
+                        text <=> root.shader-editor-name;
+                        enabled: !root.shader-editor-editing;
+                        placeholder-text: "my-effect";
+                    }
+
+                    Text {
+                        text: ".glsl";
+                        color: Theme.text-2;
+                        font-family: Theme.font-mono;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                // The visual builder: a stack of steps, each with its own
+                // parameters. The code below regenerates on every change;
+                // hand edits are always allowed between stack changes.
+                if !root.shader-editor-editing: VerticalLayout {
+                    spacing: Theme.space-s;
+
+                    Text {
+                        text: "Build an effect";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        font-weight: 700;
+                    }
+
+                    // The stack scrolls so the card fits any window height.
+                    ScrollView {
+                        max-height: 260px;
+                        min-height: 120px;
+
+                        VerticalLayout {
+                            spacing: Theme.space-s;
+
+                            for step in root.shader-steps: Rectangle {
+                                background: Theme.bg-0;
+                                border-radius: Theme.radius-m;
+                                border-width: 1px;
+                                border-color: Theme.border;
+
+                                VerticalLayout {
+                                    padding: Theme.space-s;
+                                    spacing: Theme.space-xs;
+
+                                    HorizontalLayout {
+                                        spacing: Theme.space-s;
+
+                                        Text {
+                                            text: step.label;
+                                            color: Theme.text-1;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                        }
+
+                                        ActionButton {
+                                            text: "↑";
+                                            clicked => { root.shader-step-move(step.index, -1); }
+                                        }
+
+                                        ActionButton {
+                                            text: "↓";
+                                            clicked => { root.shader-step-move(step.index, 1); }
+                                        }
+
+                                        ActionButton {
+                                            text: "×";
+                                            clicked => { root.shader-step-remove(step.index); }
+                                        }
+                                    }
+
+                                    if step.p-count > 0: HorizontalLayout {
+                                        spacing: Theme.space-m;
+
+                                        Text {
+                                            text: step.p1-label;
+                                            color: Theme.text-2;
+                                            font-size: Theme.font-small;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Slider {
+                                            minimum: step.p1-min;
+                                            maximum: step.p1-max;
+                                            value: step.p1-value;
+                                            released(v) => { root.shader-step-param(step.index, 0, v); }
+                                        }
+                                    }
+
+                                    if step.p-count > 1: HorizontalLayout {
+                                        spacing: Theme.space-m;
+
+                                        Text {
+                                            text: step.p2-label;
+                                            color: Theme.text-2;
+                                            font-size: Theme.font-small;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Slider {
+                                            minimum: step.p2-min;
+                                            maximum: step.p2-max;
+                                            value: step.p2-value;
+                                            released(v) => { root.shader-step-param(step.index, 1, v); }
+                                        }
+                                    }
+
+                                    if step.p-count > 2: HorizontalLayout {
+                                        spacing: Theme.space-m;
+
+                                        Text {
+                                            text: step.p3-label;
+                                            color: Theme.text-2;
+                                            font-size: Theme.font-small;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Slider {
+                                            minimum: step.p3-min;
+                                            maximum: step.p3-max;
+                                            value: step.p3-value;
+                                            released(v) => { root.shader-step-param(step.index, 2, v); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.space-s;
+                        alignment: start;
+
+                        Text {
+                            text: "Add an effect:";
+                            color: Theme.text-2;
+                            vertical-alignment: center;
+                        }
+
+                        add-kind := ComboBox {
+                            width: 180px;
+                            model: root.shader-step-kinds;
+                        }
+
+                        ActionButton {
+                            text: "Add";
+                            clicked => { root.shader-step-add(add-kind.current-value); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+
+                // TextEdit reports no useful preferred size, so the pane
+                // scrolls a fixed-size editor surface.
+                ScrollView {
+                    vertical-stretch: 1;
+                    min-height: 200px;
+                    viewport-width: editor-edit.width;
+                    viewport-height: editor-edit.height;
+
+                    editor-edit := TextEdit {
+                        x: 0;
+                        y: 0;
+                        width: 640px;
+                        height: 560px;
+                        wrap: no-wrap;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-small;
+                        text <=> root.shader-editor-text;
+                        edited(text) => { root.shader-editor-text-changed(text); }
+                    }
+                }
+
+                if root.shader-editor-note != "": Text {
+                    text: root.shader-editor-note;
+                    color: Theme.warning;
+                    font-size: Theme.font-small;
+                    wrap: TextWrap.word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-s;
+
+                    if root.shader-editor-editing: ActionButton {
+                        text: "Delete";
+                        clicked => { root.shader-editor-delete(); }
+                    }
+
+                    ActionButton {
+                        text: "Cancel";
+                        clicked => { root.shader-editor-close(); }
+                    }
+
+                    ActionButton {
+                        text: "Save";
+                        primary: true;
+                        clicked => { root.shader-editor-save(); }
                     }
                 }
             }
