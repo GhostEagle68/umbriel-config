@@ -10,11 +10,21 @@
   you over HTTPS, no git needed. Each event gets a dropdown, files
   umbriel would reject are flagged before they save, and a shaders.toml
   your include chain ignores is called out with a one-click fix. The
-  download button flips to Update, with an installed marker, once the
-  collection is on disk.
+  download button flips to Update, with an installed marker and an
+  update-available hint, once the collection is on disk.
 
 ### Fixed
 
+- Assigning a shader from a dropdown did nothing: the callback was
+  declared but never connected, so no edit was recorded and Save
+  stayed disabled.
+- Clearing a shader back to "(no shader)" or any other edit that
+  removes a key was invisible to Save: the change counter stayed at
+  zero and the save popup found "nothing to save" even though the
+  document was modified. Deletions now count as changes, appear in the
+  popup as "(removed)", can be discarded, and reset restores them.
+- The save popup preselected the wrong destination file for changes
+  living in included files (off by one in the dropdown).
 - The community-shaders download looked up the config directory from
   the environment, so with `XDG_CONFIG_HOME` unset the button failed
   with "Could not determine the config directory". It now targets the
