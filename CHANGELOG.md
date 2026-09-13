@@ -6,17 +6,24 @@
 
 - **Shaders page.** Discover, download, and assign the custom GLSL
   animation shaders: the effects bundled with umbriel, your own, and
-  the community collection, which the app can clone and update for
-  you. Each event gets a dropdown, files umbriel would reject are
-  flagged before they save, and a shaders.toml your include chain
-  ignores is called out with a one-click fix.
+  the community collection, which the app can download and update for
+  you over HTTPS, no git needed. Each event gets a dropdown, files
+  umbriel would reject are flagged before they save, and a shaders.toml
+  your include chain ignores is called out with a one-click fix. The
+  download button flips to Update, with an installed marker, once the
+  collection is on disk.
 
 ### Fixed
 
+- The community-shaders download looked up the config directory from
+  the environment, so with `XDG_CONFIG_HOME` unset the button failed
+  with "Could not determine the config directory". It now targets the
+  folder of the config the app opened, and the library refreshes as
+  soon as the download lands.
 - Save-time validation no longer appends "umbriel validate exited
   unsuccessfully without reporting diagnostics" to ordinary warnings.
   umbriel exits nonzero for any diagnostic, warnings included, and
-  warning-only configs still apply — warnings now show in the banner
+  warning-only configs still apply. Warnings now show in the banner
   by themselves and never block a save.
 
 ## [0.2.0-beta.1] — 2026-09-11

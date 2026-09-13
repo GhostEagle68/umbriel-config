@@ -1984,6 +1984,7 @@ component ShadersPage inherits Rectangle {
     in property <[ShaderAssignment]> assignments;
     in property <string> download-note;
     in property <bool> include-missing;
+    in property <bool> community-installed;
     in-out property <bool> downloading;
     callback download();
     callback assign(string, string);
@@ -2013,7 +2014,9 @@ component ShadersPage inherits Rectangle {
             spacing: Theme.space-m;
 
             ActionButton {
-                text: root.downloading ? "Downloading…" : "Download community shaders";
+                text: root.downloading
+                    ? "Downloading…"
+                    : (root.community-installed ? "Update community shaders" : "Download community shaders");
                 enabled: !root.downloading;
                 clicked => { root.download(); }
             }
@@ -2024,6 +2027,16 @@ component ShadersPage inherits Rectangle {
                 font-size: Theme.font-small;
                 vertical-alignment: center;
                 wrap: TextWrap.word-wrap;
+                horizontal-stretch: 1;
+            }
+
+            // Persistent confirmation once the collection is on disk;
+            // steps aside while a result note is showing.
+            if root.download-note == "" && root.community-installed: Text {
+                text: "✓ community shaders installed";
+                color: Theme.success;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
                 horizontal-stretch: 1;
             }
         }
@@ -2280,6 +2293,7 @@ export component AppWindow inherits Window {
     in property <[ShaderAssignment]> shader-assignments;
     in property <string> shader-download-note;
     in property <bool> shader-include-missing;
+    in property <bool> shader-community-installed;
     in-out property <bool> shader-downloading;
     in-out property <string> kb-draft-chord;
     in-out property <bool> kb-draft-use-mod;
@@ -2601,6 +2615,7 @@ export component AppWindow inherits Window {
                         assignments: root.shader-assignments;
                         download-note: root.shader-download-note;
                         include-missing: root.shader-include-missing;
+                        community-installed: root.shader-community-installed;
                         downloading <=> root.shader-downloading;
                         download => { root.shaders-download(); }
 

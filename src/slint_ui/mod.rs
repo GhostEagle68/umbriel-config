@@ -57,6 +57,8 @@ struct Shell {
     // Discovered GLSL shaders + the last download/scan note.
     shaders: Vec<shaders::ShaderEntry>,
     shader_note: String,
+    // The community collection exists on disk (button flips to Update).
+    shaders_installed: bool,
 }
 
 /// One guided-setup walk: the curated cards, in visit order. Each step is
@@ -235,6 +237,7 @@ impl Shell {
             card_expanded: BTreeMap::new(),
             shaders: Vec::new(),
             shader_note: String::new(),
+            shaders_installed: false,
         };
         shell.reset_saved();
         shell
@@ -1102,16 +1105,13 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
     {
         let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
         app.on_shaders_download(move || {
             let Some(app) = weak.upgrade() else { return };
-            let env = discovery::Env::from_process();
-            let target = match env
-                .xdg_config_home
-                .as_deref()
-                .map(PathBuf::from)
-                .map(|dir| dir.join("umbriel/shaders/community"))
-            {
-                Some(target) => target,
+            // The collection lands next to the config the app already
+            // opened — not in a re-derived XDG path, which may be unset.
+            let target = match shell.borrow().path.parent() {
+                Some(dir) => dir.join("shaders/community"),
                 None => {
                     app.set_shader_download_note(
                         "Could not determine the config directory.".into(),
@@ -1124,32 +1124,19 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             let weak_for_thread = weak.clone();
             std::thread::spawn(move || {
                 let weak = weak_for_thread;
-                let exists = target.join(".git").is_dir();
-                let url = "https://github.com/noctalia-dev/community-umbriel-shaders.git";
-                let result = if exists {
-                    std::process::Command::new("git")
-                        .args(["-C", &target.to_string_lossy(), "pull", "--ff-only"])
-                        .output()
-                } else {
-                    let _ = std::fs::create_dir_all(target.parent().unwrap());
-                    std::process::Command::new("git")
-                        .args(["clone", "--depth", "1", url, &target.to_string_lossy()])
-                        .output()
-                };
+                let result = download_community_shaders(&target);
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(app) = weak.upgrade() else { return };
                     app.set_shader_downloading(false);
-                    let note = match result {
-                        Ok(output) if output.status.success() => {
-                            "Community shaders up to date.".to_owned()
+                    match result {
+                        Ok(note) => {
+                            // Re-enter the page's own open path: rescans
+                            // the library and rebuilds the assignments.
+                            app.invoke_section_selected("shaders".into());
+                            app.set_shader_download_note(note.into());
                         }
-                        Ok(output) => format!(
-                            "git failed: {}",
-                            String::from_utf8_lossy(&output.stderr).trim()
-                        ),
-                        Err(_) => "git is not installed — cannot download.".to_owned(),
-                    };
-                    app.set_shader_download_note(note.into());
+                        Err(note) => app.set_shader_download_note(note.into()),
+                    }
                 });
             });
         });
@@ -3566,6 +3553,84 @@ fn rule_add_target(shell: &Shell, family: &str) -> usize {
         .unwrap_or(main)
 }
 
+/// Download the community shader collection as a tarball over HTTPS —
+/// no git required — and unpack it into `<config dir>/shaders/community`.
+/// The directory is app-managed: a re-download replaces it wholesale
+/// (users' own shaders belong directly in `shaders/`). The staging dir
+/// is dot-hidden so a half-finished download never shows in the scan.
+/// Returns the user-facing note.
+fn download_community_shaders(target: &Path) -> Result<String, String> {
+    const URL: &str =
+        "https://github.com/noctalia-dev/community-umbriel-shaders/archive/refs/heads/main.tar.gz";
+    let updating = target.exists();
+    let archive = ureq::get(URL)
+        .header("User-Agent", "umbriel-config")
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(60)))
+        .build()
+        .call()
+        .and_then(|mut response| response.body_mut().read_to_vec())
+        .map_err(|err| format!("Download failed: {err}"))?;
+
+    let staging = target.with_file_name(".community-staging");
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging)
+        .map_err(|err| format!("Could not create {}: {err}", staging.display()))?;
+
+    let archive_path = std::env::temp_dir().join(format!(
+        "umbriel-community-shaders-{}.tar.gz",
+        std::process::id()
+    ));
+    if let Err(err) = std::fs::write(&archive_path, &archive) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!("Could not store the download: {err}"));
+    }
+    let extracted = std::process::Command::new("tar")
+        .args([
+            "-xzf",
+            &archive_path.to_string_lossy(),
+            "-C",
+            &staging.to_string_lossy(),
+            "--strip-components=1",
+        ])
+        .output();
+    let _ = std::fs::remove_file(&archive_path);
+    match extracted {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!(
+                "Extraction failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Err(_) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err("tar is not installed — cannot unpack the download.".to_owned());
+        }
+    }
+
+    // Everything landed: swap the old collection for the fresh one.
+    if target.exists()
+        && let Err(err) = std::fs::remove_dir_all(target)
+    {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!("Could not replace {}: {err}", target.display()));
+    }
+    if let Err(err) = std::fs::rename(&staging, target) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!(
+            "Could not install into {}: {err}",
+            target.display()
+        ));
+    }
+    Ok(if updating {
+        "Community shaders updated.".to_owned()
+    } else {
+        "Community shaders downloaded.".to_owned()
+    })
+}
+
 /// Rescan shader locations: the main config's directory (its
 /// `shaders/` folder holds user copies and the community clone) and
 /// umbriel's installed data directory (bundled effects).
@@ -3583,6 +3648,7 @@ fn scan_shaders(shell: &mut Shell) {
         .into_iter()
         .collect();
     shell.shaders = shaders::scan(&config_dir, &data_roots);
+    shell.shaders_installed = config_dir.join("shaders/community").is_dir();
 }
 
 fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
@@ -3632,6 +3698,7 @@ fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
     app.set_shader_assignments(Rc::new(VecModel::from(rows)).into());
     app.set_shader_download_note(shell.shader_note.clone().into());
     app.set_shader_include_missing(shaders::missing_include(&shell.doc, &shell.path).is_some());
+    app.set_shader_community_installed(shell.shaders_installed);
     app.set_changed_count(changed_count(shell));
 }
 
