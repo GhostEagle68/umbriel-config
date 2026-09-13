@@ -12,6 +12,9 @@ categories = ["gui", "config"]
 
 [dependencies]
 anyhow = "1.0.104"
+# Offscreen GLES preview of user shader code (worker thread, pbuffer).
+glow = "0.17"
+khronos-egl = { version = "6", features = ["dynamic"] }
 rfd = "0.15"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }

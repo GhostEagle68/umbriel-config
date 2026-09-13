@@ -20,6 +20,7 @@ use umbriel_config::config::{
 use umbriel_config::{changelog, live, update};
 
 mod catalog;
+mod shader_preview;
 
 slint::include_modules!();
 
@@ -65,6 +66,10 @@ struct Shell {
     shader_editing: Option<PathBuf>,
     // The effect builder's step stack (new-shader mode only).
     builder_steps: Vec<shaders::builder::BuilderStep>,
+    // Offscreen preview worker; started on first editor use. After an
+    // init failure it stays off until the next app run (best-effort).
+    shader_preview: Option<shader_preview::PreviewHandle>,
+    shader_preview_failed: bool,
 }
 
 /// One guided-setup walk: the curated cards, in visit order. Each step is
@@ -247,6 +252,8 @@ impl Shell {
             shaders_update_checked: false,
             shader_editing: None,
             builder_steps: Vec::new(),
+            shader_preview: None,
+            shader_preview_failed: false,
         };
         shell.reset_saved();
         shell
@@ -263,6 +270,19 @@ impl Shell {
 
     fn any_modified(&self) -> bool {
         self.doc.is_modified() || self.includes.docs.iter().any(|inc| inc.doc.is_modified())
+    }
+
+    /// Send a command to the preview worker, starting it on first use.
+    fn preview_command(&mut self, cmd: shader_preview::PreviewCommand) {
+        if self.shader_preview_failed {
+            return;
+        }
+        if self.shader_preview.is_none() {
+            self.shader_preview = Some(shader_preview::PreviewHandle::spawn());
+        }
+        if let Some(handle) = &self.shader_preview {
+            handle.send(cmd);
+        }
     }
 }
 
@@ -1232,6 +1252,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             regen_builder(&app, &shell);
             app.set_shader_editor_note(String::new().into());
             app.set_shader_editor_open(true);
+            kick_shader_preview(&app, &shell);
         });
     }
     {
@@ -1332,6 +1353,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
     {
         let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
         app.on_shader_editor_text_changed(move |text| {
             let Some(app) = weak.upgrade() else { return };
             let problems = shaders::lint_source(&text);
@@ -1341,6 +1363,10 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 format!("⚠ {}", problems.join("; "))
             };
             app.set_shader_editor_note(note.into());
+            // Live GLSL checking: the preview worker compiles as you type.
+            shell
+                .borrow_mut()
+                .preview_command(shader_preview::PreviewCommand::SetSource(text.to_string()));
         });
     }
     {
@@ -1417,6 +1443,38 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 step.params[param as usize] = clamped;
             }
             regen_builder(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_preview_scrub(move |progress| {
+            let Some(app) = weak.upgrade() else { return };
+            shell
+                .borrow_mut()
+                .preview_command(shader_preview::PreviewCommand::Render {
+                    progress: progress.clamp(0.0, 1.0),
+                    direction: app.get_shader_preview_direction(),
+                });
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_preview_direction_toggled(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let flipped = if app.get_shader_preview_direction() > 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            app.set_shader_preview_direction(flipped);
+            shell
+                .borrow_mut()
+                .preview_command(shader_preview::PreviewCommand::Render {
+                    progress: app.get_shader_preview_progress().clamp(0.0, 1.0),
+                    direction: flipped,
+                });
         });
     }
     {
@@ -2067,6 +2125,23 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             }
             app.set_changed_count(changed_count(&shell));
         }
+    }
+
+    // Pump preview events off the worker at scrub-friendly latency; an
+    // idle tick is one failed try_recv, so running forever is free.
+    let preview_timer = slint::Timer::default();
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        preview_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(33),
+            move || {
+                if let Some(app) = weak.upgrade() {
+                    poll_shader_preview(&app, &shell);
+                }
+            },
+        );
     }
 
     if settings.check_updates_on_start && update::should_auto_check(&env) {
@@ -4003,7 +4078,13 @@ fn regen_builder(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         })
         .collect();
     app.set_shader_steps(Rc::new(VecModel::from(rows)).into());
+    let preview_text = code.clone();
     app.set_shader_editor_text(code.into());
+    // Stack changes regenerate the code, so the preview compiles the new
+    // source too (the worker re-renders at the last scrub position).
+    shell
+        .borrow_mut()
+        .preview_command(shader_preview::PreviewCommand::SetSource(preview_text));
 }
 
 /// Open the overlay editor pre-loaded with a shader file's content.
@@ -4029,6 +4110,60 @@ fn open_shader_editor(
     app.set_shader_editor_text(text.into());
     app.set_shader_editor_note(String::new().into());
     app.set_shader_editor_open(true);
+    kick_shader_preview(app, shell);
+}
+
+/// Reset the scrubber and hand the freshly loaded code to the preview
+/// worker, which renders the opening frame.
+fn kick_shader_preview(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    app.set_shader_preview_progress(0.0);
+    app.set_shader_preview_direction(1.0);
+    app.set_shader_preview_note(String::new().into());
+    let text = app.get_shader_editor_text().to_string();
+    let mut shell = shell.borrow_mut();
+    shell.preview_command(shader_preview::PreviewCommand::SetSource(text));
+    shell.preview_command(shader_preview::PreviewCommand::Render {
+        progress: 0.0,
+        direction: 1.0,
+    });
+}
+
+/// Apply pending worker events to the UI. Runs on the poll timer; the
+/// worker never touches Slint directly.
+fn poll_shader_preview(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    let events = match &shell.borrow().shader_preview {
+        Some(handle) => handle.drain(),
+        None => Vec::new(),
+    };
+    for event in events {
+        match event {
+            shader_preview::PreviewEvent::Ready => {
+                app.set_shader_preview_ready(true);
+            }
+            shader_preview::PreviewEvent::Unavailable(err) => {
+                let mut shell = shell.borrow_mut();
+                shell.shader_preview = None;
+                shell.shader_preview_failed = true;
+                app.set_shader_preview_ready(false);
+                app.set_shader_preview_note(format!("Preview unavailable: {err}").into());
+            }
+            shader_preview::PreviewEvent::Compiled(problems) => {
+                let note = problems.map_or_else(String::new, |err| format!("GLSL error: {err}"));
+                app.set_shader_preview_note(note.into());
+            }
+            shader_preview::PreviewEvent::Frame(width, height, pixels) => {
+                let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
+                let rgba: Vec<slint::Rgba8Pixel> = pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|chunk| slint::Rgba8Pixel::new(chunk[0], chunk[1], chunk[2], chunk[3]))
+                    .collect();
+                buffer.make_mut_slice().copy_from_slice(&rgba);
+                app.set_shader_preview_image(slint::Image::from_rgba8(buffer));
+            }
+        }
+    }
 }
 
 /// Rescan shader locations: the main config's directory (its

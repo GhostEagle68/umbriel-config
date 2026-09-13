@@ -2273,6 +2273,263 @@ component ShadersPage inherits Rectangle {
     }
 }
 
+// The shader editor's effect-builder panel: the step stack plus the
+// Add-an-effect row. Instantiated as a left column on wide editor cards
+// and as a full-width section on narrow ones; all behavior lives behind
+// these callbacks so both placements stay identical.
+component ShaderBuilderPanel inherits Rectangle {
+    in property <[ShaderStep]> steps;
+    in property <[string]> kinds;
+    callback add(string);
+    callback step-remove(int);
+    callback step-move(int, int);
+    callback step-param(int, int, float);
+
+    VerticalLayout {
+        spacing: Theme.space-s;
+
+        Text {
+            text: "Build an effect";
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            font-weight: 700;
+        }
+
+        // Add row sits above the stack so it never fights the list for
+        // space at the bottom of the panel. The combo flexes to the
+        // column's width, so the row can't overflow into the preview.
+        HorizontalLayout {
+            spacing: Theme.space-s;
+
+            Text {
+                text: "Add an effect:";
+                color: Theme.text-2;
+                vertical-alignment: center;
+            }
+
+            add-kind := ComboBox {
+                min-width: 110px;
+                horizontal-stretch: 1;
+                model: root.kinds;
+            }
+
+            ActionButton {
+                text: "Add";
+                clicked => { root.add(add-kind.current-value); }
+            }
+        }
+
+        // The stack fills the remaining panel height and scrolls when the
+        // steps outgrow it.
+        ScrollView {
+            vertical-stretch: 1;
+            min-height: 120px;
+
+            VerticalLayout {
+                // Pin cards to their natural height: with the default
+                // stretch alignment they would split the whole scroll
+                // height between them and balloon.
+                alignment: start;
+                spacing: Theme.space-s;
+
+                for step in root.steps: Rectangle {
+                    background: Theme.bg-0;
+                    border-radius: Theme.radius-m;
+                    border-width: 1px;
+                    border-color: Theme.border;
+
+                    VerticalLayout {
+                        padding: Theme.space-s;
+                        spacing: Theme.space-xs;
+
+                        HorizontalLayout {
+                            spacing: Theme.space-s;
+
+                            Text {
+                                text: step.label;
+                                color: Theme.text-1;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+
+                            ActionButton {
+                                text: "↑";
+                                clicked => { root.step-move(step.index, -1); }
+                            }
+
+                            ActionButton {
+                                text: "↓";
+                                clicked => { root.step-move(step.index, 1); }
+                            }
+
+                            ActionButton {
+                                text: "×";
+                                clicked => { root.step-remove(step.index); }
+                            }
+                        }
+
+                        if step.p-count > 0: HorizontalLayout {
+                            spacing: Theme.space-m;
+
+                            Text {
+                                text: step.p1-label;
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                min-width: 64px;
+                            }
+
+                            Slider {
+                                minimum: step.p1-min;
+                                maximum: step.p1-max;
+                                value: step.p1-value;
+                                released(v) => { root.step-param(step.index, 0, v); }
+                            }
+                        }
+
+                        if step.p-count > 1: HorizontalLayout {
+                            spacing: Theme.space-m;
+
+                            Text {
+                                text: step.p2-label;
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                min-width: 64px;
+                            }
+
+                            Slider {
+                                minimum: step.p2-min;
+                                maximum: step.p2-max;
+                                value: step.p2-value;
+                                released(v) => { root.step-param(step.index, 1, v); }
+                            }
+                        }
+
+                        if step.p-count > 2: HorizontalLayout {
+                            spacing: Theme.space-m;
+
+                            Text {
+                                text: step.p3-label;
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                min-width: 64px;
+                            }
+
+                            Slider {
+                                minimum: step.p3-min;
+                                maximum: step.p3-max;
+                                value: step.p3-value;
+                                released(v) => { root.step-param(step.index, 2, v); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The shader editor's live preview: the rendered frame with its scrub
+// slider beside the description and the In/Out toggle. The frame keeps
+// the test texture's 16:9 shape at any width.
+component ShaderPreviewRow inherits Rectangle {
+    in property <image> source;
+    in property <string> note;
+    in property <bool> direction-in;
+    in-out property <float> progress;
+    callback scrub(float);
+    callback toggle-direction();
+
+    horizontal-stretch: 1;
+
+    HorizontalLayout {
+        spacing: Theme.space-m;
+
+        // Frame column: shrinks on narrow cards, never dominates.
+        VerticalLayout {
+            min-width: 220px;
+            max-width: 360px;
+            horizontal-stretch: 3;
+            spacing: Theme.space-xs;
+
+            Rectangle {
+                height: self.width * 9 / 16;
+                border-radius: Theme.radius-s;
+                border-width: 1px;
+                border-color: Theme.border;
+                clip: true;
+
+                Image {
+                    x: 0;
+                    y: 0;
+                    width: 100%;
+                    height: 100%;
+                    image-fit: ImageFit.contain;
+                    source: root.source;
+                }
+            }
+
+            Slider {
+                minimum: 0;
+                maximum: 1;
+                value <=> root.progress;
+                changed(v) => { root.scrub(v); }
+            }
+        }
+
+        // Description column.
+        VerticalLayout {
+            min-width: 150px;
+            horizontal-stretch: 2;
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Preview";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Text {
+                text: "Scrub the animation on a stand-in window. Typing re-renders at this position; the frame is a fake window, assign the shader to an event to see it for real.";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+
+                Text {
+                    text: "Direction";
+                    color: Theme.text-2;
+                    vertical-alignment: center;
+                }
+
+                ActionButton {
+                    text: root.direction-in ? "In" : "Out";
+                    clicked => { root.toggle-direction(); }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            if root.note != "": Text {
+                text: root.note;
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     preferred-width: 960px;
     preferred-height: 640px;
@@ -2380,6 +2637,14 @@ export component AppWindow inherits Window {
     callback shader-step-remove(int);
     callback shader-step-move(int, int);
     callback shader-step-param(int, int, float);
+    // Preview scrubber for the editor.
+    in property <image> shader-preview-image;
+    in-out property <float> shader-preview-progress: 0;
+    in-out property <float> shader-preview-direction: 1;
+    in property <bool> shader-preview-ready;
+    in property <string> shader-preview-note;
+    callback shader-preview-scrub(float);
+    callback shader-preview-direction-toggled();
     in-out property <string> kb-draft-chord;
     in-out property <bool> kb-draft-use-mod;
     in-out property <string> kb-draft-scope;
@@ -3355,10 +3620,10 @@ export component AppWindow inherits Window {
         }
 
         Rectangle {
-            width: 720px;
-            height: parent.height - 60px;
+            width: min(1400px, parent.width - 48px);
+            height: parent.height - 48px;
             x: (parent.width - self.width) / 2;
-            y: 30px;
+            y: 24px;
             background: Theme.bg-1;
             border-radius: Theme.radius-l;
             border-width: 1px;
@@ -3407,167 +3672,71 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                // The visual builder: a stack of steps, each with its own
-                // parameters. The code below regenerates on every change;
-                // hand edits are always allowed between stack changes.
-                if !root.shader-editor-editing: VerticalLayout {
-                    spacing: Theme.space-s;
+                // Fluid middle: builder beside preview + code with stretch
+                // ratios, so every pane scales with the window instead of
+                // competing over fixed pixel sizes. Narrow cards shrink the
+                // builder to its minimum; wide ones give every pane room.
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    spacing: Theme.space-m;
 
-                    Text {
-                        text: "Build an effect";
-                        color: Theme.text-2;
-                        font-size: Theme.font-small;
-                        font-weight: 700;
+                    if !root.shader-editor-editing: ShaderBuilderPanel {
+                        min-width: 280px;
+                        max-width: 460px;
+                        horizontal-stretch: 2;
+                        steps: root.shader-steps;
+                        kinds: root.shader-step-kinds;
+                        add(k) => { root.shader-step-add(k); }
+                        step-remove(i) => { root.shader-step-remove(i); }
+                        step-move(i, d) => { root.shader-step-move(i, d); }
+                        step-param(i, s, v) => { root.shader-step-param(i, s, v); }
                     }
 
-                    // The stack scrolls so the card fits any window height.
-                    ScrollView {
-                        max-height: 260px;
-                        min-height: 120px;
+                    VerticalLayout {
+                        horizontal-stretch: 3;
+                        spacing: Theme.space-m;
 
-                        VerticalLayout {
-                            spacing: Theme.space-s;
+                        if root.shader-preview-ready: ShaderPreviewRow {
+                            source: root.shader-preview-image;
+                            note: root.shader-preview-note;
+                            direction-in: root.shader-preview-direction > 0;
+                            progress <=> root.shader-preview-progress;
+                            scrub(v) => { root.shader-preview-scrub(v); }
+                            toggle-direction() => { root.shader-preview-direction-toggled(); }
+                        }
 
-                            for step in root.shader-steps: Rectangle {
-                                background: Theme.bg-0;
-                                border-radius: Theme.radius-m;
-                                border-width: 1px;
-                                border-color: Theme.border;
+                        // TextEdit reports no useful preferred size: pin its
+                        // surface to the pane so it fills the space the
+                        // window gives and scrolls only when that runs out.
+                        code-scroll := ScrollView {
+                            vertical-stretch: 1;
+                            min-height: 200px;
+                            viewport-width: editor-edit.width;
+                            viewport-height: editor-edit.height;
 
-                                VerticalLayout {
-                                    padding: Theme.space-s;
-                                    spacing: Theme.space-xs;
-
-                                    HorizontalLayout {
-                                        spacing: Theme.space-s;
-
-                                        Text {
-                                            text: step.label;
-                                            color: Theme.text-1;
-                                            font-weight: 700;
-                                            vertical-alignment: center;
-                                            horizontal-stretch: 1;
-                                        }
-
-                                        ActionButton {
-                                            text: "↑";
-                                            clicked => { root.shader-step-move(step.index, -1); }
-                                        }
-
-                                        ActionButton {
-                                            text: "↓";
-                                            clicked => { root.shader-step-move(step.index, 1); }
-                                        }
-
-                                        ActionButton {
-                                            text: "×";
-                                            clicked => { root.shader-step-remove(step.index); }
-                                        }
-                                    }
-
-                                    if step.p-count > 0: HorizontalLayout {
-                                        spacing: Theme.space-m;
-
-                                        Text {
-                                            text: step.p1-label;
-                                            color: Theme.text-2;
-                                            font-size: Theme.font-small;
-                                            vertical-alignment: center;
-                                        }
-
-                                        Slider {
-                                            minimum: step.p1-min;
-                                            maximum: step.p1-max;
-                                            value: step.p1-value;
-                                            released(v) => { root.shader-step-param(step.index, 0, v); }
-                                        }
-                                    }
-
-                                    if step.p-count > 1: HorizontalLayout {
-                                        spacing: Theme.space-m;
-
-                                        Text {
-                                            text: step.p2-label;
-                                            color: Theme.text-2;
-                                            font-size: Theme.font-small;
-                                            vertical-alignment: center;
-                                        }
-
-                                        Slider {
-                                            minimum: step.p2-min;
-                                            maximum: step.p2-max;
-                                            value: step.p2-value;
-                                            released(v) => { root.shader-step-param(step.index, 1, v); }
-                                        }
-                                    }
-
-                                    if step.p-count > 2: HorizontalLayout {
-                                        spacing: Theme.space-m;
-
-                                        Text {
-                                            text: step.p3-label;
-                                            color: Theme.text-2;
-                                            font-size: Theme.font-small;
-                                            vertical-alignment: center;
-                                        }
-
-                                        Slider {
-                                            minimum: step.p3-min;
-                                            maximum: step.p3-max;
-                                            value: step.p3-value;
-                                            released(v) => { root.shader-step-param(step.index, 2, v); }
-                                        }
-                                    }
-                                }
+                            editor-edit := TextEdit {
+                                x: 0;
+                                y: 0;
+                                width: max(360px, code-scroll.visible-width);
+                                // Fixed working surface: the pane below the
+                                // box stays plain background instead of the
+                                // box stretching into dead space.
+                                height: 560px;
+                                wrap: no-wrap;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                text <=> root.shader-editor-text;
+                                edited(text) => { root.shader-editor-text-changed(text); }
                             }
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: Theme.space-s;
-                        alignment: start;
-
-                        Text {
-                            text: "Add an effect:";
-                            color: Theme.text-2;
-                            vertical-alignment: center;
-                        }
-
-                        add-kind := ComboBox {
-                            width: 180px;
-                            model: root.shader-step-kinds;
-                        }
-
-                        ActionButton {
-                            text: "Add";
-                            clicked => { root.shader-step-add(add-kind.current-value); }
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
                         }
                     }
                 }
 
-                // TextEdit reports no useful preferred size, so the pane
-                // scrolls a fixed-size editor surface.
-                ScrollView {
-                    vertical-stretch: 1;
-                    min-height: 200px;
-                    viewport-width: editor-edit.width;
-                    viewport-height: editor-edit.height;
-
-                    editor-edit := TextEdit {
-                        x: 0;
-                        y: 0;
-                        width: 640px;
-                        height: 560px;
-                        wrap: no-wrap;
-                        font-family: Theme.font-mono;
-                        font-size: Theme.font-small;
-                        text <=> root.shader-editor-text;
-                        edited(text) => { root.shader-editor-text-changed(text); }
-                    }
+                if !root.shader-preview-ready && root.shader-preview-note != "": Text {
+                    text: root.shader-preview-note;
+                    color: Theme.warning;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
                 }
 
                 if root.shader-editor-note != "": Text {

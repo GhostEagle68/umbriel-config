@@ -18,8 +18,17 @@
   them, and the shader composes itself, with the generated code in
   view for hand-tweaking. Your own shaders open for editing, community
   and bundled ones fork into editable copies, and saving live-reloads
-  in umbriel, which is the preview loop. A rendered preview scrubber is
-  planned next.
+  in umbriel. The editor's middle column scrolls as one, so tall step
+  stacks plus preview plus code fit any window height.
+- **Preview scrubber in the shader editor.** The editor renders your
+  code offscreen on a stand-in window and lets you scrub the animation
+  progress like a video timeline, with an In / Out toggle matching
+  windows_in and windows_out. The preview compiles with umbriel's own
+  GLSL prefix, so the GLSL errors it reports as you type are the errors
+  umbriel would report, down to the line numbers — and a broken draft
+  keeps showing the last good frame. Renders happen on a private
+  worker thread; if the GPU driver refuses the offscreen context the
+  preview degrades to a note instead of taking the editor down.
 
 ### Fixed
 
