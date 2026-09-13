@@ -1856,7 +1856,6 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         start_update_check(app.as_weak(), Some(env.clone()));
     }
 
-    app.invoke_section_selected("shaders".into()); // TEMP screenshot
     app.run()
         .map_err(|err| anyhow::anyhow!("event loop failed: {err}"))?;
     Ok(())
