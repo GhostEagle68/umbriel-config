@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Features
+
+- **Shaders page.** Discover, download, and assign the custom GLSL
+  animation shaders: the effects bundled with umbriel, your own, and
+  the community collection, which the app can clone and update for
+  you. Each event gets a dropdown, files umbriel would reject are
+  flagged before they save, and a shaders.toml your include chain
+  ignores is called out with a one-click fix.
+
 ## [0.2.0-beta.1] — 2026-09-11
 
 First release on the Slint interface. The old EGUI interface is gone, and a lot

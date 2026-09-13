@@ -553,6 +553,13 @@ impl ConfigDocument {
         remove_dotted(table, &parts)
     }
 
+    /// Remove one leaf key by path (`["animation", "windows_in",
+    /// "shader"]`), pruning parents left empty; returns whether anything
+    /// was removed.
+    pub fn remove_leaf(&mut self, path: &[&str]) -> bool {
+        remove_dotted(self.doc.as_table_mut(), path)
+    }
+
     /// All `[keybinds]` entries in file order. Plain string actions have
     /// `None` extras; table-form binds surface theirs. Entries umbriel
     /// would reject (non-string values, missing `action`) are skipped.
@@ -965,6 +972,27 @@ curve = \"easeout\"
         doc.set_keybind("Mod+R", "config-reload", None, None, None);
         assert_eq!(doc.keybinds()[1].action, "config-reload");
         assert!(!doc.text().contains("repeat = false"));
+    }
+
+    #[test]
+    fn remove_leaf_deletes_the_key_and_prunes_empty_parents() {
+        let mut doc = ConfigDocument::from_str(
+            "[animation.windows_in]\nshader = \"shaders/reveal.glsl\"\nduration_ms = 150\n",
+        )
+        .unwrap();
+        assert!(doc.remove_leaf(&["animation", "windows_in", "shader"]));
+        assert!(
+            doc.get_string(&["animation", "windows_in", "shader"])
+                .is_none()
+        );
+        // duration_ms survives; the emptied window_in table remains
+        // because it still holds a key.
+        assert_eq!(
+            doc.get_integer(&["animation", "windows_in", "duration_ms"]),
+            Some(150)
+        );
+        // A second removal finds nothing.
+        assert!(!doc.remove_leaf(&["animation", "windows_in", "shader"]));
     }
 
     #[test]

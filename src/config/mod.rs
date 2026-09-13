@@ -7,5 +7,6 @@ pub mod outputs;
 pub mod rules;
 pub mod schema;
 pub mod settings;
+pub mod shaders;
 pub mod state;
 pub mod validate;

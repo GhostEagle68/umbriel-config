@@ -78,6 +78,26 @@ pub fn load_chain(main: &ConfigDocument, main_path: &Path) -> IncludeChain {
     chain
 }
 
+/// Every path named by the main document's include directives —
+/// `[include].files` and `[include.optional].files` — expanded like
+/// umbriel's loader, whether or not the files exist or loaded. The
+/// include-gap checks compare against this, not the loaded chain: a
+/// listed-but-broken file still counts as included.
+pub fn listed_paths(main: &ConfigDocument, main_path: &Path) -> Vec<PathBuf> {
+    let Some(base_dir) = main_path.parent() else {
+        return Vec::new();
+    };
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let mut paths = Vec::new();
+    let directives: [&[&str]; 2] = [&["include", "files"], &["include", "optional", "files"]];
+    for key in directives {
+        for raw in main.get_strings(key).unwrap_or_default() {
+            paths.push(expand_path(&raw, base_dir, home.as_deref()));
+        }
+    }
+    paths
+}
+
 /// umbriel-style path expansion: `~`/`~/` against the home directory,
 /// `$VAR` and `${VAR}` from the environment, relative paths joined to the
 /// including file's directory.
@@ -129,6 +149,27 @@ fn expand_path(raw: &str, base_dir: &Path, home: Option<&Path>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listed_paths_covers_regular_and_optional_includes() {
+        let main = ConfigDocument::from_str(
+            "[include]\nfiles = [\"keybinds.toml\", \"~/shared.toml\"]\n\n[include.optional]\nfiles = [\"noctalia.toml\"]\n",
+        )
+        .unwrap();
+        let path = Path::new("/home/tester/.config/umbriel/config.toml");
+        let listed = listed_paths(&main, path);
+        assert_eq!(
+            listed[0],
+            PathBuf::from("/home/tester/.config/umbriel/keybinds.toml")
+        );
+        // The tilde entry expands against the process HOME, so only its
+        // tail is asserted.
+        assert!(listed[1].ends_with("shared.toml"));
+        assert_eq!(
+            listed[2],
+            PathBuf::from("/home/tester/.config/umbriel/noctalia.toml")
+        );
+    }
 
     #[test]
     fn expand_path_joins_resolves_and_expands_tilde() {

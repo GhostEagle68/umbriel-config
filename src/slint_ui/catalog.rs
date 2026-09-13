@@ -234,6 +234,13 @@ pub const PAGES: &[Page] = &[
         ],
     },
     Page {
+        id: "shaders",
+        title: "Shaders",
+        description: "Custom GLSL animation effects: discover, download, and assign them to animation events.",
+        group: "look",
+        cards: &[],
+    },
+    Page {
         id: "input",
         title: "Input basics",
         description: "Pasting and window-drag behavior.",

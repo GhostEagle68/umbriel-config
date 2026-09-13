@@ -93,6 +93,30 @@ export struct RuleCard {
     setting-rows: [SettingRow],
 }
 
+export struct ShaderInfo {
+    name: string,
+    // Value written into a config (relative or absolute path).
+    value: string,
+    source: string,
+    description: string,
+    // Why umbriel would reject the file; empty when usable.
+    invalid: string,
+}
+
+// One animation event's shader assignment row.
+export struct ShaderAssignment {
+    // Dotted schema key, e.g. animation.windows_in.shader.
+    key: string,
+    label: string,
+    // Dropdown: index 0 = built-in, then shaders in order.
+    choices: [string],
+    // Index into choices of the event's current shader; -1 marks a
+    // current value that no scan found (missing or external file).
+    current: int,
+    // The raw current value, for the missing-file warning.
+    current-value: string,
+}
+
 
 // One changed key, as shown in the save popup.
 export struct SaveEntry {
@@ -113,7 +137,7 @@ export struct SectionNav {
     is-header: bool,
 }
 
-export enum Page { section, search, settings, backups, keybinds, outputs, rules }
+export enum Page { section, search, settings, backups, keybinds, outputs, rules, shaders }
 
 // Small token-driven button; std-widgets are avoided until the styled-page
 // pass so the whole shell carries one identity from day one.
@@ -1949,6 +1973,228 @@ component RulePage inherits Rectangle {
     }
 }
 
+// Shaders page: the library of discovered GLSL effects plus the
+// per-event assignment rows. Assignments flow through the normal
+// set-value path (dirty → Save → validate); "(built-in)" removes the
+// key so umbriel's default animation applies.
+component ShadersPage inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <[ShaderInfo]> shaders;
+    in property <[ShaderAssignment]> assignments;
+    in property <string> download-note;
+    in property <bool> include-missing;
+    in-out property <bool> downloading;
+    callback download();
+    callback assign(string, string);
+    callback clear(string);
+    callback fix-include();
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            ActionButton {
+                text: root.downloading ? "Downloading…" : "Download community shaders";
+                enabled: !root.downloading;
+                clicked => { root.download(); }
+            }
+
+            if root.download-note != "": Text {
+                text: root.download-note;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                wrap: TextWrap.word-wrap;
+                horizontal-stretch: 1;
+            }
+        }
+
+        // A shaders.toml the include chain never loads — umbriel would
+        // silently ignore every assignment in it.
+        if root.include-missing: Rectangle {
+            background: Theme.bg-1;
+            border-radius: Theme.radius-m;
+            border-width: 1px;
+            border-color: Theme.warning;
+
+            HorizontalLayout {
+                padding: Theme.space-m;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: "shaders.toml in your config folder is not in your [include] list so umbriel will ignore it.";
+                    color: Theme.warning;
+                    font-size: Theme.font-small;
+                    wrap: TextWrap.word-wrap;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                ActionButton {
+                    text: "Add to includes";
+                    clicked => { root.fix-include(); }
+                }
+            }
+        }
+
+        // ── assignments ─────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Assignments";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    for row in root.assignments: HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: row.label;
+                            width: 260px;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            width: 300px;
+                            model: row.choices;
+                            current-index: row.current < 0 ? 0 : row.current;
+                            selected => {
+                                if (self.current-index == 0) {
+                                    root.clear(row.key);
+                                } else {
+                                    root.assign(row.key, root.shaders[self.current-index - 1].value);
+                                }
+                            }
+                        }
+
+                        if row.current < 0 && row.current-value != "": Text {
+                            text: "⚠ " + row.current-value + " — file not found";
+                            color: Theme.warning;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            wrap: TextWrap.word-wrap;
+                            horizontal-stretch: 1;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── the library ─────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Available shaders";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            for shader in root.shaders: VerticalLayout {
+                spacing: Theme.space-xs;
+
+                Text {
+                    text: shader.name;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    font-weight: 700;
+                }
+
+                Rectangle {
+                    background: Theme.bg-1;
+                    border-radius: Theme.radius-m;
+
+                    VerticalLayout {
+                        padding: Theme.space-m;
+                        spacing: Theme.space-s;
+
+                        if shader.description != "": Text {
+                            text: shader.description;
+                            color: Theme.text-1;
+                            wrap: TextWrap.word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Theme.space-m;
+
+                            Text {
+                                text: shader.source;
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            Text {
+                                text: shader.value;
+                                color: Theme.text-2;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+
+                        if shader.invalid != "": Text {
+                            text: "⚠ " + shader.invalid + " — umbriel will use the built-in animation";
+                            color: Theme.warning;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                        }
+                    }
+                }
+            }
+
+            if root.shaders.length == 0: Text {
+                text: "No shaders found. Download the community shaders, or copy .glsl files into a shaders/ folder next to your config.";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                wrap: TextWrap.word-wrap;
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     preferred-width: 960px;
     preferred-height: 640px;
@@ -2009,6 +2255,9 @@ export component AppWindow inherits Window {
     callback toggle-card(string);
     callback toggle-monitor(string);
     callback toggle-rule(int, int);
+    callback shaders-download();
+    callback shader-clear(string);
+    callback shader-fix-include();
     // What's new / changelog overlay.
     in-out property <bool> show-whatsnew;
     in property <string> whatsnew-title;
@@ -2027,6 +2276,11 @@ export component AppWindow inherits Window {
     in property <string> outputs-live-note;
     in-out property <string> outputs-add-name;
     in property <[RuleCard]> rule-cards;
+    in property <[ShaderInfo]> shaders;
+    in property <[ShaderAssignment]> shader-assignments;
+    in property <string> shader-download-note;
+    in property <bool> shader-include-missing;
+    in-out property <bool> shader-downloading;
     in-out property <string> kb-draft-chord;
     in-out property <bool> kb-draft-use-mod;
     in-out property <string> kb-draft-scope;
@@ -2331,6 +2585,27 @@ export component AppWindow inherits Window {
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
                         view-file(i) => { root.view-file(i); }
+                    }
+                }
+
+                if root.page == Page.shaders: shsv := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: shaders-page.preferred-height;
+
+                    shaders-page := ShadersPage {
+                        width: shsv.visible-width;
+                        title: root.page-title;
+                        description: root.page-description;
+                        shaders: root.shaders;
+                        assignments: root.shader-assignments;
+                        download-note: root.shader-download-note;
+                        include-missing: root.shader-include-missing;
+                        downloading <=> root.shader-downloading;
+                        download => { root.shaders-download(); }
+
+                        clear(k) => { root.shader-clear(k); }
+                        fix-include => { root.shader-fix-include(); }
                     }
                 }
 

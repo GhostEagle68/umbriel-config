@@ -15,7 +15,7 @@ use slint::{
 };
 use umbriel_config::config::{
     backups, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema,
-    settings as app_settings, state, validate,
+    settings as app_settings, shaders, state, validate,
 };
 use umbriel_config::{changelog, live, update};
 
@@ -54,6 +54,9 @@ struct Shell {
     live_note: String,
     // Collapsed/expanded cards by stable key; absent = page default.
     card_expanded: BTreeMap<String, bool>,
+    // Discovered GLSL shaders + the last download/scan note.
+    shaders: Vec<shaders::ShaderEntry>,
+    shader_note: String,
 }
 
 /// One guided-setup walk: the curated cards, in visit order. Each step is
@@ -230,6 +233,8 @@ impl Shell {
             guide_monitors: Vec::new(),
             live_note: String::new(),
             card_expanded: BTreeMap::new(),
+            shaders: Vec::new(),
+            shader_note: String::new(),
         };
         shell.reset_saved();
         shell
@@ -380,6 +385,17 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 app.set_page_description(description.into());
                 app.set_page(Page::Outputs);
                 rebuild_outputs(&app, &shell.borrow());
+                return;
+            }
+            // Shaders page: rescan on open — cheap directory walk.
+            if name.as_str() == "shaders" {
+                scan_shaders(&mut shell.borrow_mut());
+                app.set_current_section(name.clone());
+                let (title, description) = page_meta(&name);
+                app.set_page_title(title.into());
+                app.set_page_description(description.into());
+                app.set_page(Page::Shaders);
+                rebuild_shaders(&app, &shell.borrow());
                 return;
             }
             // Rule pages: their own surface, one family per page.
@@ -1076,6 +1092,118 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
     {
         let weak = app.as_weak();
+        app.on_shaders_download(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let env = discovery::Env::from_process();
+            let target = match env
+                .xdg_config_home
+                .as_deref()
+                .map(PathBuf::from)
+                .map(|dir| dir.join("umbriel/shaders/community"))
+            {
+                Some(target) => target,
+                None => {
+                    app.set_shader_download_note(
+                        "Could not determine the config directory.".into(),
+                    );
+                    return;
+                }
+            };
+            app.set_shader_downloading(true);
+            app.set_shader_download_note(String::new().into());
+            let weak_for_thread = weak.clone();
+            std::thread::spawn(move || {
+                let weak = weak_for_thread;
+                let exists = target.join(".git").is_dir();
+                let url = "https://github.com/noctalia-dev/community-umbriel-shaders.git";
+                let result = if exists {
+                    std::process::Command::new("git")
+                        .args(["-C", &target.to_string_lossy(), "pull", "--ff-only"])
+                        .output()
+                } else {
+                    let _ = std::fs::create_dir_all(target.parent().unwrap());
+                    std::process::Command::new("git")
+                        .args(["clone", "--depth", "1", url, &target.to_string_lossy()])
+                        .output()
+                };
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(app) = weak.upgrade() else { return };
+                    app.set_shader_downloading(false);
+                    let note = match result {
+                        Ok(output) if output.status.success() => {
+                            "Community shaders up to date.".to_owned()
+                        }
+                        Ok(output) => format!(
+                            "git failed: {}",
+                            String::from_utf8_lossy(&output.stderr).trim()
+                        ),
+                        Err(_) => "git is not installed — cannot download.".to_owned(),
+                    };
+                    app.set_shader_download_note(note.into());
+                });
+            });
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_clear(move |key| {
+            let Some(app) = weak.upgrade() else { return };
+            let event = match key.rsplit('.').nth(1) {
+                Some(event) => event.to_string(),
+                None => return,
+            };
+            let target = {
+                let shell = shell.borrow();
+                let docs: Vec<&ConfigDocument> = shell
+                    .includes
+                    .docs
+                    .iter()
+                    .map(|inc| &inc.doc)
+                    .chain(std::iter::once(&shell.doc))
+                    .collect();
+                shaders::current_assignment(&docs, &event).map(|(_, index)| index)
+            };
+            if let Some(doc_index) = target {
+                doc_at_mut(&mut shell.borrow_mut(), doc_index).remove_leaf(&[
+                    "animation",
+                    &event,
+                    "shader",
+                ]);
+                let shell = shell.borrow();
+                app.set_dirty(shell.any_modified());
+                rebuild_shaders(&app, &shell);
+            }
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_shader_fix_include(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let Some(entry) = ({
+                let shell = shell.borrow();
+                shaders::missing_include(&shell.doc, &shell.path)
+            }) else {
+                return;
+            };
+            {
+                let mut shell = shell.borrow_mut();
+                let mut files = shell
+                    .doc
+                    .get_strings(&["include", "files"])
+                    .unwrap_or_default();
+                files.push(entry);
+                shell.doc.set_strings(&["include", "files"], &files);
+            }
+            let shell = shell.borrow();
+            app.set_status("Added shaders.toml to [include] — save to apply.".into());
+            app.set_dirty(shell.any_modified());
+            rebuild_shaders(&app, &shell);
+        });
+    }
+    {
+        let weak = app.as_weak();
         let shell = Rc::clone(&shell);
         app.on_outputs_refresh(move || {
             let Some(app) = weak.upgrade() else { return };
@@ -1705,6 +1833,11 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             let shell = shell.borrow();
             app.set_dirty(shell.any_modified());
             refresh_row(app, &shell, key);
+            // Shader assignments live on their own page; refresh the
+            // assignment dropdowns after a change.
+            if key.starts_with("animation.") && key.ends_with(".shader") {
+                rebuild_shaders(app, &shell);
+            }
             // A new resolution changes which refreshes exist — rebuild
             // that dropdown too, even if its text stayed the same.
             if key.starts_with("output.") && key.ends_with(".resolution") {
@@ -2462,7 +2595,12 @@ fn catalog_page_cards(shell: &Shell, page: &catalog::Page) -> Vec<SettingsCard> 
         let rows: Vec<SettingRow> = shell
             .schema
             .iter()
-            .filter(|entry| entry.section == card.section)
+            // Shader paths belong to the Shaders page's assignment UI.
+            .filter(|entry| {
+                entry.section == card.section
+                    && !(entry.section.starts_with("animation.")
+                        && entry.path.last() == Some(&"shader".to_owned()))
+            })
             .map(|entry| schema_row(shell, &sets, &labels, &current, entry))
             .collect();
         if !rows.is_empty() {
@@ -3412,6 +3550,75 @@ fn rule_add_target(shell: &Shell, family: &str) -> usize {
     (0..=main)
         .max_by_key(|doc_index| doc_at(shell, *doc_index).rule_count(family))
         .unwrap_or(main)
+}
+
+/// Rescan shader locations: the main config's directory (its
+/// `shaders/` folder holds user copies and the community clone) and
+/// umbriel's installed data directory (bundled effects).
+fn scan_shaders(shell: &mut Shell) {
+    let config_dir = shell
+        .path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    // Bundled shaders live at <data root>/umbriel/shaders; the
+    // packaged default config sits at <data root>/umbriel/config.toml.
+    let env = discovery::Env::from_process();
+    let data_roots: Vec<PathBuf> = discovery::packaged_default(&env)
+        .and_then(|path| path.parent().and_then(Path::parent).map(Path::to_path_buf))
+        .into_iter()
+        .collect();
+    shell.shaders = shaders::scan(&config_dir, &data_roots);
+}
+
+fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
+    let infos: Vec<ShaderInfo> = shell
+        .shaders
+        .iter()
+        .map(|entry| ShaderInfo {
+            name: entry.name.clone().into(),
+            value: entry.value.clone().into(),
+            source: entry.source.label().into(),
+            description: entry.description.clone().into(),
+            invalid: entry.invalid.clone().unwrap_or_default().into(),
+        })
+        .collect();
+    app.set_shaders(Rc::new(VecModel::from(infos)).into());
+
+    let mut docs: Vec<&ConfigDocument> = shell.includes.docs.iter().map(|inc| &inc.doc).collect();
+    docs.push(&shell.doc);
+    let choice_values: Vec<String> = shell
+        .shaders
+        .iter()
+        .map(|entry| entry.value.clone())
+        .collect();
+    let rows: Vec<ShaderAssignment> = shaders::EVENTS
+        .iter()
+        .map(|event| {
+            let mut choices: Vec<SharedString> = vec!["(built-in)".into()];
+            choices.extend(shell.shaders.iter().map(|entry| entry.label.clone().into()));
+            let current = shaders::current_assignment(&docs, event);
+            let index = current.as_ref().and_then(|(value, _)| {
+                choice_values
+                    .iter()
+                    .position(|candidate| candidate == value)
+            });
+            ShaderAssignment {
+                key: format!("animation.{event}.shader").into(),
+                label: prettify(event).into(),
+                choices: Rc::new(VecModel::from(choices)).into(),
+                current: match index {
+                    Some(position) => (position + 1) as i32,
+                    None => -1,
+                },
+                current_value: current.map(|(value, _)| value).unwrap_or_default().into(),
+            }
+        })
+        .collect();
+    app.set_shader_assignments(Rc::new(VecModel::from(rows)).into());
+    app.set_shader_download_note(shell.shader_note.clone().into());
+    app.set_shader_include_missing(shaders::missing_include(&shell.doc, &shell.path).is_some());
+    app.set_changed_count(changed_count(shell));
 }
 
 fn rebuild_rule_page(app: &AppWindow, shell: &Shell) {

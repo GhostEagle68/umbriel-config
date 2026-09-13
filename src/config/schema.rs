@@ -541,6 +541,10 @@ pub fn managed_claims(docs: &[&ConfigDocument]) -> BTreeSet<String> {
     .map(str::to_owned)
     .collect();
     claims.insert("include.files".to_owned());
+    // The Shaders page owns every animation event's shader path.
+    for event in super::shaders::EVENTS {
+        claims.insert(format!("animation.{event}.shader"));
+    }
     for doc in docs {
         for name in outputs::configured(doc) {
             for field in outputs::FIELDS {
