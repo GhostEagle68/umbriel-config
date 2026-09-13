@@ -1985,6 +1985,7 @@ component ShadersPage inherits Rectangle {
     in property <string> download-note;
     in property <bool> include-missing;
     in property <bool> community-installed;
+    in property <bool> update-available;
     in-out property <bool> downloading;
     callback download();
     callback assign(string, string);
@@ -2032,11 +2033,20 @@ component ShadersPage inherits Rectangle {
 
             // Persistent confirmation once the collection is on disk;
             // steps aside while a result note is showing.
-            if root.download-note == "" && root.community-installed: Text {
+            if root.download-note == "" && root.community-installed && !root.update-available: Text {
                 text: "✓ community shaders installed";
                 color: Theme.success;
                 font-size: Theme.font-small;
                 vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            if root.download-note == "" && root.community-installed && root.update-available: Text {
+                text: "✓ installed · update available — Update fetches the newest effects";
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                wrap: TextWrap.word-wrap;
                 horizontal-stretch: 1;
             }
         }
@@ -2294,6 +2304,7 @@ export component AppWindow inherits Window {
     in property <string> shader-download-note;
     in property <bool> shader-include-missing;
     in property <bool> shader-community-installed;
+    in property <bool> shader-update-available;
     in-out property <bool> shader-downloading;
     in-out property <string> kb-draft-chord;
     in-out property <bool> kb-draft-use-mod;
@@ -2616,11 +2627,15 @@ export component AppWindow inherits Window {
                         download-note: root.shader-download-note;
                         include-missing: root.shader-include-missing;
                         community-installed: root.shader-community-installed;
+                        update-available: root.shader-update-available;
                         downloading <=> root.shader-downloading;
                         download => { root.shaders-download(); }
 
                         clear(k) => { root.shader-clear(k); }
                         fix-include => { root.shader-fix-include(); }
+                        // Without this wiring the dropdowns silently no-op:
+                        // no edit, no dirty flag, nothing to save.
+                        assign(k, v) => { root.set-value(k, v); }
                     }
                 }
 

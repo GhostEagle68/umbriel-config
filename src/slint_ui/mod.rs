@@ -59,6 +59,8 @@ struct Shell {
     shader_note: String,
     // The community collection exists on disk (button flips to Update).
     shaders_installed: bool,
+    // The upstream commit check ran this session (once per launch).
+    shaders_update_checked: bool,
 }
 
 /// One guided-setup walk: the curated cards, in visit order. Each step is
@@ -238,6 +240,7 @@ impl Shell {
             shaders: Vec::new(),
             shader_note: String::new(),
             shaders_installed: false,
+            shaders_update_checked: false,
         };
         shell.reset_saved();
         shell
@@ -399,6 +402,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 app.set_page_description(description.into());
                 app.set_page(Page::Shaders);
                 rebuild_shaders(&app, &shell.borrow());
+                maybe_check_shader_updates(&app, &shell);
                 return;
             }
             // Rule pages: their own surface, one family per page.
@@ -1133,6 +1137,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                             // Re-enter the page's own open path: rescans
                             // the library and rebuilds the assignments.
                             app.invoke_section_selected("shaders".into());
+                            app.set_shader_update_available(false);
                             app.set_shader_download_note(note.into());
                         }
                         Err(note) => app.set_shader_download_note(note.into()),
@@ -1853,6 +1858,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         start_update_check(app.as_weak(), Some(env.clone()));
     }
 
+    app.invoke_section_selected("shaders".into()); // TEMP screenshot
     app.run()
         .map_err(|err| anyhow::anyhow!("event loop failed: {err}"))?;
     Ok(())
@@ -2396,12 +2402,15 @@ fn build_save_entries(shell: &Shell) -> Vec<SaveEntry> {
                 .find(|entry| entry.path.join(".") == key.as_str())
                 .map(|entry| entry.label.clone())
                 .unwrap_or_else(|| key.clone());
+            // The popup's ComboBox indexes the main-first destinations
+            // model, not the chain: 0 = main, include i = i + 1.
+            let dest_index = if i == main { 0 } else { i + 1 };
             entries.push(SaveEntry {
                 key: key.clone().into(),
                 label: label.into(),
                 value: value.clone().into(),
                 dest_label: labels.get(i).cloned().unwrap_or_default(),
-                dest_index: i as i32,
+                dest_index: dest_index as i32,
             });
         }
     }
@@ -3553,6 +3562,72 @@ fn rule_add_target(shell: &Shell, family: &str) -> usize {
         .unwrap_or(main)
 }
 
+const SHADERS_UPSTREAM_COMMITS: &str =
+    "https://api.github.com/repos/noctalia-dev/community-umbriel-shaders/commits?per_page=1";
+const SHADERS_UPSTREAM_MARKER: &str = ".upstream";
+
+#[derive(serde::Deserialize)]
+struct UpstreamCommit {
+    sha: String,
+}
+
+/// The community repo's newest commit SHA, or `None` when GitHub is
+/// unreachable — an unknown upstream never flips the update marker.
+fn fetch_latest_commit_sha() -> Option<String> {
+    let commits: Vec<UpstreamCommit> = ureq::get(SHADERS_UPSTREAM_COMMITS)
+        .header("User-Agent", "umbriel-config")
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(10)))
+        .build()
+        .call()
+        .ok()?
+        .body_mut()
+        .read_json()
+        .ok()?;
+    commits.into_iter().next().map(|commit| commit.sha)
+}
+
+/// The SHA recorded when the community collection was last downloaded.
+fn installed_commit_sha(target: &Path) -> Option<String> {
+    std::fs::read_to_string(target.join(SHADERS_UPSTREAM_MARKER))
+        .ok()
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
+}
+
+/// Once per session, compare the downloaded collection's recorded
+/// upstream SHA against GitHub's newest and flip the page's
+/// update-available hint. The verdict lands straight on the window —
+/// the `Shell` can't be reached from a worker thread. An unreachable
+/// upstream or a collection downloaded before SHA marking leaves the
+/// indicator untouched rather than guessing.
+fn maybe_check_shader_updates(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    let marker = {
+        let mut shell = shell.borrow_mut();
+        if !shell.shaders_installed || shell.shaders_update_checked {
+            return;
+        }
+        shell.shaders_update_checked = true;
+        let target = shell
+            .path
+            .parent()
+            .map(|dir| dir.join("shaders/community"))
+            .unwrap_or_default();
+        installed_commit_sha(&target)
+    };
+    let weak = app.as_weak();
+    std::thread::spawn(move || {
+        let Some(upstream) = fetch_latest_commit_sha() else {
+            return;
+        };
+        let update_available = marker.as_deref() != Some(upstream.as_str());
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(app) = weak.upgrade() else { return };
+            app.set_shader_update_available(update_available);
+        });
+    });
+}
+
 /// Download the community shader collection as a tarball over HTTPS —
 /// no git required — and unpack it into `<config dir>/shaders/community`.
 /// The directory is app-managed: a re-download replaces it wholesale
@@ -3563,6 +3638,9 @@ fn download_community_shaders(target: &Path) -> Result<String, String> {
     const URL: &str =
         "https://github.com/noctalia-dev/community-umbriel-shaders/archive/refs/heads/main.tar.gz";
     let updating = target.exists();
+    // Recorded so the page can tell "up to date" from "updates waiting".
+    // Best effort: a failed lookup just leaves no marker.
+    let upstream_sha = fetch_latest_commit_sha();
     let archive = ureq::get(URL)
         .header("User-Agent", "umbriel-config")
         .config()
@@ -3623,6 +3701,9 @@ fn download_community_shaders(target: &Path) -> Result<String, String> {
             "Could not install into {}: {err}",
             target.display()
         ));
+    }
+    if let Some(sha) = upstream_sha {
+        let _ = std::fs::write(target.join(SHADERS_UPSTREAM_MARKER), format!("{sha}\n"));
     }
     Ok(if updating {
         "Community shaders updated.".to_owned()
