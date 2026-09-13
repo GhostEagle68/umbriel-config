@@ -594,10 +594,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                     let saved = shell.saved.get(i);
                     let current: BTreeMap<String, String> =
                         doc_at(&shell, i).leaf_values().into_iter().collect();
-                    for (key, value) in &current {
-                        if saved.and_then(|values| values.get(key)) != Some(value) {
-                            changed.push(key.clone());
-                        }
+                    for (key, _) in diff_against_saved(&current, saved) {
+                        changed.push(key);
                     }
                 }
                 for key in &changed {
@@ -2365,8 +2363,32 @@ fn doc_at(shell: &Shell, file_index: usize) -> &ConfigDocument {
     }
 }
 
-/// Number of chain keys whose current value differs from the saved
-/// snapshot (newly created keys count too).
+/// Keys whose state differs from the saved snapshot, as `(key,
+/// current value)` — `None` marks a deletion: the snapshot has the key
+/// but the doc no longer does (e.g. a shader cleared back to no
+/// shader). Deletions are changes like any other; the save popup,
+/// count, and discard all go through this one diff.
+fn diff_against_saved(
+    current: &BTreeMap<String, String>,
+    saved: Option<&BTreeMap<String, String>>,
+) -> Vec<(String, Option<String>)> {
+    let mut diff: Vec<(String, Option<String>)> = current
+        .iter()
+        .filter(|(key, value)| saved.and_then(|values| values.get(*key)) != Some(*value))
+        .map(|(key, value)| (key.clone(), Some(value.clone())))
+        .collect();
+    if let Some(saved) = saved {
+        for key in saved.keys() {
+            if !current.contains_key(key) {
+                diff.push((key.clone(), None));
+            }
+        }
+    }
+    diff
+}
+
+/// Number of chain keys whose current state differs from the saved
+/// snapshot (newly created keys and deletions count too).
 fn changed_count(shell: &Shell) -> i32 {
     let main = shell.includes.docs.len();
     let mut count = 0;
@@ -2374,16 +2396,13 @@ fn changed_count(shell: &Shell) -> i32 {
         let saved = shell.saved.get(i);
         let current: BTreeMap<String, String> =
             doc_at(shell, i).leaf_values().into_iter().collect();
-        for (key, value) in &current {
-            if saved.and_then(|values| values.get(key)) != Some(value) {
-                count += 1;
-            }
-        }
+        count += diff_against_saved(&current, saved).len() as i32;
     }
     count
 }
 
-/// The current diff across the chain, in save-popup form.
+/// The current diff across the chain, in save-popup form. A deletion
+/// shows as `(removed)` so a cleared key is auditable and savable.
 fn build_save_entries(shell: &Shell) -> Vec<SaveEntry> {
     let main = shell.includes.docs.len();
     let labels = setting_labels(shell);
@@ -2392,10 +2411,7 @@ fn build_save_entries(shell: &Shell) -> Vec<SaveEntry> {
         let saved = shell.saved.get(i);
         let current: BTreeMap<String, String> =
             doc_at(shell, i).leaf_values().into_iter().collect();
-        for (key, value) in &current {
-            if saved.and_then(|values| values.get(key)) == Some(value) {
-                continue;
-            }
+        for (key, value) in diff_against_saved(&current, saved) {
             let label = shell
                 .schema
                 .iter()
@@ -2408,7 +2424,7 @@ fn build_save_entries(shell: &Shell) -> Vec<SaveEntry> {
             entries.push(SaveEntry {
                 key: key.clone().into(),
                 label: label.into(),
-                value: value.clone().into(),
+                value: value.unwrap_or_else(|| "(removed)".to_owned()).into(),
                 dest_label: labels.get(i).cloned().unwrap_or_default(),
                 dest_index: dest_index as i32,
             });
@@ -2417,13 +2433,25 @@ fn build_save_entries(shell: &Shell) -> Vec<SaveEntry> {
     entries
 }
 
-/// Restore one key to its saved on-disk value; brand-new keys are removed.
+/// Restore one key to its saved on-disk value; brand-new keys are
+/// removed. A deleted key still lives in its snapshot — that decides
+/// which document gets it back.
 fn reset_key(shell: &mut Shell, key: &str) {
     let sets = chain_path_sets(shell);
-    let Some(home) = entry_home(&sets, key) else {
-        return;
-    };
     let main = shell.includes.docs.len();
+    let home = match entry_home(&sets, key) {
+        Some(home) => home,
+        // The key is gone from every document; its snapshot knows where
+        // it was before the delete.
+        None => match shell
+            .saved
+            .iter()
+            .position(|values| values.contains_key(key))
+        {
+            Some(home) => home,
+            None => return,
+        },
+    };
     let saved_repr = shell
         .saved
         .get(home)
@@ -3756,7 +3784,7 @@ fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
     let rows: Vec<ShaderAssignment> = shaders::EVENTS
         .iter()
         .map(|event| {
-            let mut choices: Vec<SharedString> = vec!["(built-in)".into()];
+            let mut choices: Vec<SharedString> = vec!["(no shader)".into()];
             choices.extend(shell.shaders.iter().map(|entry| entry.label.clone().into()));
             let current = shaders::current_assignment(&docs, event);
             let index = current.as_ref().and_then(|(value, _)| {
@@ -4172,6 +4200,30 @@ mod tests {
         assert_eq!(setup_mode(true, false), SetupMode::FreshWithUmbriel);
         assert_eq!(setup_mode(false, true), SetupMode::MissingUmbriel);
         assert_eq!(setup_mode(false, false), SetupMode::PlainInstall);
+    }
+
+    #[test]
+    fn diff_against_saved_includes_deletions() {
+        // The shader-clear regression: a key removed from the doc must
+        // still count as a change, or Save finds "nothing to save".
+        let saved_map = BTreeMap::from([
+            ("a.changed".to_owned(), "1".to_owned()),
+            ("b.kept".to_owned(), "2".to_owned()),
+            ("c.removed".to_owned(), "3".to_owned()),
+        ]);
+        let current = BTreeMap::from([
+            ("a.changed".to_owned(), "9".to_owned()),
+            ("b.kept".to_owned(), "2".to_owned()),
+        ]);
+        assert_eq!(
+            diff_against_saved(&current, Some(&saved_map)),
+            vec![
+                ("a.changed".to_owned(), Some("9".to_owned())),
+                ("c.removed".to_owned(), None),
+            ]
+        );
+        // No snapshot yet: every current key counts as new.
+        assert_eq!(diff_against_saved(&current, None).len(), 2);
     }
 
     #[test]
