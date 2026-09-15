@@ -392,7 +392,9 @@ component SettingRowView inherits Rectangle {
 
             Text {
                 text: setting.label;
-                width: 260px;
+                min-width: 130px;
+                max-width: 260px;
+                horizontal-stretch: 1;
                 wrap: TextWrap.word-wrap;
                 vertical-alignment: center;
             }
@@ -661,7 +663,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Config file";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             wrap: TextWrap.word-wrap;
                             vertical-alignment: center;
                         }
@@ -682,7 +686,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Includes";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             wrap: TextWrap.word-wrap;
                             vertical-alignment: center;
                         }
@@ -717,7 +723,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Schema";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             wrap: TextWrap.word-wrap;
                             vertical-alignment: center;
                         }
@@ -770,7 +778,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Theme";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -816,7 +826,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Automatic checks";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             wrap: TextWrap.word-wrap;
                             vertical-alignment: center;
                         }
@@ -838,7 +850,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Latest version";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             wrap: TextWrap.word-wrap;
                             vertical-alignment: center;
                         }
@@ -871,7 +885,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "New release";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -913,7 +929,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Compositor";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -934,7 +952,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Latest commit";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             wrap: TextWrap.word-wrap;
                             vertical-alignment: center;
                         }
@@ -957,7 +977,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Repository";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -998,7 +1020,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Walkthrough";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             wrap: TextWrap.word-wrap;
                             vertical-alignment: center;
                         }
@@ -1019,7 +1043,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Start";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -1061,7 +1087,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Version";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -1081,7 +1109,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Links";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -1100,7 +1130,9 @@ component SettingsPage inherits Rectangle {
 
                         Text {
                             text: "Toolkit";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -1184,7 +1216,9 @@ component BackupsPage inherits Rectangle {
 
                         Text {
                             text: "Save backups to";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             wrap: TextWrap.word-wrap;
                             vertical-alignment: center;
                         }
@@ -1208,7 +1242,9 @@ component BackupsPage inherits Rectangle {
 
                         Text {
                             text: "Keep";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             wrap: TextWrap.word-wrap;
                             vertical-alignment: center;
                         }
@@ -1396,7 +1432,9 @@ component KeybindsPage inherits Rectangle {
             spacing: Theme.space-m;
 
             LineEdit {
-                width: 260px;
+                min-width: 130px;
+                max-width: 260px;
+                horizontal-stretch: 1;
                 placeholder-text: "Search keybinds";
                 text <=> root.search;
                 edited(t) => { root.search-edited(t); }
@@ -1438,7 +1476,9 @@ component KeybindsPage inherits Rectangle {
 
                         Text {
                             text: "Chord";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -1464,7 +1504,8 @@ component KeybindsPage inherits Rectangle {
                         }
 
                         if !root.capturing: LineEdit {
-                            width: 170px;
+                            min-width: 100px;
+                            horizontal-stretch: 1;
                             text <=> root.draft-chord;
                             placeholder-text: "Return";
                         }
@@ -1487,7 +1528,9 @@ component KeybindsPage inherits Rectangle {
 
                         Text {
                             text: "Action";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -1504,7 +1547,9 @@ component KeybindsPage inherits Rectangle {
 
                         Text {
                             text: "Parameter";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -1521,7 +1566,9 @@ component KeybindsPage inherits Rectangle {
 
                         Text {
                             text: "Behavior";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -1544,7 +1591,9 @@ component KeybindsPage inherits Rectangle {
 
                         Text {
                             text: "Submap";
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
 
@@ -1858,7 +1907,9 @@ component OutputsPage inherits Rectangle {
 
                     Text {
                         text: "Connector name";
-                        width: 260px;
+                        min-width: 130px;
+                        max-width: 260px;
+                        horizontal-stretch: 1;
                         vertical-alignment: center;
                     }
 
@@ -2139,7 +2190,9 @@ component ShadersPage inherits Rectangle {
 
                         Text {
                             text: row.label;
-                            width: 260px;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
                             wrap: TextWrap.word-wrap;
                             vertical-alignment: center;
                         }
@@ -2744,8 +2797,12 @@ export component AppWindow inherits Window {
                     horizontal-stretch: 1;
                 }
 
+                // Flexes with the window between a usable minimum and a
+                // compact maximum; the spacer keeps the rest.
                 LineEdit {
-                    width: 200px;
+                    min-width: 160px;
+                    max-width: 320px;
+                    horizontal-stretch: 1;
                     placeholder-text: "Search Settings";
                     edited(t) => { root.search-edited(t); }
                 }
@@ -2883,7 +2940,8 @@ export component AppWindow inherits Window {
                     viewport-height: keybinds-page.preferred-height;
 
                     keybinds-page := KeybindsPage {
-                        width: kbv.visible-width;
+                        width: min(1100px, kbv.visible-width);
+                        x: (kbv.visible-width - self.width) / 2;
                         rows: root.keybind-rows;
                         search <=> root.keybind-search;
                         action-choices: root.action-choices;
@@ -2913,7 +2971,8 @@ export component AppWindow inherits Window {
                     viewport-height: outputs-page.preferred-height;
 
                     outputs-page := OutputsPage {
-                        width: opsv.visible-width;
+                        width: min(1100px, opsv.visible-width);
+                        x: (opsv.visible-width - self.width) / 2;
                         title: root.page-title;
                         description: root.page-description;
                         monitors: root.monitors;
@@ -2937,7 +2996,8 @@ export component AppWindow inherits Window {
                     viewport-height: rule-page.preferred-height;
 
                     rule-page := RulePage {
-                        width: rpv.visible-width;
+                        width: min(1100px, rpv.visible-width);
+                        x: (rpv.visible-width - self.width) / 2;
                         title: root.page-title;
                         description: root.page-description;
                         rule-cards: root.rule-cards;
@@ -2958,7 +3018,8 @@ export component AppWindow inherits Window {
                     viewport-height: shaders-page.preferred-height;
 
                     shaders-page := ShadersPage {
-                        width: shsv.visible-width;
+                        width: min(1100px, shsv.visible-width);
+                        x: (shsv.visible-width - self.width) / 2;
                         title: root.page-title;
                         description: root.page-description;
                         shaders: root.shaders;
@@ -2992,7 +3053,8 @@ export component AppWindow inherits Window {
                     // ScrollView's visible width, so no intrinsic-size
                     // feedback cycles.
                     section-page := CategoryPage {
-                        width: svs.visible-width;
+                        width: min(880px, svs.visible-width);
+                        x: (svs.visible-width - self.width) / 2;
                         title: root.page-title;
                         description: root.page-description;
                         cards: root.cards;
@@ -3005,8 +3067,10 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if root.page == Page.search: ScrollView {
+                if root.page == Page.search: sev := ScrollView {
                     VerticalLayout {
+                        width: min(880px, sev.visible-width);
+                        x: (sev.visible-width - self.width) / 2;
                         padding: Theme.space-l;
                         spacing: Theme.space-m;
                         alignment: start;
@@ -3034,7 +3098,8 @@ export component AppWindow inherits Window {
                     viewport-height: settings-page.preferred-height;
 
                     settings-page := SettingsPage {
-                        width: stv.visible-width;
+                        width: min(880px, stv.visible-width);
+                        x: (stv.visible-width - self.width) / 2;
                         app-version: root.app-version;
                         umbriel-missing: root.umbriel-missing;
                         check-updates-on-start: root.check-updates-on-start;
@@ -3064,7 +3129,8 @@ export component AppWindow inherits Window {
                     viewport-height: backups-page.preferred-height;
 
                     backups-page := BackupsPage {
-                        width: bsv.visible-width;
+                        width: min(880px, bsv.visible-width);
+                        x: (bsv.visible-width - self.width) / 2;
                         backup-note: root.backup-note;
                         backups: root.backup-choices;
                         selected-backup: root.backup-selected;
@@ -3654,7 +3720,9 @@ export component AppWindow inherits Window {
                     }
 
                     LineEdit {
-                        width: 260px;
+                        min-width: 130px;
+                        max-width: 260px;
+                        horizontal-stretch: 1;
                         text <=> root.shader-editor-name;
                         enabled: !root.shader-editor-editing;
                         placeholder-text: "my-effect";
