@@ -1,0 +1,554 @@
+// Settings page: app updates, the compositor's latest commit, about.
+
+import { AboutSlint, CheckBox, ComboBox } from "std-widgets.slint";
+import { ActionButton } from "../widgets.slint";
+import { Theme } from "../theme.slint";
+
+export component SettingsPage inherits Rectangle {
+    in property <string> app-version;
+    in property <bool> check-updates-on-start;
+    in property <string> update-note;
+    in property <bool> update-available;
+    in property <string> update-notes;
+    in property <string> upstream-note;
+    in property <bool> umbriel-missing;
+    in property <bool> dark-mode: true;
+    in property <string> config-path;
+    in property <[string]> include-files;
+    in property <string> sync-note;
+    in property <bool> sync-clean: true;
+    callback check-now();
+    callback toggled(bool);
+    callback theme-selected(bool);
+    callback open-url(string);
+    callback relaunch();
+    callback sync-schema();
+    callback view-changelog();
+    callback view-update-notes();
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: "Settings";
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        // ── your config ─────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Your config";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Config file";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.config-path;
+                            color: Theme.text-1;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Includes";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        VerticalLayout {
+                            spacing: 2px;
+
+                            for file in root.include-files: Text {
+                                text: file;
+                                color: Theme.text-1;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                wrap: TextWrap.word-wrap;
+                            }
+
+                            Text {
+                                text: "none";
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                visible: root.include-files.length == 0;
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Schema";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "Sync schema";
+                            clicked => { root.sync-schema(); }
+                        }
+
+                        Text {
+                            text: root.sync-note;
+                            color: root.sync-clean ? Theme.success : Theme.accent;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            visible: root.sync-note != "";
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── appearance ──────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Appearance";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Theme";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            width: 140px;
+                            model: ["Dark", "Light"];
+                            current-index: root.dark-mode ? 0 : 1;
+                            selected => {
+                                root.theme-selected(self.current-index == 0);
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── updates ─────────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Updates";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Automatic checks";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        CheckBox {
+                            text: "Check for updates on startup";
+                            checked: root.check-updates-on-start;
+                            toggled => { root.toggled(self.checked); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Latest version";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "Check for update";
+                            clicked => { root.check-now(); }
+                        }
+
+                        ActionButton {
+                            text: "View changelog";
+                            clicked => { root.view-changelog(); }
+                        }
+
+                        Text {
+                            horizontal-stretch: 1;
+                            text: root.update-note == ""
+                                ? "Checks against GitHub releases"
+                                : root.update-note;
+                            color: root.update-available ? Theme.success : Theme.text-2;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            wrap: TextWrap.word-wrap;
+                        }
+                    }
+
+                    if root.update-available && root.update-notes != "": HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "New release";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "What's new in this release";
+                            clicked => { root.view-update-notes(); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── umbriel (the compositor) ────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Umbriel";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Compositor";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.umbriel-missing
+                                ? "Not detected on this system."
+                                : "Umbriel is detected.";
+                            color: root.umbriel-missing ? Theme.warning : Theme.success;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Latest commit";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.upstream-note == ""
+                                ? "The compositor's latest commit loads while you're here."
+                                : root.upstream-note;
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Repository";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "Open repository";
+                            clicked => { root.open-url("https://github.com/noctalia-dev/umbriel"); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── guided setup ────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Guided setup";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Walkthrough";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "Walk through the settings people change most: outputs, layout, input, general, appearance. Values you already set are left alone.";
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Start";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "Run guided setup";
+                            clicked => { root.relaunch(); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── about ───────────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "About";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Version";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "umbriel-config v" + root.app-version;
+                            color: Theme.text-1;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Links";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: "Source & issue tracker";
+                            clicked => { root.open-url("https://github.com/GhostEagle68/umbriel-config"); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Toolkit";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+
+                        // The widget asks for 100% of its parent — pin
+                        // it to badge size or it swallows the page.
+                        AboutSlint {
+                            width: 200px;
+                            height: 100px;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

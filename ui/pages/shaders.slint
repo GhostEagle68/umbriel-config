@@ -1,0 +1,541 @@
+// Shaders page and the shader editor's reusable panels: the library of
+// discovered GLSL effects, the per-event assignment rows, the visual
+// effect builder, and the live preview row.
+
+import { ComboBox, ScrollView, Slider } from "std-widgets.slint";
+import { ActionButton } from "../widgets.slint";
+import { ShaderAssignment, ShaderInfo, ShaderStep } from "../types.slint";
+import { Theme } from "../theme.slint";
+
+// Shaders page: the library plus the per-event assignment rows.
+// Assignments flow through the normal set-value path (dirty → Save →
+// validate); "(no shader)" removes the key so umbriel's default
+// animation applies.
+export component ShadersPage inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <[ShaderInfo]> shaders;
+    in property <[ShaderAssignment]> assignments;
+    in property <string> download-note;
+    in property <bool> include-missing;
+    in property <bool> community-installed;
+    in property <bool> update-available;
+    in-out property <bool> downloading;
+    callback download();
+    callback assign(string, string);
+    callback clear(string);
+    callback fix-include();
+    callback editor-new();
+    callback editor-edit(string);
+    callback editor-fork(string, string);
+    callback editor-delete(string);
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            ActionButton {
+                text: "New shader";
+                clicked => { root.editor-new(); }
+            }
+
+            ActionButton {
+                text: root.downloading
+                    ? "Downloading…"
+                    : (root.community-installed ? "Update community shaders" : "Download community shaders");
+                enabled: !root.downloading;
+                clicked => { root.download(); }
+            }
+
+            if root.download-note != "": Text {
+                text: root.download-note;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                wrap: TextWrap.word-wrap;
+                horizontal-stretch: 1;
+            }
+
+            // Persistent confirmation once the collection is on disk;
+            // steps aside while a result note is showing.
+            if root.download-note == "" && root.community-installed && !root.update-available: Text {
+                text: "✓ community shaders installed";
+                color: Theme.success;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            if root.download-note == "" && root.community-installed && root.update-available: Text {
+                text: "✓ installed · update available — Update fetches the newest effects";
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                wrap: TextWrap.word-wrap;
+                horizontal-stretch: 1;
+            }
+        }
+
+        // A shaders.toml the include chain never loads — umbriel would
+        // silently ignore every assignment in it.
+        if root.include-missing: Rectangle {
+            background: Theme.bg-1;
+            border-radius: Theme.radius-m;
+            border-width: 1px;
+            border-color: Theme.warning;
+
+            HorizontalLayout {
+                padding: Theme.space-m;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: "shaders.toml in your config folder is not in your [include] list so umbriel will ignore it.";
+                    color: Theme.warning;
+                    font-size: Theme.font-small;
+                    wrap: TextWrap.word-wrap;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                ActionButton {
+                    text: "Add to includes";
+                    clicked => { root.fix-include(); }
+                }
+            }
+        }
+
+        // ── assignments ─────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Assignments";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-s;
+
+                    for row in root.assignments: HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: row.label;
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            width: 300px;
+                            model: row.choices;
+                            current-index: row.current < 0 ? 0 : row.current;
+                            selected => {
+                                if (self.current-index == 0) {
+                                    root.clear(row.key);
+                                } else {
+                                    root.assign(row.key, root.shaders[self.current-index - 1].value);
+                                }
+                            }
+                        }
+
+                        if row.current < 0 && row.current-value != "": Text {
+                            text: "⚠ " + row.current-value + " — file not found";
+                            color: Theme.warning;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            wrap: TextWrap.word-wrap;
+                            horizontal-stretch: 1;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── the library ─────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Available shaders";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            for shader in root.shaders: VerticalLayout {
+                spacing: Theme.space-xs;
+
+                Text {
+                    text: shader.name;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    font-weight: 700;
+                }
+
+                Rectangle {
+                    background: Theme.bg-1;
+                    border-radius: Theme.radius-m;
+
+                    VerticalLayout {
+                        padding: Theme.space-m;
+                        spacing: Theme.space-s;
+
+                        if shader.description != "": Text {
+                            text: shader.description;
+                            color: Theme.text-1;
+                            wrap: TextWrap.word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Theme.space-m;
+
+                            Text {
+                                text: shader.source;
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            Text {
+                                text: shader.value;
+                                color: Theme.text-2;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+
+                        if shader.invalid != "": Text {
+                            text: "⚠ " + shader.invalid + " — umbriel will use the built-in animation";
+                            color: Theme.warning;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Theme.space-s;
+                            alignment: start;
+
+                            if shader.is-own: ActionButton {
+                                text: "Edit";
+                                clicked => { root.editor-edit(shader.path); }
+                            }
+
+                            if shader.is-own: ActionButton {
+                                text: "Delete";
+                                clicked => { root.editor-delete(shader.path); }
+                            }
+
+                            if !shader.is-own: ActionButton {
+                                text: "Fork";
+                                clicked => { root.editor-fork(shader.path, shader.name); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.shaders.length == 0: Text {
+                text: "No shaders found. Download the community shaders, or copy .glsl files into a shaders/ folder next to your config.";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                wrap: TextWrap.word-wrap;
+            }
+        }
+    }
+}
+
+// The shader editor's effect-builder panel: the step stack plus the
+// Add-an-effect row. Instantiated as a left column on wide editor cards
+// and as a full-width section on narrow ones; all behavior lives behind
+// these callbacks so both placements stay identical.
+export component ShaderBuilderPanel inherits Rectangle {
+    in property <[ShaderStep]> steps;
+    in property <[string]> kinds;
+    callback add(string);
+    callback step-remove(int);
+    callback step-move(int, int);
+    callback step-param(int, int, float);
+
+    VerticalLayout {
+        spacing: Theme.space-s;
+
+        Text {
+            text: "Build an effect";
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            font-weight: 700;
+        }
+
+        // Add row sits above the stack so it never fights the list for
+        // space at the bottom of the panel. The combo flexes to the
+        // column's width, so the row can't overflow into the preview.
+        HorizontalLayout {
+            spacing: Theme.space-s;
+
+            Text {
+                text: "Add an effect:";
+                color: Theme.text-2;
+                vertical-alignment: center;
+            }
+
+            add-kind := ComboBox {
+                min-width: 110px;
+                horizontal-stretch: 1;
+                model: root.kinds;
+            }
+
+            ActionButton {
+                text: "Add";
+                clicked => { root.add(add-kind.current-value); }
+            }
+        }
+
+        // The stack fills the remaining panel height and scrolls when the
+        // steps outgrow it.
+        ScrollView {
+            vertical-stretch: 1;
+            min-height: 120px;
+
+            VerticalLayout {
+                // Pin cards to their natural height: with the default
+                // stretch alignment they would split the whole scroll
+                // height between them and balloon.
+                alignment: start;
+                spacing: Theme.space-s;
+
+                for step in root.steps: Rectangle {
+                    background: Theme.bg-0;
+                    border-radius: Theme.radius-m;
+                    border-width: 1px;
+                    border-color: Theme.border;
+
+                    VerticalLayout {
+                        padding: Theme.space-s;
+                        spacing: Theme.space-xs;
+
+                        HorizontalLayout {
+                            spacing: Theme.space-s;
+
+                            Text {
+                                text: step.label;
+                                color: Theme.text-1;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+
+                            ActionButton {
+                                text: "↑";
+                                clicked => { root.step-move(step.index, -1); }
+                            }
+
+                            ActionButton {
+                                text: "↓";
+                                clicked => { root.step-move(step.index, 1); }
+                            }
+
+                            ActionButton {
+                                text: "×";
+                                clicked => { root.step-remove(step.index); }
+                            }
+                        }
+
+                        if step.p-count > 0: HorizontalLayout {
+                            spacing: Theme.space-m;
+
+                            Text {
+                                text: step.p1-label;
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                min-width: 64px;
+                            }
+
+                            Slider {
+                                minimum: step.p1-min;
+                                maximum: step.p1-max;
+                                value: step.p1-value;
+                                released(v) => { root.step-param(step.index, 0, v); }
+                            }
+                        }
+
+                        if step.p-count > 1: HorizontalLayout {
+                            spacing: Theme.space-m;
+
+                            Text {
+                                text: step.p2-label;
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                min-width: 64px;
+                            }
+
+                            Slider {
+                                minimum: step.p2-min;
+                                maximum: step.p2-max;
+                                value: step.p2-value;
+                                released(v) => { root.step-param(step.index, 1, v); }
+                            }
+                        }
+
+                        if step.p-count > 2: HorizontalLayout {
+                            spacing: Theme.space-m;
+
+                            Text {
+                                text: step.p3-label;
+                                color: Theme.text-2;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                min-width: 64px;
+                            }
+
+                            Slider {
+                                minimum: step.p3-min;
+                                maximum: step.p3-max;
+                                value: step.p3-value;
+                                released(v) => { root.step-param(step.index, 2, v); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The shader editor's live preview: the rendered frame with its scrub
+// slider beside the description and the In/Out toggle. The frame keeps
+// the test texture's 16:9 shape at any width.
+export component ShaderPreviewRow inherits Rectangle {
+    in property <image> source;
+    in property <string> note;
+    in property <bool> direction-in;
+    in-out property <float> progress;
+    callback scrub(float);
+    callback toggle-direction();
+
+    horizontal-stretch: 1;
+
+    HorizontalLayout {
+        spacing: Theme.space-m;
+
+        // Frame column: shrinks on narrow cards, never dominates.
+        VerticalLayout {
+            min-width: 220px;
+            max-width: 360px;
+            horizontal-stretch: 3;
+            spacing: Theme.space-xs;
+
+            Rectangle {
+                height: self.width * 9 / 16;
+                border-radius: Theme.radius-s;
+                border-width: 1px;
+                border-color: Theme.border;
+                clip: true;
+
+                Image {
+                    x: 0;
+                    y: 0;
+                    width: 100%;
+                    height: 100%;
+                    image-fit: ImageFit.contain;
+                    source: root.source;
+                }
+            }
+
+            Slider {
+                minimum: 0;
+                maximum: 1;
+                value <=> root.progress;
+                changed(v) => { root.scrub(v); }
+            }
+        }
+
+        // Description column.
+        VerticalLayout {
+            min-width: 150px;
+            horizontal-stretch: 2;
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Preview";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Text {
+                text: "Scrub the animation on a stand-in window. Typing re-renders at this position; the frame is a fake window, assign the shader to an event to see it for real.";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+
+                Text {
+                    text: "Direction";
+                    color: Theme.text-2;
+                    vertical-alignment: center;
+                }
+
+                ActionButton {
+                    text: root.direction-in ? "In" : "Out";
+                    clicked => { root.toggle-direction(); }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            if root.note != "": Text {
+                text: root.note;
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

@@ -1,0 +1,119 @@
+// Rule page: one card per rule, Match fields then Settings. Every field
+// starts unset — clearing one (or picking "(unset)") removes it from the
+// config. Rules living in an include show a pointer instead of editors.
+
+import { ActionButton, CardHeader, SettingRowView } from "../widgets.slint";
+import { RuleCard } from "../types.slint";
+import { Theme } from "../theme.slint";
+
+export component RulePage inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <[RuleCard]> rule-cards;
+    callback add-rule();
+    callback remove-rule(int, int);
+    callback toggle-rule(int, int);
+    callback set-value(string, string);
+    callback reset-key(string);
+    callback set-slider-value(string, float);
+    callback slider-preview(string, float);
+    callback view-file(int);
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            ActionButton {
+                text: "Add rule";
+                primary: true;
+                clicked => { root.add-rule(); }
+            }
+        }
+
+        for card in root.rule-cards: VerticalLayout {
+            spacing: Theme.space-xs;
+
+            CardHeader {
+                title: card.title;
+                caption: card.file-label != "" ? "in " + card.file-label : "";
+                expanded: card.expanded;
+                toggle => { root.toggle-rule(card.file, card.index); }
+
+                ActionButton {
+                    text: "Remove";
+                    clicked => { root.remove-rule(card.file, card.index); }
+                }
+            }
+
+            if card.expanded: Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+
+                    Text {
+                        text: "Match";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        font-weight: 700;
+                    }
+
+                    for row in card.match-rows: SettingRowView {
+                        setting: row;
+                        set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
+                    }
+
+                    Text {
+                        text: "Settings";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        font-weight: 700;
+                    }
+
+                    for row in card.setting-rows: SettingRowView {
+                        setting: row;
+                        set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
+                    }
+                }
+            }
+        }
+
+        if root.rule-cards.length == 0: Text {
+            text: "No rules yet. Add one, every field starts unset, and only what you fill in is written.";
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+    }
+}

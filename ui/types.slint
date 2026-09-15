@@ -1,0 +1,144 @@
+// Shared structs and enums crossing page boundaries. The Rust side
+// sees the same generated names no matter which file declares them.
+
+export struct SectionRow {
+    label: string,
+    home-label: string,
+    home-section: string,
+    // "" = a setting, "page" = a whole page, "keybind" = a chord that
+    // opens the keybinds page pre-filtered to the query.
+    kind: string,
+}
+export enum ValueKind { unset, boolean, integer, float, text, list, choice, color, curve }
+
+export struct SettingRow {
+    label: string,
+    value: string,
+    key: string,
+    kind: ValueKind,
+    choices: [string],
+    swatch: brush,
+    checked: bool,
+    hint: string,
+    min: float,
+    max: float,
+    // Chain index of the file that owns this key (-1 = not set anywhere).
+    home: int,
+    home-label: string,
+    // Differs from the on-disk saved value.
+    changed: bool,
+    // True while the key isn't set in any file yet.
+    available: bool,
+    // Added by an umbriel update or the last schema sync.
+    is-new: bool,
+    // Live slider feedback for the text box; empty when not dragging.
+    preview: string,
+}
+
+export struct SettingsCard {
+    title: string,
+    // Stable identity for the expansion map; also what toggle-card
+    // sends back.
+    key: string,
+    // Collapsible cards remember their state across rebuilds.
+    expanded: bool,
+    rows: [SettingRow],
+}
+
+export struct KeybindRow {
+    chord: string,
+    summary: string,
+    extras: string,
+    source: string,
+    is-header: bool,
+    is-user: bool,
+    shadowing: bool,
+    index: int,
+}
+export struct MonitorCard {
+    name: string,
+    info: string,
+    connected: bool,
+    configured: bool,
+    removable: bool,
+    expanded: bool,
+    rows: [SettingRow],
+}
+
+export struct RuleCard {
+    title: string,
+    index: int,
+    // Chain document this rule lives in (main = include count).
+    file: int,
+    file-label: string,
+    expanded: bool,
+    match-rows: [SettingRow],
+    setting-rows: [SettingRow],
+}
+
+export struct ShaderInfo {
+    name: string,
+    // Value written into a config (relative or absolute path).
+    value: string,
+    source: string,
+    description: string,
+    // Why umbriel would reject the file; empty when usable.
+    invalid: string,
+    // Absolute file location; is-own marks the user's own shaders
+    // (config directory, outside the community clone) — the only ones
+    // the editor opens for in-place editing and deletion.
+    path: string,
+    is-own: bool,
+}
+
+// One effect-builder step with its (up to three) parameters, padded
+// into a fixed shape for the model.
+export struct ShaderStep {
+    index: int,
+    label: string,
+    p1-label: string,
+    p1-value: float,
+    p1-min: float,
+    p1-max: float,
+    p2-label: string,
+    p2-value: float,
+    p2-min: float,
+    p2-max: float,
+    p3-label: string,
+    p3-value: float,
+    p3-min: float,
+    p3-max: float,
+    p-count: int,
+}
+
+// One animation event's shader assignment row.
+export struct ShaderAssignment {
+    // Dotted schema key, e.g. animation.windows_in.shader.
+    key: string,
+    label: string,
+    // Dropdown: index 0 = built-in, then shaders in order.
+    choices: [string],
+    // Index into choices of the event's current shader; -1 marks a
+    // current value that no scan found (missing or external file).
+    current: int,
+    // The raw current value, for the missing-file warning.
+    current-value: string,
+}
+
+// One changed key, as shown in the save popup.
+export struct SaveEntry {
+    key: string,
+    label: string,
+    value: string,
+    dest-label: string,
+    dest-index: int,
+}
+
+// One sidebar entry: a dimmed header (group caption) or a page row.
+// `label` is what's shown; `id` is what navigation keys off.
+export struct SectionNav {
+    label: string,
+    id: string,
+    new-count: int,
+    is-header: bool,
+}

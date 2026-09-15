@@ -1,0 +1,151 @@
+// Outputs page: one card per monitor (live-detected first, then
+// configured-but-away), the fields underneath, and the add-output card.
+// Removing an output deletes its block — the last one stays.
+
+import { LineEdit } from "std-widgets.slint";
+import { ActionButton, CardHeader, SettingRowView } from "../widgets.slint";
+import { MonitorCard } from "../types.slint";
+import { Theme } from "../theme.slint";
+
+export component OutputsPage inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <[MonitorCard]> monitors;
+    in property <string> live-note;
+    in-out property <string> add-name;
+    callback refresh();
+    callback add(string);
+    callback remove(string);
+    callback toggle-monitor(string);
+    callback set-value(string, string);
+    callback reset-key(string);
+    callback set-slider-value(string, float);
+    callback slider-preview(string, float);
+    callback view-file(int);
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            ActionButton {
+                text: "Refresh";
+                clicked => { root.refresh(); }
+            }
+
+            if root.live-note != "": Text {
+                text: root.live-note;
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                wrap: TextWrap.word-wrap;
+                horizontal-stretch: 1;
+            }
+        }
+
+        for monitor in root.monitors: VerticalLayout {
+            spacing: Theme.space-xs;
+
+            CardHeader {
+                title: monitor.name + (monitor.connected ? "" : " (not connected)");
+                caption: monitor.info;
+                expanded: monitor.expanded;
+                toggle => { root.toggle-monitor(monitor.name); }
+
+                if monitor.configured && monitor.removable: ActionButton {
+                    text: "Remove";
+                    clicked => { root.remove(monitor.name); }
+                }
+            }
+
+            if monitor.expanded: Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+
+                    for row in monitor.rows: SettingRowView {
+                        setting: row;
+                        set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
+                    }
+                }
+            }
+        }
+
+        if root.monitors.length == 0: Text {
+            text: "No outputs connected or configured. Add one below to set its mode, scale, or workspaces, umbriel's defaults apply until then.";
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+
+        // ── add output ──────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            Text {
+                text: "Add output";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                HorizontalLayout {
+                    padding: Theme.space-m;
+                    spacing: Theme.space-m;
+
+                    Text {
+                        text: "Connector name";
+                        min-width: 130px;
+                        max-width: 260px;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+
+                    LineEdit {
+                        width: 220px;
+                        text <=> root.add-name;
+                        placeholder-text: "e.g. DP-3 or eDP-1";
+                        accepted(t) => { root.add(t); }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    ActionButton {
+                        text: "Add";
+                        primary: true;
+                        clicked => { root.add(root.add-name); }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -31,12 +31,12 @@ format-check: format-slint-check
 # Format .slint files in place
 format-slint:
     #!/usr/bin/env sh
-    for f in ui/*.slint; do slint-lsp format -i "$f"; done
+    for f in ui/*.slint ui/pages/*.slint; do slint-lsp format -i "$f"; done
 
 # Check .slint formatting without writing
 format-slint-check:
     #!/usr/bin/env sh
-    for f in ui/*.slint; do
+    for f in ui/*.slint ui/pages/*.slint; do
         slint-lsp format "$f" | diff -u "$f" - || exit 1
     done
 

@@ -1,0 +1,77 @@
+// One settings category page: curated cards of rows, label left /
+// editor right, descriptions under the labels. Also renders the guided
+// setup's steps.
+
+import { Theme } from "../theme.slint";
+import { CardHeader, SettingRowView } from "../widgets.slint";
+import { SettingsCard } from "../types.slint";
+
+export component CategoryPage inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <[SettingsCard]> cards;
+    callback set-value(string, string);
+    callback reset-key(string);
+    callback set-slider-value(string, float);
+    callback slider-preview(string, float);
+    callback view-file(int);
+    callback toggle-card(string);
+
+    // Click-away focus: empty page space falls through to the TouchArea,
+    // which hands focus to the sink and thereby blurs (committing) any
+    // open editor. Declared first so real widgets stay on top.
+    sink := FocusScope { }
+
+    ta := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { sink.focus(); }
+    }
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+        }
+
+        for card in root.cards: VerticalLayout {
+            spacing: Theme.space-xs;
+
+            CardHeader {
+                title: card.title;
+                expanded: card.expanded;
+                toggle => { root.toggle-card(card.key); }
+            }
+
+            if card.expanded: Rectangle {
+                background: Theme.bg-1;
+                border-radius: Theme.radius-m;
+
+                VerticalLayout {
+                    padding: Theme.space-m;
+
+                    for row in card.rows: SettingRowView {
+                        setting: row;
+                        set-value(k, v) => { root.set-value(k, v); }
+                        reset-key(k) => { root.reset-key(k); }
+                        set-slider-value(k, v) => { root.set-slider-value(k, v); }
+                        slider-preview(k, v) => { root.slider-preview(k, v); }
+                        view-file(i) => { root.view-file(i); }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,372 @@
+// Shared widgets: buttons, nav rows, edit fields, and the setting-row
+// renderer used by every page.
+
+import { Theme } from "theme.slint";
+import { CheckBox, ComboBox, LineEdit, Slider } from "std-widgets.slint";
+import { SettingRow, ValueKind } from "types.slint";
+
+// Small token-driven button; std-widgets are avoided so the whole shell
+// carries one identity.
+export component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 28px;
+    width: label.width + 24px;
+    border-radius: Theme.radius-s;
+    background: !root.enabled ? Theme.bg-2
+        : ta.has-hover ? (root.primary ? Theme.accent-hover : Theme.border)
+        : (root.primary ? Theme.accent : Theme.bg-2);
+    opacity: root.enabled ? 1.0 : 0.5;
+
+    label := Text {
+        text: root.text;
+        // White only rides on the accent; a disabled primary sits on the
+        // neutral card color and must stay readable in both designs.
+        color: root.primary && root.enabled ? white : Theme.text-1;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// One sidebar navigation row (group header or page). Headers are small-caps
+// captions (uppercase label comes from the shell); pages indent under them
+// and the selected page carries the accent bar.
+export component NavRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    in property <int> count: 0;
+    in property <bool> header: false;
+    callback selected-fired();
+
+    height: root.header ? 22px : 30px;
+    border-radius: Theme.radius-s;
+    background: root.header ? transparent
+        : root.selected ? Theme.accent-soft
+        : ta.has-hover ? Theme.bg-2
+        : transparent;
+
+    // Selected page: accent bar hugging the row's left edge.
+    if root.selected && !root.header: Rectangle {
+        x: 0;
+        width: 3px;
+        border-radius: Theme.radius-s;
+        background: Theme.accent;
+    }
+
+    Text {
+        x: root.header ? Theme.space-m : Theme.space-m + 16px;
+        text: root.label;
+        color: root.header ? Theme.text-2
+            : root.selected ? Theme.text-1
+            : Theme.text-2;
+        font-size: root.header ? Theme.font-small : Theme.font-body;
+        letter-spacing: root.header ? 1px : 0px;
+        font-weight: root.header ? 700 : 400;
+        vertical-alignment: center;
+    }
+
+    if root.count > 0 && !root.header: Text {
+        x: parent.width - self.preferred-width - Theme.space-m;
+        text: "· " + root.count;
+        color: Theme.accent;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: !root.header;
+        clicked => { root.selected-fired(); }
+    }
+}
+
+// A "setting lives in file X" pointer row used by section and search pages.
+export component PointerRow inherits Rectangle {
+    in property <string> label;
+    in property <string> home-label;
+    callback open();
+
+    height: 32px;
+    border-radius: Theme.radius-s;
+    background: ta.has-hover ? Theme.bg-2 : transparent;
+
+    ta := TouchArea {
+        clicked => { root.open(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-m;
+        padding-right: Theme.space-m;
+        spacing: Theme.space-m;
+
+        Text {
+            text: root.label;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        Text {
+            text: "in " + root.home-label + " — open";
+            color: Theme.accent;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// LineEdit that commits on Enter or when focus leaves with edits pending.
+// `draft` holds the working text so blur can compare against the stored
+// value and only commits real changes.
+export component DraftEdit inherits LineEdit {
+    in property <string> value;
+    callback commit(string);
+
+    property <string> draft: root.value;
+    text <=> draft;
+    changed value => { self.draft = self.value; }
+    accepted(t) => { root.commit(t); }
+    changed has-focus => {
+        if (!self.has-focus && self.draft != root.value) {
+            root.commit(self.draft);
+        }
+    }
+}
+
+// Collapsible card header: disclosure chevron, title, dim caption,
+// then page-specific extras (a Remove button) on the right. Clicking
+// anywhere outside those extras toggles the card.
+export component CardHeader inherits Rectangle {
+    in property <string> title;
+    in property <string> caption;
+    in property <bool> expanded;
+    callback toggle();
+    height: 30px;
+    border-radius: Theme.radius-s;
+    background: ta.has-hover ? Theme.bg-2 : transparent;
+
+    ta := TouchArea {
+        clicked => { root.toggle(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-s;
+        padding-right: Theme.space-m;
+        spacing: Theme.space-m;
+
+        Text {
+            width: 18px;
+            text: root.expanded ? "▾" : "▸";
+            color: Theme.text-2;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.title;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+
+        if root.caption != "": Text {
+            text: root.caption;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            opacity: 0.7;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        if root.caption == "": Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        @children
+    }
+}
+
+// One setting row: changed dot, label, editor, then hint + ownership
+// badge. Extracted from the category pages so the outputs and rules
+// pages render rows with the same tested widgets.
+export component SettingRowView inherits Rectangle {
+    in property <SettingRow> setting;
+    callback set-value(string, string);
+    callback reset-key(string);
+    callback set-slider-value(string, float);
+    callback slider-preview(string, float);
+    callback view-file(int);
+
+    VerticalLayout {
+        spacing: 2px;
+        opacity: setting.available ? 0.55 : 1.0;
+
+        HorizontalLayout {
+            min-height: 32px;
+            spacing: Theme.space-m;
+
+            if setting.changed: Rectangle {
+                width: 7px;
+                VerticalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: 7px;
+                        height: 7px;
+                        border-radius: 4px;
+                        background: Theme.accent;
+                    }
+                }
+            }
+
+            Text {
+                text: setting.label;
+                min-width: 130px;
+                max-width: 260px;
+                horizontal-stretch: 1;
+                wrap: TextWrap.word-wrap;
+                vertical-alignment: center;
+            }
+
+            if setting.is-new: Text {
+                text: "NEW";
+                color: Theme.accent;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            if setting.kind == ValueKind.boolean: CheckBox {
+                checked: setting.checked;
+                toggled => { root.set-value(setting.key, self.checked ? "true" : "false"); }
+            }
+            if setting.kind == ValueKind.integer || setting.kind == ValueKind.float: HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+
+                if setting.max > setting.min && setting.value.to-float() == setting.value.to-float(): Slider {
+                    width: 160px;
+                    minimum: setting.min;
+                    maximum: setting.max;
+                    value: setting.value.to-float();
+                        // A drag detaches the slider's value
+                        // from the binding above, so watch the
+                        // row and push resets/external edits
+                        // back into the thumb.
+                        property <string> watched: setting.value;
+                    changed watched => {
+                        self.value = setting.value.to-float();
+                    }
+                    changed(v) => { root.slider-preview(setting.key, v); }
+                    released(v) => { root.set-slider-value(setting.key, v); }
+                }
+
+                DraftEdit {
+                    width: 140px;
+                    value: setting.preview == "" ? setting.value : setting.preview;
+                    commit(t) => { root.set-value(setting.key, t); }
+                }
+
+                if setting.changed: ActionButton {
+                    text: "Reset";
+                    clicked => { root.reset-key(setting.key); }
+                }
+            }
+            if setting.kind == ValueKind.color: HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+
+                Rectangle {
+                    width: 28px;
+                    border-radius: Theme.radius-s;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: setting.swatch;
+                }
+
+                DraftEdit {
+                    width: 140px;
+                    value: setting.value;
+                    commit(t) => { root.set-value(setting.key, t); }
+                }
+            }
+            if setting.kind == ValueKind.curve: ComboBox {
+                width: 180px;
+                model: setting.choices;
+                current-value: setting.value;
+                selected(v) => { root.set-value(setting.key, v); }
+            }
+            if setting.kind == ValueKind.list: DraftEdit {
+                width: 220px;
+                value: setting.value;
+                commit(t) => { root.set-value(setting.key, t); }
+            }
+            if setting.kind == ValueKind.text: DraftEdit {
+                width: 220px;
+                value: setting.value;
+                commit(t) => { root.set-value(setting.key, t); }
+            }
+            if setting.kind == ValueKind.choice: ComboBox {
+                width: 180px;
+                model: setting.choices;
+                current-value: setting.value;
+                selected(v) => { root.set-value(setting.key, v); }
+            }
+            if setting.kind == ValueKind.unset: Text {
+                text: setting.value;
+                color: Theme.text-2;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+
+            if setting.hint != "": Text {
+                text: setting.hint;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                opacity: 0.7;
+                vertical-alignment: center;
+            }
+
+            // Ownership badge: click to view the file that
+                // owns this key (read-only).
+                if setting.home >= 0: Rectangle {
+                width: badge-text.preferred-width + 10px;
+                height: badge-text.preferred-height + 4px;
+                border-radius: Theme.radius-s;
+
+                badge-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.view-file(setting.home); }
+                }
+
+                badge-text := Text {
+                    text: "in " + setting.home-label;
+                    color: badge-ta.has-hover ? Theme.accent : Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}
