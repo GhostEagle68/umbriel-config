@@ -4,8 +4,8 @@ body = """
 ## [{{ version | trim_start_matches(pat="v") }}] — {{ now() | date(format="%Y-%m-%d") }}
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim }}
-{% for commit in commits %}
-- {% if commit.breaking %}**Breaking:** {% endif %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}
+{% for commit in commits %}{% set note = commit.footers | default(value=[]) | filter(attribute="token", value="Changelog") | first %}
+- {% if commit.scope %}({{ commit.scope }}) {% endif %}{% if commit.breaking %}Breaking: {% endif %}{% if note %}{{ note.value }}{% else %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}{% endif %}
 {%- endfor %}
 
 {% endfor %}"""
@@ -19,12 +19,18 @@ filter_unconventional = false
 filter_commits = false
 tag_pattern = "v[0-9].*"
 sort_commits = "oldest"
+# `eat(ui):` happened once; a typo'd prefix should still reach its section.
+commit_preprocessors = [{ pattern = "^eat\\(", replace = "feat(" }]
 commit_parsers = [
+  # `Changelog: skip` in a commit footer keeps it out of the changelog.
+  # Matching is a substring over the footer value, so avoid the word
+  # "skip" inside a `Changelog:` note you do want published.
+  { footer = "skip", skip = true },
   { message = "^chore\\(release\\)", skip = true },
   { message = "^[a-z]+\\(deps\\)", skip = true },
   { message = "^(chore|ci|docs|refactor|test|build|style)", skip = true },
-  { message = "^feat", group = "<!-- 0 -->Features" },
-  { message = "^fix", group = "<!-- 1 -->Fixed" },
-  { message = "^perf", group = "<!-- 2 -->Changed" },
-  { message = ".*", group = "<!-- 3 -->Other" },
+  { message = "^feat", group = "<!-- 0 -->🚀 Features" },
+  { message = "^fix", group = "<!-- 1 -->🐛 Fixed" },
+  { message = "^perf", group = "<!-- 2 -->⚡ Changed" },
+  { message = ".*", group = "<!-- 3 -->📦 Other" },
 ]
