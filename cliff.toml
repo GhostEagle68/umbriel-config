@@ -1,16 +1,17 @@
 [changelog]
-header = ""
+header = "# Changelog\n"
 body = """
 ## [{{ version | trim_start_matches(pat="v") }}] — {{ now() | date(format="%Y-%m-%d") }}
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim }}
 {% for commit in commits %}
-- {% if commit.breaking %}**Breaking:** {% endif %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}\
-{% endfor %}
-{% endfor %}
-"""
+- {% if commit.breaking %}**Breaking:** {% endif %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}
+{%- endfor %}
+
+{% endfor %}"""
 footer = ""
-trim = true
+trim = false
+postprocessors = [{ pattern = "\n{3,}", replace = "\n\n" }]
 
 [git]
 conventional_commits = true
