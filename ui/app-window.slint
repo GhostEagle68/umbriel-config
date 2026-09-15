@@ -26,6 +26,9 @@ export struct SectionRow {
     label: string,
     home-label: string,
     home-section: string,
+    // "" = a setting, "page" = a whole page, "keybind" = a chord that
+    // opens the keybinds page pre-filtered to the query.
+    kind: string,
 }
 export enum ValueKind { unset, boolean, integer, float, text, list, choice, color, curve }
 
@@ -2623,6 +2626,8 @@ export component AppWindow inherits Window {
 
     callback search-edited(string);
     callback section-selected(string);
+    // Open the keybinds page with its filter pre-filled.
+    callback keybinds-search-requested(string);
     callback set-value(string, string);
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
@@ -3084,7 +3089,16 @@ export component AppWindow inherits Window {
                         for row in root.search-rows: PointerRow {
                             label: row.label;
                             home-label: row.home-label;
-                            open => { root.section-selected(row.home-section); }
+                            open => {
+                                // A keybind hit lands on the keybinds page
+                                // filtered to the query (which is the page
+                                // title while searching).
+                                if (row.kind == "keybind") {
+                                    root.keybinds-search-requested(root.page-title);
+                                } else {
+                                    root.section-selected(row.home-section);
+                                }
+                            }
                         }
                         if root.search-rows.length == 0: Text {
                             text: "No matches.";
