@@ -85,6 +85,13 @@ jobs:
           fi
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
 
+      - name: Check the tag sits on its channel's branch
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.channel.outputs.prerelease }}" = "true" ]; then branch=dev; else branch=main; fi
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$branch" \
+            || { echo "::error::$GITHUB_REF_NAME is not on $branch"; exit 1; }
+
       # The publish step verifies by building the packaged crate, which
       # needs fontconfig's dev headers (fontique) — same as the build job.
       - name: Install system dependencies
@@ -106,108 +113,19 @@ jobs:
       - name: Generate release notes
         run: |
           set -euo pipefail
-          # Find previous tag. Prefer the one before the current tag on the same history; fallback to the next most recent tag.
-          PREV_TAG=$(git describe --tags --abbrev=0 "${GITHUB_REF}^" 2>/dev/null || true)
-          if [ -z "${PREV_TAG:-}" ]; then
-            PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${GITHUB_REF_NAME}$" | head -n1 || true)
-          fi
-          if [ -z "${PREV_TAG:-}" ]; then
-            RANGE="$(git rev-list --max-parents=0 HEAD)..${GITHUB_REF_NAME}"
-          else
-            RANGE="${PREV_TAG}..${GITHUB_REF_NAME}"
-          fi
-
           VERSION="${GITHUB_REF_NAME#v}"
-          case "$VERSION" in
-            *-alpha*) CHANNEL="Alpha" ;;
-            *-beta*)  CHANNEL="Beta" ;;
-            *-rc*)    CHANNEL="Release Candidate" ;;
-            *)        CHANNEL="Stable" ;;
-          esac
-
-          NOTES=release_notes.md
-          {
-            echo "# umbriel-config ${GITHUB_REF_NAME}"
-            echo ""
-            if [ "$CHANNEL" = "Stable" ]; then
-              echo "**Channel:** Stable"
-            else
-              echo "**Channel:** ${CHANNEL} (pre-release — expect rough edges)"
-            fi
-            echo ""
-          } > "$NOTES"
-
-          # Curated, user-facing notes: the tagged version's section from
-          # CHANGELOG.md (maintained per plan-changelog.md; draft with
-          # `just changelog-draft`). The section header itself is dropped.
           awk -v version="$VERSION" '
-            /^## \[/ { keep = (index($0, "## [" version "]") == 1) ? 1 : 0; next }
+            /^## \[/ { keep = (index($0, "## [" version "]") == 1); next }
             keep { print }
-          ' CHANGELOG.md > changelog_section.md
-          if [ -s changelog_section.md ]; then
-            cat changelog_section.md >> "$NOTES"
-          else
-            {
-              echo "No curated notes for this version — see the full commit list below."
-              echo ""
-            } >> "$NOTES"
+          ' CHANGELOG.md > release_notes.md
+          [ -s release_notes.md ] || echo "No notes for this version." > release_notes.md
+          exclude=()
+          [ "${{ steps.channel.outputs.prerelease }}" = "true" ] || exclude=(--exclude '*-*')
+          PREV_TAG=$(git describe --tags --abbrev=0 "${exclude[@]}" "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          if [ -n "$PREV_TAG" ]; then
+            printf '\nFull diff: https://github.com/%s/compare/%s...%s\n' \
+              "$GITHUB_REPOSITORY" "$PREV_TAG" "$GITHUB_REF_NAME" >> release_notes.md
           fi
-          rm -f changelog_section.md
-
-          # The every-commit list survives, collapsed, for power users.
-          {
-            echo "<details>"
-            echo "<summary>Full commit list since ${PREV_TAG:-the start of the project}</summary>"
-            echo ""
-          } >> "$NOTES"
-
-          # Group commits by conventional-commit type; sections appear only when non-empty.
-          declare -A BODIES
-          while IFS=$'\x1f' read -r subject short full; do
-            case "$subject" in "chore(release): "*) continue ;; esac
-            section="other"
-            scope=""
-            text="$subject"
-            if [[ "$subject" =~ ^([A-Za-z]+)(\(([A-Za-z0-9._/-]+)\))?:[[:space:]]+(.*)$ ]]; then
-              type="${BASH_REMATCH[1],,}"
-              scope="${BASH_REMATCH[3]:-}"
-              text="${BASH_REMATCH[4]}"
-              case "$type" in
-                feat) section=feat ;;
-                fix)  section=fix ;;
-                perf|refactor) section=improve ;;
-              esac
-            fi
-            label=""
-            if [ -n "$scope" ]; then
-              label="**${scope}:** "
-            fi
-            BODIES[$section]="${BODIES[$section]:-}- ${label}${text} ([${short}](https://github.com/${GITHUB_REPOSITORY}/commit/${full}))"$'\n'
-          done < <(git log ${RANGE} --no-merges --pretty=format:"%s%x1f%h%x1f%H")
-
-          for s in feat fix improve other; do
-            case "$s" in
-              feat)    title="Features" ;;
-              fix)      title="Bug Fixes" ;;
-              improve) title="Improvements" ;;
-              other)   title="Other Changes" ;;
-            esac
-            body="${BODIES[$s]:-}"
-            if [ -n "$body" ]; then
-              {
-                echo "## ${title}"
-                echo ""
-                printf '%s' "$body"
-              } >> "$NOTES"
-              echo "" >> "$NOTES"
-            fi
-          done
-
-          {
-            echo ""
-            echo "</details>"
-            echo ""
-          } >> "$NOTES"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
