@@ -149,7 +149,10 @@ To update instead, just re-run the install command above.
 rm ~/.local/bin/umbriel-config
 rm ~/.local/share/applications/umbriel-config.desktop
 rm ~/.local/share/icons/hicolor/scalable/apps/umbriel-config.svg
+rm -r ~/.local/share/licenses/umbriel-config
 ```
+
+The same list is in the `INSTALL.txt` that ships in the tarball.
 
 Uninstalling only removes the app. Your Umbriel config files. And the
 `.bak` backups it made on save are your own data and are left untouched.
@@ -169,6 +172,9 @@ umbriel-config outputs        # list outputs reported by the compositor
 - Core settings work
 - Expect bugs and missing features.
 - Umbriel Config may have frequent updates due to how fast Umbriel changes, staying up-to-date is highly recommended.
+- Every release so far is a pre-release, so new installs follow the
+  **Pre-release** channel; Stable starts offering updates with the first
+  stable release.
 - Installs from GitHub release tarballs (x86_64 and aarch64), crates.io, or
   `cargo install --git`. AUR packaging is planned but not started.
 
