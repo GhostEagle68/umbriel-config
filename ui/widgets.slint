@@ -3,7 +3,13 @@
 
 import { Theme } from "theme.slint";
 import { CheckBox, ComboBox, LineEdit, Slider } from "std-widgets.slint";
-import { SettingRow, ValueKind } from "types.slint";
+import {
+    ColorMath,
+    Hsva,
+    PickerState,
+    SettingRow,
+    ValueKind,
+} from "types.slint";
 
 // Small token-driven button; std-widgets are avoided so the whole shell
 // carries one identity.
@@ -305,12 +311,24 @@ export component SettingRowView inherits Rectangle {
                 spacing: Theme.space-s;
                 alignment: start;
 
-                Rectangle {
+                // Click opens the picker popup for this key; the
+                // app-window hosts the overlay, the swatch only aims it.
+                swatch := TouchArea {
                     width: 28px;
-                    border-radius: Theme.radius-s;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    background: setting.swatch;
+                    mouse-cursor: pointer;
+
+                    Rectangle {
+                        border-radius: Theme.radius-s;
+                        border-width: 1px;
+                        border-color: swatch.has-hover ? Theme.accent : Theme.border;
+                        background: setting.swatch;
+                    }
+
+                    clicked => {
+                        PickerState.key = setting.key;
+                        PickerState.hex = setting.value;
+                        PickerState.open = true;
+                    }
                 }
 
                 DraftEdit {
@@ -427,6 +445,182 @@ export component SettingRowView inherits Rectangle {
                     vertical-alignment: center;
                     horizontal-alignment: center;
                 }
+            }
+        }
+    }
+}
+
+// Color picker popup card for the key in PickerState: saturation/value
+// square over hue and alpha bars, live preview. Dragging only moves the
+// popup's own h/s/v/a draft — nothing is written until Apply (which
+// hands "#RRGGBBAA" to the overlay for the row's regular set-value
+// path); Close/scrim discards. Only instantiated while
+// PickerState.open, so the properties below re-derive from
+// PickerState.hex on every open.
+export component ColorPickerCard inherits Rectangle {
+    width: 320px;
+    height: body.preferred-height;
+    border-radius: Theme.radius-l;
+    background: Theme.bg-1;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    // Emitted with the drafted hex when Apply is pressed.
+    callback apply(string);
+
+    property <Hsva> parsed: ColorMath.to-hsva(PickerState.hex);
+    // h in degrees 0..360, the rest 0..1.
+    property <float> h: parsed.h;
+    property <float> s: parsed.s;
+    property <float> v: parsed.v;
+    property <float> a: parsed.a;
+
+    // Absorb card clicks so the scrim underneath doesn't close the popup.
+    TouchArea { }
+
+    body := VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            Text {
+                text: "Edit " + PickerState.key;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+
+            ActionButton {
+                text: "Close";
+                clicked => { PickerState.open = false; }
+            }
+
+            ActionButton {
+                text: "Apply";
+                primary: true;
+                clicked => { root.apply(ColorMath.to-hex(root.h, root.s, root.v, root.a)); }
+            }
+        }
+
+        // Saturation rightward, value downward, for the current hue.
+        Rectangle {
+            height: 170px;
+            clip: true;
+            border-radius: Theme.radius-s;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            Rectangle {
+                background: ColorMath.to-color(root.h, 1.0, 1.0, 1.0);
+            }
+
+            Rectangle {
+                background: @linear-gradient(90deg, #FFFFFF, #FFFFFF00);
+            }
+
+            Rectangle {
+                background: @linear-gradient(180deg, #00000000, #000000);
+            }
+
+            Rectangle {
+                width: 14px;
+                height: 14px;
+                x: root.s * (parent.width - self.width);
+                y: (1.0 - root.v) * (parent.height - self.height);
+                border-radius: 7px;
+                border-width: 2px;
+                border-color: white;
+            }
+
+            TouchArea {
+                // `move` also fires on bare hover; track the pointer only
+                // while a button is actually held.
+                pointer-event(ev) => {
+                    if (ev.kind == PointerEventKind.down
+                        || (ev.kind == PointerEventKind.move && self.pressed)) {
+                        root.s = clamp(self.mouse-x / parent.width, 0.0, 1.0);
+                        root.v = clamp(1.0 - self.mouse-y / parent.height, 0.0, 1.0);
+                    }
+                }
+            }
+        }
+
+        // Hue strip.
+        Rectangle {
+            height: 16px;
+            border-radius: Theme.radius-s;
+            background: @linear-gradient(90deg, #FF0000 0%, #FFFF00 17%, #00FF00 33%, #00FFFF 50%, #0000FF 67%, #FF00FF 83%, #FF0000 100%);
+
+            Rectangle {
+                width: 12px;
+                height: parent.height;
+                x: (root.h / 360.0) * (parent.width - self.width);
+                border-radius: 4px;
+                background: white;
+                border-width: 1px;
+                border-color: #000000;
+            }
+
+            TouchArea {
+                pointer-event(ev) => {
+                    if (ev.kind == PointerEventKind.down
+                        || (ev.kind == PointerEventKind.move && self.pressed)) {
+                        root.h = clamp(self.mouse-x / parent.width, 0.0, 1.0) * 360.0;
+                    }
+                }
+            }
+        }
+
+        // Alpha strip: full color fading into the card background.
+        Rectangle {
+            height: 16px;
+            border-radius: Theme.radius-s;
+            background: @linear-gradient(90deg, ColorMath.to-color(root.h, root.s, root.v, 0.0), ColorMath.to-color(root.h, root.s, root.v, 1.0));
+
+            Rectangle {
+                width: 12px;
+                height: parent.height;
+                x: root.a * (parent.width - self.width);
+                border-radius: 4px;
+                background: white;
+                border-width: 1px;
+                border-color: #000000;
+            }
+
+            TouchArea {
+                pointer-event(ev) => {
+                    if (ev.kind == PointerEventKind.down
+                        || (ev.kind == PointerEventKind.move && self.pressed)) {
+                        root.a = clamp(self.mouse-x / parent.width, 0.0, 1.0);
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: Theme.radius-s;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: ColorMath.to-color(root.h, root.s, root.v, root.a);
+            }
+
+            Text {
+                text: ColorMath.to-hex(root.h, root.s, root.v, root.a);
+                font-family: Theme.font-mono;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
             }
         }
     }

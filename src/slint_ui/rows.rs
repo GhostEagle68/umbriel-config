@@ -352,10 +352,98 @@ fn parse_hex_color(value: &str) -> Option<(u8, u8, u8, u8)> {
     Some((r, g, b, a))
 }
 
-/// Hex color (#RRGGBB or #RRGGBBAA) to swatch brush; black when unparseable.
+/// RGBA (0-255 channels) to HSVA: h in degrees 0..360, the rest 0..1.
+fn rgb_to_hsva(r: u8, g: u8, b: u8, a: u8) -> (f32, f32, f32, f32) {
+    let (r, g, b, a) = (
+        f32::from(r) / 255.0,
+        f32::from(g) / 255.0,
+        f32::from(b) / 255.0,
+        f32::from(a) / 255.0,
+    );
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    let h = if delta == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * ((g - b) / delta).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / delta + 2.0)
+    } else {
+        60.0 * ((r - g) / delta + 4.0)
+    };
+    let s = if max == 0.0 { 0.0 } else { delta / max };
+    (h, s, max, a)
+}
+
+/// HSVA (h in degrees, the rest 0..1) to RGBA (0-255 channels).
+fn hsva_to_rgba(h: f32, s: f32, v: f32, a: f32) -> (u8, u8, u8, u8) {
+    let h = h.rem_euclid(360.0);
+    let s = s.clamp(0.0, 1.0);
+    let v = v.clamp(0.0, 1.0);
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    let channel = |f: f32| ((f + m) * 255.0).round() as u8;
+    (
+        channel(r),
+        channel(g),
+        channel(b),
+        (a.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+/// HSVA to "#RRGGBBAA" — the canonical form every picker commit writes.
+fn hsva_to_hex(h: f32, s: f32, v: f32, a: f32) -> String {
+    let (r, g, b, a) = hsva_to_rgba(h, s, v, a);
+    format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
+}
+
+/// Hex color (#RRGGBB or #RRGGBBAA) to swatch brush; opaque black when
+/// unparseable. The alpha byte rides along so translucent values
+/// preview truthfully.
 fn swatch_for(value: &str) -> slint::Brush {
-    let (r, g, b, _) = parse_hex_color(value).unwrap_or((0, 0, 0, 255));
-    slint::Brush::from(slint::Color::from_rgb_u8(r, g, b))
+    let (r, g, b, a) = parse_hex_color(value).unwrap_or((0, 0, 0, 255));
+    slint::Brush::from(slint::Color::from_argb_u8(a, r, g, b))
+}
+
+/// Install the pure color math the picker popup's bindings call
+/// through the `ColorMath` global.
+pub(super) fn install_color_math(app: &AppWindow) {
+    app.global::<ColorMath>()
+        .on_to_hsva(move |hex| match parse_hex_color(&hex) {
+            Some((r, g, b, a)) => {
+                let (h, s, v, alpha) = rgb_to_hsva(r, g, b, a);
+                Hsva {
+                    h,
+                    s,
+                    v,
+                    a: alpha,
+                    ok: true,
+                }
+            }
+            None => Hsva {
+                h: 0.0,
+                s: 0.0,
+                v: 0.0,
+                a: 1.0,
+                ok: false,
+            },
+        });
+    app.global::<ColorMath>()
+        .on_to_hex(move |h, s, v, a| hsva_to_hex(h, s, v, a).into());
+    app.global::<ColorMath>().on_to_color(move |h, s, v, a| {
+        let (r, g, b, a) = hsva_to_rgba(h, s, v, a);
+        slint::Color::from_argb_u8(a, r, g, b)
+    });
 }
 
 /// Mined metadata shown beside the editor: range from the Kind payload,
@@ -581,6 +669,38 @@ mod tests {
         assert_eq!(parse_hex_color("#7AA3FF"), Some((0x7A, 0xA3, 0xFF, 0xFF)));
         assert_eq!(parse_hex_color("#7AA3FF80"), Some((0x7A, 0xA3, 0xFF, 0x80)));
         assert_eq!(parse_hex_color("not a color"), None);
+    }
+
+    #[test]
+    fn hex_hsva_round_trip_is_lossless() {
+        for hex in [
+            "#7AA3FFFF",
+            "#141419FF",
+            "#E8E8EAFF",
+            "#FF000080",
+            "#FFFFFF00",
+            "#00000000",
+        ] {
+            let (r, g, b, a) = parse_hex_color(hex).unwrap();
+            let (h, s, v, alpha) = rgb_to_hsva(r, g, b, a);
+            assert_eq!(hsva_to_hex(h, s, v, alpha), hex);
+        }
+    }
+
+    #[test]
+    fn rgb_to_hsva_hits_the_reference_hues() {
+        for (hex, hue) in [("#FF0000", 0.0), ("#00FF00", 120.0), ("#0000FF", 240.0)] {
+            let (r, g, b, _) = parse_hex_color(hex).unwrap();
+            let (h, ..) = rgb_to_hsva(r, g, b, 255);
+            assert!((h - hue).abs() < 1e-3, "{hex} parsed to hue {h}");
+        }
+    }
+
+    #[test]
+    fn hsva_to_hex_emits_the_canonical_form() {
+        assert_eq!(hsva_to_hex(221.51, 0.52, 1.0, 1.0), "#7AA3FFFF");
+        // Out-of-range h/s/a clamp (400° → 40°, s → 1.0).
+        assert_eq!(hsva_to_hex(400.0, 2.0, 0.5, 0.5), "#80550080");
     }
 
     #[test]

@@ -334,6 +334,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     page_keybinds::install_keybinds(&app, &shell, &kb_actions, &keybind_binds);
     guide::install_guide(&app, &shell, &env);
     rows::install_value_editing(&app, &shell);
+    rows::install_color_math(&app);
 
     {
         let weak = app.as_weak();

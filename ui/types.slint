@@ -1,5 +1,37 @@
-// Shared structs and enums crossing page boundaries. The Rust side
-// sees the same generated names no matter which file declares them.
+// Shared structs, enums, and globals crossing page boundaries. The
+// Rust side sees the same generated names no matter which file
+// declares them.
+
+// A picked color: h in degrees 0..360, s/v/a in 0..1. `ok` is false
+// when the source hex was unparseable (channels fall back to opaque
+// black); the picker ignores it on init.
+export struct Hsva {
+    h: float,
+    s: float,
+    v: float,
+    a: float,
+    ok: bool,
+}
+
+// Which color key the popup edits. Set by a row's swatch, read by the
+// app-window overlay. A global rather than callbacks so every page
+// that renders SettingRowView — category, outputs, rules, guide —
+// gets the picker with no per-page plumbing.
+export global PickerState {
+    in-out property <bool> open: false;
+    in-out property <string> key;
+    in-out property <string> hex;
+}
+
+// Pure hex ⇄ HSVA math for the picker; implemented in Rust
+// (rows.rs installs the handlers) because hex parsing and formatting
+// are not feasible in Slint bindings. Declared pure so bindings may
+// call them.
+export global ColorMath {
+    pure callback to-hsva(string) -> Hsva;
+    pure callback to-hex(float, float, float, float) -> string;
+    pure callback to-color(float, float, float, float) -> color;
+}
 
 export struct SectionRow {
     label: string,

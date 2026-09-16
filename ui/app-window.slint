@@ -7,13 +7,25 @@
 import { Theme } from "theme.slint";
 import { Palette } from "std-widgets.slint";
 // Re-export so the generated Rust code exposes the global (set_dark).
-export { Theme }
+export {
+    Theme,
+}
+// Re-exported for the Rust side too: rows.rs installs the ColorMath
+// handlers that the picker popup's bindings call.
+export { ColorMath }
 import { ComboBox, LineEdit, ScrollView, TextEdit } from "std-widgets.slint";
 
-import { ActionButton, NavRow, PointerRow } from "widgets.slint";
 import {
+    ActionButton,
+    ColorPickerCard,
+    NavRow,
+    PointerRow,
+} from "widgets.slint";
+import {
+    ColorMath,
     KeybindRow,
     MonitorCard,
+    PickerState,
     RuleCard,
     SaveEntry,
     SectionNav,
@@ -1361,6 +1373,32 @@ export component AppWindow inherits Window {
                         clicked => { root.shader-editor-save(); }
                     }
                 }
+            }
+        }
+    }
+
+    // ── color picker popup (opened from a row's color swatch) ──
+    // Last overlay so it also rides above the guide walk, whose
+    // appearance step has color rows of its own. Drags only move the
+    // card's draft; Apply writes (a no-op when the color didn't
+    // change) and closes, Close/scrim discards.
+    if PickerState.open: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000066;
+
+        TouchArea {
+            clicked => { PickerState.open = false; }
+        }
+
+        ColorPickerCard {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            apply(text) => {
+                if (text != PickerState.hex) {
+                    root.set-value(PickerState.key, text);
+                }
+                PickerState.open = false;
             }
         }
     }
