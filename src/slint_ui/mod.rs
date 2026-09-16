@@ -290,6 +290,20 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         guide::SetupMode::Normal | guide::SetupMode::MissingUmbriel
     ) {
         let sections = changelog::parse(changelog::bundled());
+        // The channels/in-app-update notice rides along once, ever — and
+        // on its own if this version's changelog was already seen.
+        let notice = update::notice_should_show(&env);
+        if notice {
+            app.set_whatsnew_notice(
+                "Updates work differently now. You're on the Pre-release channel, \
+                 which gets new builds from the dev branch first. Prefer tested \
+                 releases? Switch to Stable in Settings → Updates. If you installed \
+                 from the release tarball, updates can now be installed from the app; \
+                 cargo, AUR and source builds show the command to run instead."
+                    .into(),
+            );
+            update::notice_mark_shown(&env);
+        }
         if changelog::should_show(&env, env!("CARGO_PKG_VERSION"))
             && let Some(section) = changelog::for_version(&sections, env!("CARGO_PKG_VERSION"))
         {
@@ -297,6 +311,9 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             app.set_whatsnew_body(section.body.clone().into());
             app.set_show_whatsnew(true);
             changelog::mark_shown(&env, env!("CARGO_PKG_VERSION"));
+        } else if notice {
+            app.set_whatsnew_title("Updates work differently now".into());
+            app.set_show_whatsnew(true);
         }
     }
 

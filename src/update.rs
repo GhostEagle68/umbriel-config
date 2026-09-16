@@ -250,6 +250,10 @@ fn unpack_binary(tarball: &[u8], staged: &Path) -> Result<(), String> {
 /// Record of the last automatic check, so startup checks happen at most
 /// once a day. Disposable cache: unreadable means "check now".
 fn stamp_path(env: &discovery::Env) -> PathBuf {
+    state_path(env, "last-update-check")
+}
+
+fn state_path(env: &discovery::Env, name: &str) -> PathBuf {
     let base = if let Some(state_home) = env.xdg_state_home.as_deref() {
         PathBuf::from(state_home)
     } else {
@@ -259,7 +263,21 @@ fn stamp_path(env: &discovery::Env) -> PathBuf {
             .unwrap_or_else(|| std::ffi::OsStr::new(""));
         Path::new(home).join(".local/state")
     };
-    base.join("umbriel-config/last-update-check")
+    base.join("umbriel-config").join(name)
+}
+
+/// The channels/in-app-update notice shows once, ever: the first launch
+/// after updating into a build that has them.
+pub fn notice_should_show(env: &discovery::Env) -> bool {
+    !state_path(env, "notice-release-channels").exists()
+}
+
+pub fn notice_mark_shown(env: &discovery::Env) {
+    let path = state_path(env, "notice-release-channels");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, "shown\n");
 }
 
 pub fn should_auto_check(env: &discovery::Env) -> bool {
@@ -362,6 +380,19 @@ mod tests {
             ),
             InstallKind::Source
         );
+    }
+
+    #[test]
+    fn release_notice_shows_once_ever() {
+        let root = std::env::temp_dir().join(format!("umbriel-notice-{}", std::process::id()));
+        let env = discovery::Env {
+            xdg_state_home: Some(root.clone().into_os_string()),
+            ..Default::default()
+        };
+        assert!(notice_should_show(&env));
+        notice_mark_shown(&env);
+        assert!(!notice_should_show(&env));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

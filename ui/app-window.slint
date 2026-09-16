@@ -112,6 +112,8 @@ export component AppWindow inherits Window {
     in-out property <bool> show-whatsnew;
     in property <string> whatsnew-title;
     in property <string> whatsnew-body;
+    // One-time notice above the notes; empty once it has been read.
+    in-out property <string> whatsnew-notice;
     callback view-changelog();
     callback view-update-notes();
 
@@ -1013,7 +1015,10 @@ export component AppWindow inherits Window {
         background: #00000099;
 
         TouchArea {
-            clicked => { root.show-whatsnew = false; }
+            clicked => {
+                root.whatsnew-notice = "";
+                root.show-whatsnew = false;
+            }
         }
 
         Rectangle {
@@ -1042,7 +1047,43 @@ export component AppWindow inherits Window {
 
                     ActionButton {
                         text: "Close";
-                        clicked => { root.show-whatsnew = false; }
+                        clicked => {
+                            root.whatsnew-notice = "";
+                            root.show-whatsnew = false;
+                        }
+                    }
+                }
+
+                if root.whatsnew-notice != "": Rectangle {
+                    background: Theme.bg-0;
+                    border-radius: Theme.radius-m;
+                    border-width: 1px;
+                    border-color: Theme.accent;
+
+                    VerticalLayout {
+                        padding: Theme.space-m;
+                        spacing: Theme.space-s;
+
+                        Text {
+                            text: root.whatsnew-notice;
+                            color: Theme.text-1;
+                            font-size: Theme.font-small;
+                            wrap: TextWrap.word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            alignment: start;
+
+                            ActionButton {
+                                text: "Open update settings";
+                                primary: true;
+                                clicked => {
+                                    root.whatsnew-notice = "";
+                                    root.show-whatsnew = false;
+                                    root.settings-requested();
+                                }
+                            }
+                        }
                     }
                 }
 
