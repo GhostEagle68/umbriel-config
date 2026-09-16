@@ -5,7 +5,7 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim }}
 {% for commit in commits %}{% set note = commit.footers | default(value=[]) | filter(attribute="token", value="Changelog") | first %}
-- {% if commit.scope %}({{ commit.scope }}) {% endif %}{% if commit.breaking %}Breaking: {% endif %}{% if note %}{{ note.value }}{% else %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}{% endif %}
+- {% if commit.scope %}({{ commit.scope }}) {% endif %}{% if note %}{{ note.value }}{% else %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}{% endif %}{% if commit.breaking and commit.breaking_description and commit.breaking_description != commit.message %} — {{ commit.breaking_description }}{% endif %}
 {%- endfor %}
 
 {% endfor %}"""
@@ -29,8 +29,15 @@ commit_parsers = [
   { message = "^chore\\(release\\)", skip = true },
   { message = "^[a-z]+\\(deps\\)", skip = true },
   { message = "^(chore|ci|docs|refactor|test|build|style)", skip = true },
-  { message = "^feat", group = "<!-- 0 -->🚀 Features" },
-  { message = "^fix", group = "<!-- 1 -->🐛 Fixed" },
-  { message = "^perf", group = "<!-- 2 -->⚡ Changed" },
-  { message = ".*", group = "<!-- 3 -->📦 Other" },
+  # Breaking and security come before the plain feat/fix rules, which
+  # would otherwise swallow them; first match wins. The `breaking` field
+  # covers both spellings — a `!` in the subject and a BREAKING CHANGE
+  # footer — where a message regex would only catch the first.
+  { field = "breaking", pattern = "true", group = "<!-- 0 -->💥 Breaking" },
+  { message = "^(security|fix\\(security\\))", group = "<!-- 1 -->🔒 Security" },
+  { message = "^feat", group = "<!-- 2 -->🚀 Features" },
+  { message = "^fix", group = "<!-- 3 -->🐛 Fixed" },
+  { message = "^perf", group = "<!-- 4 -->⚡ Performance" },
+  { message = "^revert", group = "<!-- 5 -->🔁 Changed" },
+  { message = ".*", group = "<!-- 6 -->📦 Other" },
 ]

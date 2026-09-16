@@ -74,6 +74,21 @@ Two layers, strictly separated:
 - **`feat:` and `fix:` subjects are the changelog.** git-cliff turns them
   into release notes as `- (scope) Subject`, so write them for users, not
   for reviewers. A fix nobody outside the repo would notice is a `chore:`.
+- Where each type lands in the notes:
+
+  | Commit | Section |
+  |---|---|
+  | `feat!:` … or any commit with a `BREAKING CHANGE:` footer | Breaking (first, with the footer text appended) |
+  | `security:` or `fix(security):` | Security |
+  | `feat:` | Features |
+  | `fix:` | Fixed |
+  | `perf:` | Performance |
+  | `revert:` | Changed |
+  | anything unrecognized | Other — a prompt to fix the subject |
+  | `chore` `ci` `docs` `refactor` `test` `build` `style`, any `(deps)` scope | not in the notes |
+
+  A dependency bump that closes a CVE is worth `fix(security):` rather
+  than the `(deps)` scope that hides it.
 - Two commit footers change what ships in the notes:
   - `Changelog: <text>` replaces the generated line with your wording.
   - `Changelog: skip` drops the commit from the notes entirely.
