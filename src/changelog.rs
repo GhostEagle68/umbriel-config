@@ -58,6 +58,40 @@ pub fn for_version<'a>(sections: &'a [Section], version: &str) -> Option<&'a Sec
         .or_else(|| sections.first())
 }
 
+/// The bundled fonts are subsets — Latin plus a little punctuation — so
+/// emoji headings, arrows and geometric shapes draw as blanks. Map the
+/// few that carry meaning and drop the rest before anything reaches the
+/// overlay; a dropped character takes one following space with it, so
+/// "### <emoji> Features" reads "### Features".
+pub fn renderable(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut drop_space = false;
+    for ch in text.chars() {
+        if drop_space && ch == ' ' {
+            drop_space = false;
+            continue;
+        }
+        drop_space = false;
+        match ch {
+            '→' => out.push_str("->"),
+            '←' => out.push_str("<-"),
+            _ if in_bundled_fonts(ch) => out.push(ch),
+            _ => drop_space = out.ends_with(' '),
+        }
+    }
+    out
+}
+
+/// Latin-1 and Latin Extended plus the punctuation Inter and JetBrains
+/// Mono actually ship in this build (checked against their cmaps).
+fn in_bundled_fonts(ch: char) -> bool {
+    ch.is_ascii()
+        || matches!(
+            ch,
+            '\u{00a0}'..='\u{024f}' | '–' | '—' | '‘' | '’' | '“' | '”' | '…' | '•'
+        )
+}
+
 /// Every section as display text, newest first: a header line per
 /// version, then its body.
 pub fn full_text(sections: &[Section]) -> String {
@@ -152,6 +186,21 @@ mod tests {
         assert_eq!(
             for_version(&sections, "0.3.0-dev").unwrap().version,
             "0.2.0"
+        );
+    }
+
+    #[test]
+    fn renderable_drops_what_the_fonts_cannot_draw() {
+        // The emoji goes, and so does the space it left behind.
+        assert_eq!(renderable("### 🚀 Features"), "### Features");
+        assert_eq!(renderable("### 🐛 Fixed"), "### Fixed");
+        // Arrows carry meaning, so they become ASCII instead.
+        assert_eq!(renderable("Settings → Updates"), "Settings -> Updates");
+        // Typography the fonts do have survives untouched, and so does
+        // the indentation of a continuation line.
+        assert_eq!(
+            renderable("- (ui) “quoted” — em-dash…\n  indented detail"),
+            "- (ui) “quoted” — em-dash…\n  indented detail"
         );
     }
 

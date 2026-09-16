@@ -276,7 +276,10 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             let Some(app) = weak.upgrade() else { return };
             app.set_whatsnew_title("Changelog".into());
             app.set_whatsnew_body(
-                changelog::full_text(&changelog::parse(changelog::bundled())).into(),
+                changelog::renderable(&changelog::full_text(&changelog::parse(
+                    changelog::bundled(),
+                )))
+                .into(),
             );
             app.set_show_whatsnew(true);
         });
@@ -295,14 +298,18 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
                     format!("What's new in {}", env!("CARGO_PKG_VERSION")).into(),
                 );
                 app.set_whatsnew_body(
-                    section
-                        .map(|section| section.body.clone())
-                        .unwrap_or_default()
-                        .into(),
+                    changelog::renderable(
+                        &section
+                            .map(|section| section.body.clone())
+                            .unwrap_or_default(),
+                    )
+                    .into(),
                 );
             } else {
+                // The fetched body is the release page's markdown, emoji
+                // headings and all.
                 app.set_whatsnew_title("What's new in this release".into());
-                app.set_whatsnew_body(notes.into());
+                app.set_whatsnew_body(changelog::renderable(&notes).into());
             }
             app.set_show_whatsnew(true);
         });

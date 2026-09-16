@@ -308,7 +308,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             && let Some(section) = changelog::for_version(&sections, env!("CARGO_PKG_VERSION"))
         {
             app.set_whatsnew_title(format!("What's new in {}", env!("CARGO_PKG_VERSION")).into());
-            app.set_whatsnew_body(section.body.clone().into());
+            app.set_whatsnew_body(changelog::renderable(&section.body).into());
             app.set_show_whatsnew(true);
             changelog::mark_shown(&env, env!("CARGO_PKG_VERSION"));
         } else if notice {
