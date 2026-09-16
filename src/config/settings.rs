@@ -12,6 +12,8 @@ pub struct Settings {
     pub window_height: u32,
     /// true = dark design, false = light design.
     pub dark: bool,
+    /// true = Pre-release channel (dev builds first), false = Stable only.
+    pub prereleases: bool,
     /// Backup runs kept per location (minimum 1).
     pub backup_count: u32,
     /// Custom backup location; None = the state-directory default.
@@ -25,6 +27,7 @@ pub const DEFAULT: Settings = Settings {
     dark: true,
     backup_count: 10,
     backup_dir: None,
+    prereleases: true,
 };
 
 pub fn path(env: &discovery::Env) -> PathBuf {
@@ -60,6 +63,7 @@ fn parse(text: &str) -> Settings {
                 settings.window_height = value.parse().unwrap_or(DEFAULT.window_height)
             }
             "dark" => settings.dark = value.parse().unwrap_or(DEFAULT.dark),
+            "prereleases" => settings.prereleases = value.parse().unwrap_or(DEFAULT.prereleases),
             "backup_count" => settings.backup_count = value.parse().unwrap_or(DEFAULT.backup_count),
             "backup_dir" => settings.backup_dir = (!value.is_empty()).then(|| value.to_owned()),
             _ => {}
@@ -76,13 +80,14 @@ pub fn store(env: &discovery::Env, settings: &Settings) -> std::io::Result<()> {
     std::fs::write(
         path,
         format!(
-            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\ndark = {}\nbackup_count = {}\nbackup_dir = {}\n",
+            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\ndark = {}\nbackup_count = {}\nbackup_dir = {}\nprereleases = {}\n",
             settings.check_updates_on_start,
             settings.window_width,
             settings.window_height,
             settings.dark,
             settings.backup_count,
             settings.backup_dir.as_deref().unwrap_or(""),
+            settings.prereleases,
         ),
     )
 }
@@ -112,6 +117,7 @@ mod tests {
                 window_width: 1280,
                 window_height: 800,
                 dark: false,
+                prereleases: false,
                 backup_count: 3,
                 backup_dir: Some("/tmp/b".to_owned()),
             },
@@ -124,6 +130,7 @@ mod tests {
                 window_width: 1280,
                 window_height: 800,
                 dark: false,
+                prereleases: false,
                 backup_count: 3,
                 backup_dir: Some("/tmp/b".to_owned()),
             }
@@ -138,6 +145,7 @@ mod tests {
         let settings = parse(
             "unknown = 1\ncheck_updates_on_start = false\nwindow_width = oops\nwindow_height = 700\ndark = false\nbackup_count = 3\nbackup_dir = /tmp/b\nbad_dark = maybe\n",
         );
+        assert!(settings.prereleases);
         assert!(!settings.check_updates_on_start);
         assert_eq!(settings.window_width, DEFAULT.window_width);
         assert_eq!(settings.window_height, 700);

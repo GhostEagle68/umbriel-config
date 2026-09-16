@@ -7,13 +7,18 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DAY_SECS: u64 = 24 * 60 * 60;
+// The Pre-release channel ranks this list by version; Stable follows
+// GitHub's own "latest", which is never a pre-release.
 const RELEASES_URL: &str =
-    "https://api.github.com/repos/GhostEagle68/umbriel-config/releases?per_page=1";
+    "https://api.github.com/repos/GhostEagle68/umbriel-config/releases?per_page=20";
+const LATEST_URL: &str = "https://api.github.com/repos/GhostEagle68/umbriel-config/releases/latest";
 const USER_AGENT: &str = "umbriel-config";
 
 #[derive(Debug, PartialEq)]
 pub enum Verdict {
     UpToDate,
+    /// Stable channel, but no stable release exists yet (GitHub 404s).
+    NoRelease,
     /// The newer version plus its release notes (the GitHub `body`,
     /// which release.yml fills from the changelog; `None` offline-ish).
     UpdateAvailable {
@@ -48,19 +53,57 @@ struct Release {
     body: Option<String>,
 }
 
-pub fn check() -> Result<Verdict, String> {
-    let releases: Vec<Release> = ureq::get(RELEASES_URL)
+/// GET + JSON with the shared agent settings. `Ok(None)` is a 404 —
+/// `/releases/latest` answers that until the first stable release.
+fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<Option<T>, String> {
+    match ureq::get(url)
         .header("User-Agent", USER_AGENT)
         .config()
         .timeout_global(Some(std::time::Duration::from_secs(10)))
         .build()
         .call()
-        .map_err(|err| err.to_string())?
-        .body_mut()
-        .read_json()
-        .map_err(|err| err.to_string())?;
-    let Some(release) = releases.first() else {
-        return Err("no releases published yet".to_owned());
+    {
+        Ok(mut response) => response
+            .body_mut()
+            .read_json()
+            .map(Some)
+            .map_err(|err| err.to_string()),
+        Err(ureq::Error::StatusCode(404)) => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+/// Highest version among the releases — the list is ordered by date, so
+/// a beta published after a stable would otherwise win. Unparseable
+/// tags are ignored.
+fn newest(releases: Vec<Release>) -> Option<Release> {
+    releases
+        .into_iter()
+        .filter_map(|release| Some((tag_version(&release)?, release)))
+        .max_by(|(left, _), (right, _)| left.cmp(right))
+        .map(|(_, release)| release)
+}
+
+fn tag_version(release: &Release) -> Option<Version> {
+    Version::parse(release.tag_name.trim_start_matches('v')).ok()
+}
+
+/// `prereleases` picks the channel. Either way the result is only
+/// offered when it is newer than the running build, so switching to
+/// Stable from a newer beta never proposes a downgrade.
+pub fn check(prereleases: bool) -> Result<Verdict, String> {
+    let release = if prereleases {
+        let releases: Vec<Release> =
+            get_json(RELEASES_URL)?.ok_or_else(|| "no releases published yet".to_owned())?;
+        match newest(releases) {
+            Some(release) => release,
+            None => return Err("no releases published yet".to_owned()),
+        }
+    } else {
+        match get_json::<Release>(LATEST_URL)? {
+            Some(release) => release,
+            None => return Ok(Verdict::NoRelease),
+        }
     };
     let notes = release
         .body
@@ -145,5 +188,26 @@ mod tests {
                 notes: None
             })
         );
+    }
+
+    fn release(tag: &str) -> Release {
+        Release {
+            tag_name: tag.to_owned(),
+            body: None,
+        }
+    }
+
+    #[test]
+    fn newest_ranks_by_version_not_by_position() {
+        let picked = newest(vec![
+            release("v0.3.0-beta.9"),
+            release("v0.3.0"),
+            release("v0.3.0-beta.10"),
+            release("nightly"),
+        ]);
+        assert_eq!(picked.unwrap().tag_name, "v0.3.0");
+        let picked = newest(vec![release("v0.3.0-beta.9"), release("v0.3.0-beta.10")]);
+        assert_eq!(picked.unwrap().tag_name, "v0.3.0-beta.10");
+        assert!(newest(vec![release("nightly")]).is_none());
     }
 }

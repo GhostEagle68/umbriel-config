@@ -25,8 +25,10 @@ pub(super) fn store_window_settings(app: &AppWindow, env: &discovery::Env) {
 pub(super) fn start_update_check(weak: slint::Weak<AppWindow>, env: Option<discovery::Env>) {
     let Some(app) = weak.upgrade() else { return };
     app.set_update_note("Checking…".into());
+    // Read the channel here: the worker can't touch the window.
+    let prereleases = app.get_update_prereleases();
     std::thread::spawn(move || {
-        let result = update::check();
+        let result = update::check(prereleases);
         if result.is_ok()
             && let Some(env) = env.as_ref()
         {
@@ -36,6 +38,9 @@ pub(super) fn start_update_check(weak: slint::Weak<AppWindow>, env: Option<disco
             let Some(app) = weak.upgrade() else { return };
             match result {
                 Ok(update::Verdict::UpToDate) => app.set_update_note("Up to date.".into()),
+                Ok(update::Verdict::NoRelease) => app.set_update_note(
+                    "No stable release yet. You'll get the first one when it ships.".into(),
+                ),
                 Ok(update::Verdict::UpdateAvailable { version, notes }) => {
                     app.set_update_available(true);
                     app.set_update_note(format!("Version {version} available.").into());
@@ -103,6 +108,18 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             let mut settings = app_settings::load(&env);
             settings.check_updates_on_start = checked;
             let _ = app_settings::store(&env, &settings);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let env = env.clone();
+        app.on_update_channel_selected(move |prereleases| {
+            let Some(app) = weak.upgrade() else { return };
+            app.set_update_prereleases(prereleases);
+            let mut settings = app_settings::load(&env);
+            settings.prereleases = prereleases;
+            let _ = app_settings::store(&env, &settings);
+            start_update_check(app.as_weak(), None);
         });
     }
     {

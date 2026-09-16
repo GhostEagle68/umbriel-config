@@ -7,6 +7,7 @@ import { Theme } from "../theme.slint";
 export component SettingsPage inherits Rectangle {
     in property <string> app-version;
     in property <bool> check-updates-on-start;
+    in property <bool> update-prereleases;
     in property <string> update-note;
     in property <bool> update-available;
     in property <string> update-notes;
@@ -23,6 +24,7 @@ export component SettingsPage inherits Rectangle {
     callback open-url(string);
     callback relaunch();
     callback sync-schema();
+    callback channel-selected(bool);
     callback view-changelog();
     callback view-update-notes();
 
@@ -241,6 +243,40 @@ export component SettingsPage inherits Rectangle {
 
                         Rectangle {
                             horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Update channel";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            width: 140px;
+                            model: ["Pre-release", "Stable"];
+                            current-index: root.update-prereleases ? 0 : 1;
+                            selected => {
+                                root.channel-selected(self.current-index == 0);
+                            }
+                        }
+
+                        Text {
+                            horizontal-stretch: 1;
+                            text: root.update-prereleases
+                                ? "New features first, from the dev branch"
+                                : "Tested releases only";
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            wrap: TextWrap.word-wrap;
                         }
                     }
 

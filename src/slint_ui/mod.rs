@@ -201,6 +201,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     app.set_dirty(false);
     app.set_app_version(env!("CARGO_PKG_VERSION").into());
     app.set_check_updates_on_start(settings.check_updates_on_start);
+    app.set_update_prereleases(settings.prereleases);
     app.set_dark_mode(settings.dark);
     app.global::<Theme>().set_dark(settings.dark);
     app.set_backup_note(page_backups::backup_note(&settings, &env));

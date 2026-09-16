@@ -197,6 +197,7 @@ export component AppWindow inherits Window {
     // Settings page
     in property <string> app-version;
     in-out property <bool> check-updates-on-start: true;
+    in-out property <bool> update-prereleases: true;
     in-out property <bool> dark-mode: true;
     // Standard widgets (LineEdit, CheckBox, ComboBox, AboutSlint) follow
     // Slint's builtin palette, not our tokens — keep it in step.
@@ -213,6 +214,7 @@ export component AppWindow inherits Window {
     callback settings-requested();
     callback check-updates-requested();
     callback check-updates-toggled(bool);
+    callback update-channel-selected(bool);
     callback theme-selected(bool);
     callback open-url(string);
 
@@ -573,6 +575,7 @@ export component AppWindow inherits Window {
                         app-version: root.app-version;
                         umbriel-missing: root.umbriel-missing;
                         check-updates-on-start: root.check-updates-on-start;
+                        update-prereleases: root.update-prereleases;
                         dark-mode: root.dark-mode;
                         config-path: root.config-path;
                         include-files: root.include-files;
@@ -586,6 +589,7 @@ export component AppWindow inherits Window {
                         upstream-note: root.upstream-note;
                         check-now => { root.check-updates-requested(); }
                         toggled(v) => { root.check-updates-toggled(v); }
+                        channel-selected(p) => { root.update-channel-selected(p); }
                         theme-selected(d) => { root.theme-selected(d); }
                         open-url(u) => { root.open-url(u); }
                         relaunch => { root.guide-relaunch(); }
