@@ -107,8 +107,13 @@ Two layers, strictly separated:
   above the per-commit lists and delete the files in the release commit,
   so an empty `changes/` means everything shipped. Conventions and
   examples: [changes/README.md](changes/README.md).
-- Two commit footers change what ships in the notes:
-  - `Changelog: <text>` replaces the generated line with your wording.
+- **Commit bodies ship too**, indented under their bullet — so write
+  the body for the person using the app. Trailers such as
+  `Co-Authored-By:` are left out automatically.
+- A `Changelog:` footer changes what ships in the notes:
+  - `Changelog: short` keeps just the subject line, for a body written
+    for reviewers (internals, function names, how it was debugged).
+  - `Changelog: <text>` replaces the whole entry with your wording.
   - `Changelog: skip` drops the commit from the notes entirely.
   - Matching is a substring over the footer, so avoid the word "skip"
     inside a `Changelog:` note you do want published.
@@ -129,8 +134,8 @@ Two layers, strictly separated:
   | crates.io | needs `cargo install umbriel-config@<version>` | plain `cargo install umbriel-config` |
 
   Each recipe checks the tree, runs the gate, bumps `Cargo.toml`,
-  generates the CHANGELOG.md section with git-cliff, opens it in
-  `$EDITOR` for a once-over, then commits, tags and pushes. Pushing the
+  generates the CHANGELOG.md section with git-cliff, pauses so you can
+  review it in any editor, then commits, tags and pushes. Pushing the
   tag triggers the release workflow: it refuses a tag on the wrong
   branch, publishes to crates.io, then attaches both arch tarballs with
   checksums and notes built from the changelog section. Published

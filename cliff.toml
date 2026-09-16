@@ -4,8 +4,11 @@ body = """
 {% if version %}## [{{ version | trim_start_matches(pat="v") }}] — {{ now() | date(format="%Y-%m-%d") }}{% else %}## [Unreleased]{% endif %}
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim }}
-{% for commit in commits %}{% set note = commit.footers | default(value=[]) | filter(attribute="token", value="Changelog") | first %}
-- {% if commit.scope %}({{ commit.scope }}) {% endif %}{% if note %}{{ note.value }}{% else %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}{% endif %}{% if commit.breaking and commit.breaking_description and commit.breaking_description != commit.message %} — {{ commit.breaking_description }}{% endif %}
+{% for commit in commits %}{% set note = commit.footers | default(value=[]) | filter(attribute="token", value="Changelog") | first %}{% set nv = "" %}{% if note %}{% set nv = note.value | trim %}{% endif %}
+- {% if commit.scope %}({{ commit.scope }}) {% endif %}{% if nv != "" and nv != "short" %}{{ note.value }}{% else %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}{% endif %}{% if commit.breaking and commit.breaking_description and commit.breaking_description != commit.message %} — {{ commit.breaking_description }}{% endif %}
+{%- if commit.body and nv == "" %}
+{{ commit.body | trim | indent(prefix="  ", first=true) }}
+{%- endif %}
 {%- endfor %}
 
 {% endfor %}"""
