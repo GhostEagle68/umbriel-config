@@ -1,5 +1,11 @@
 # umbriel-config
 
+[![Release](https://img.shields.io/github/v/release/GhostEagle68/umbriel-config?include_prereleases&label=release)](https://github.com/GhostEagle68/umbriel-config/releases)
+[![crates.io](https://img.shields.io/crates/v/umbriel-config)](https://crates.io/crates/umbriel-config)
+[![Build](https://img.shields.io/github/actions/workflow/status/GhostEagle68/umbriel-config/rust.yml?branch=dev)](https://github.com/GhostEagle68/umbriel-config/actions/workflows/rust.yml)
+[![Downloads](https://img.shields.io/github/downloads/GhostEagle68/umbriel-config/total)](https://github.com/GhostEagle68/umbriel-config/releases)
+[![License](https://img.shields.io/crates/l/umbriel-config)](LICENSE.md)
+
 A simple GUI configurator for the [Umbriel](https://github.com/noctalia-dev/umbriel)
 Wayland compositor by the Noctalia team.
 
