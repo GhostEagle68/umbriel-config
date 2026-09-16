@@ -67,6 +67,10 @@ Two layers, strictly separated:
   `type/short-description`, e.g. `feat/config-discovery`). **Nothing is
   ever committed directly to `main`** — a stable release fast-forwards
   `main` to `dev`, so the two are identical afterwards.
+- The one exception to "work lands on `dev` first": a fix for a stable
+  release while `dev` holds unreleased work goes on a `hotfix/X.Y.Z`
+  branch cut from that release's tag. It is released from the branch
+  (`main` fast-forwards to it) and then merged into `dev`.
 - Conventional Commits: `type(scope): imperative summary`. Types: `feat`,
   `fix`, `refactor`, `docs`, `test`, `build`, `chore`, `perf`, `style`, `ci`.
   Scope = module or area (`config`, `ui`, `shaders`, `docs`).
