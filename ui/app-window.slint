@@ -210,11 +210,18 @@ export component AppWindow inherits Window {
     in property <string> update-note;
     in property <bool> update-available: false;
     in property <string> update-notes;
+    // Tarball installs replace themselves; the rest show update-hint.
+    in property <bool> update-can-install: false;
+    in property <string> update-hint;
+    in-out property <string> update-version;
+    in-out property <bool> update-installed: false;
     in property <string> upstream-note;
     callback settings-requested();
     callback check-updates-requested();
     callback check-updates-toggled(bool);
     callback update-channel-selected(bool);
+    callback install-update();
+    callback restart-app();
     callback theme-selected(bool);
     callback open-url(string);
 
@@ -584,6 +591,11 @@ export component AppWindow inherits Window {
                         update-note: root.update-note;
                         update-available: root.update-available;
                         update-notes: root.update-notes;
+                        update-can-install: root.update-can-install;
+                        update-hint: root.update-hint;
+                        update-installed: root.update-installed;
+                        install-update => { root.install-update(); }
+                        restart-app => { root.restart-app(); }
                         view-changelog => { root.view-changelog(); }
                         view-update-notes => { root.view-update-notes(); }
                         upstream-note: root.upstream-note;

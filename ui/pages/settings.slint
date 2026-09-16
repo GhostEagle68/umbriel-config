@@ -8,6 +8,9 @@ export component SettingsPage inherits Rectangle {
     in property <string> app-version;
     in property <bool> check-updates-on-start;
     in property <bool> update-prereleases;
+    in property <bool> update-can-install;
+    in property <string> update-hint;
+    in property <bool> update-installed;
     in property <string> update-note;
     in property <bool> update-available;
     in property <string> update-notes;
@@ -25,6 +28,8 @@ export component SettingsPage inherits Rectangle {
     callback relaunch();
     callback sync-schema();
     callback channel-selected(bool);
+    callback install-update();
+    callback restart-app();
     callback view-changelog();
     callback view-update-notes();
 
@@ -330,6 +335,47 @@ export component SettingsPage inherits Rectangle {
                         ActionButton {
                             text: "What's new in this release";
                             clicked => { root.view-update-notes(); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    if root.update-available: HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Install";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        // Only a tarball install may replace itself; the
+                        // others get the command for their own tool.
+                        if root.update-can-install && !root.update-installed: ActionButton {
+                            text: "Install update";
+                            primary: true;
+                            clicked => { root.install-update(); }
+                        }
+
+                        if root.update-installed: ActionButton {
+                            text: "Restart now";
+                            primary: true;
+                            clicked => { root.restart-app(); }
+                        }
+
+                        if !root.update-can-install: Text {
+                            horizontal-stretch: 1;
+                            text: root.update-hint;
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            wrap: TextWrap.word-wrap;
                         }
 
                         Rectangle {

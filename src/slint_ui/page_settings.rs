@@ -44,6 +44,12 @@ pub(super) fn start_update_check(weak: slint::Weak<AppWindow>, env: Option<disco
                 Ok(update::Verdict::UpdateAvailable { version, notes }) => {
                     app.set_update_available(true);
                     app.set_update_note(format!("Version {version} available.").into());
+                    // Who owns this binary decides whether the app may
+                    // install the update or only name the command.
+                    let kind = update::current_install_kind();
+                    app.set_update_can_install(kind == update::InstallKind::Tarball);
+                    app.set_update_hint(update::update_hint(kind, &version).into());
+                    app.set_update_version(version.into());
                     if let Some(notes) = notes {
                         app.set_update_notes(notes.into());
                     }
@@ -108,6 +114,61 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             let mut settings = app_settings::load(&env);
             settings.check_updates_on_start = checked;
             let _ = app_settings::store(&env, &settings);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_install_update(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let version = app.get_update_version().to_string();
+            if version.is_empty() {
+                return;
+            }
+            app.set_update_note("Installing…".into());
+            let weak = app.as_weak();
+            std::thread::spawn(move || {
+                let result = update::install(&version);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(app) = weak.upgrade() else { return };
+                    match result {
+                        Ok(()) => {
+                            app.set_update_installed(true);
+                            app.set_update_note(
+                                format!("Installed {version}. Restart to use it.").into(),
+                            );
+                        }
+                        Err(err) => app.set_update_note(format!("Install failed: {err}").into()),
+                    }
+                });
+            });
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let env = env.clone();
+        app.on_restart_app(move || {
+            let Some(app) = weak.upgrade() else { return };
+            // The new binary is already on disk; unsaved edits would be
+            // lost with the process, so they stop the restart.
+            if app.get_dirty() {
+                app.set_update_note("Save or discard your changes first.".into());
+                return;
+            }
+            let Ok(exe) = std::env::current_exe() else {
+                app.set_update_note("Restart manually to use the new version.".into());
+                return;
+            };
+            match std::process::Command::new(exe)
+                .args(std::env::args().skip(1))
+                .spawn()
+            {
+                Ok(_) => {
+                    // Same order as the Exit path: persist, then quit.
+                    store_window_settings(&app, &env);
+                    let _ = slint::quit_event_loop();
+                }
+                Err(err) => app.set_update_note(format!("Couldn't restart: {err}").into()),
+            }
         });
     }
     {
