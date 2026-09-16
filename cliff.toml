@@ -29,6 +29,8 @@ commit_parsers = [
   { message = "^chore\\(release\\)", skip = true },
   { message = "^[a-z]+\\(deps\\)", skip = true },
   { message = "^(chore|ci|docs|refactor|test|build|style)", skip = true },
+  # The release/CI plumbing is ours, never the user's.
+  { message = "^[a-z]+\\((release|ci)\\)", skip = true },
   # Breaking and security come before the plain feat/fix rules, which
   # would otherwise swallow them; first match wins. The `breaking` field
   # covers both spellings — a `!` in the subject and a BREAKING CHANGE

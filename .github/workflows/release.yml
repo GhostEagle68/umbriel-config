@@ -94,6 +94,8 @@ jobs:
       - name: Check the tag sits on its channel's branch
         run: |
           set -euo pipefail
+          # Don't rely on checkout's ref layout for a tag build.
+          git fetch --quiet origin "+refs/heads/*:refs/remotes/origin/*"
           if [ "${{ steps.channel.outputs.prerelease }}" = "true" ]; then branch=dev; else branch=main; fi
           git merge-base --is-ancestor "$GITHUB_SHA" "origin/$branch" \
             || { echo "::error::$GITHUB_REF_NAME is not on $branch"; exit 1; }
