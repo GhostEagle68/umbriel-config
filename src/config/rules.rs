@@ -17,6 +17,11 @@ pub enum FieldKind {
     Text,
     Toggle,
     Choice(&'static [&'static str]),
+    /// Like `Choice`, but the vocabulary is the user's configured/detected
+    /// output names — dynamic, so it can't be a `&'static` list — and
+    /// anything else is still accepted (an output not currently detected
+    /// is a legitimate value to pre-configure).
+    OutputChoice,
     Float {
         min: f64,
         max: f64,
@@ -25,8 +30,10 @@ pub enum FieldKind {
         min: i64,
         max: i64,
     },
-    /// `[width, height]` positive integers.
-    Size,
+    /// Inline `{ width, height }` positive integers (pixels).
+    SizePx,
+    /// Inline `{ width, height }` fractions, each 0.1-1.0.
+    SizeFraction,
     /// Inline `{ x, y, anchor }`; anchors: top_left, top_right, bottom_left,
     /// bottom_right, top, bottom, left, right, center.
     Position,
@@ -160,27 +167,35 @@ pub const WINDOW_SETTINGS: &[Field] = &[
     Field {
         key: "default_output",
         label: "Output",
-        kind: FieldKind::Text,
+        kind: FieldKind::OutputChoice,
     },
     Field {
-        key: "default_size",
-        label: "Size",
-        kind: FieldKind::Size,
+        key: "default_floating_size_px",
+        label: "Floating size (px)",
+        kind: FieldKind::SizePx,
+    },
+    Field {
+        key: "default_floating_size",
+        label: "Floating size (fraction)",
+        kind: FieldKind::SizeFraction,
+    },
+    Field {
+        key: "default_scrolling_extent_px",
+        label: "Scrolling extent (px)",
+        kind: FieldKind::Integer {
+            min: 1,
+            max: 100_000,
+        },
+    },
+    Field {
+        key: "default_scrolling_extent",
+        label: "Scrolling extent (fraction)",
+        kind: FieldKind::Float { min: 0.1, max: 1.0 },
     },
     Field {
         key: "default_position",
         label: "Position",
         kind: FieldKind::Position,
-    },
-    Field {
-        key: "default_width",
-        label: "Width fraction",
-        kind: FieldKind::Float { min: 0.1, max: 1.0 },
-    },
-    Field {
-        key: "default_height",
-        label: "Height fraction",
-        kind: FieldKind::Float { min: 0.1, max: 1.0 },
     },
     Field {
         key: "default_workspace",
@@ -293,7 +308,7 @@ pub fn parse_rule_key(key: &str) -> Option<(&str, Option<usize>, usize, &str)> {
 /// Editor text for one field; `""` means unset.
 pub fn field_text(doc: &ConfigDocument, family: &str, index: usize, field: &Field) -> String {
     match &field.kind {
-        FieldKind::Text => doc
+        FieldKind::Text | FieldKind::OutputChoice => doc
             .rule_string(family, index, field.key)
             .unwrap_or_default(),
         FieldKind::Toggle => doc
@@ -311,9 +326,13 @@ pub fn field_text(doc: &ConfigDocument, family: &str, index: usize, field: &Fiel
             .rule_integer(family, index, field.key)
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        FieldKind::Size => match doc.rule_integers(family, index, field.key).as_deref() {
-            Some([width, height]) => format!("{width}x{height}"),
-            _ => String::new(),
+        FieldKind::SizePx => match doc.rule_size_px(family, index, field.key) {
+            Some((width, height)) => format!("{width}x{height}"),
+            None => String::new(),
+        },
+        FieldKind::SizeFraction => match doc.rule_size_fraction(family, index, field.key) {
+            Some((width, height)) => format!("{width}x{height}"),
+            None => String::new(),
         },
         FieldKind::Position => match doc.rule_position(family, index, field.key) {
             Some((x, y, Some(anchor))) => format!("{x}, {y}, {anchor}"),
@@ -343,7 +362,7 @@ pub fn apply_field_text(
         return Ok(());
     }
     match &field.kind {
-        FieldKind::Text => {
+        FieldKind::Text | FieldKind::OutputChoice => {
             doc.rule_set_string(family, index, field.key, raw);
         }
         FieldKind::Toggle => match raw {
@@ -368,7 +387,7 @@ pub fn apply_field_text(
                 .map_err(|_| format!("'{raw}' is not a whole number"))?;
             doc.rule_set_integer(family, index, field.key, value.clamp(*min, *max));
         }
-        FieldKind::Size => {
+        FieldKind::SizePx => {
             let text = raw.replace(['x', 'X'], ",");
             let mut parts = text.split(',');
             let width = parts
@@ -383,10 +402,42 @@ pub fn apply_field_text(
                 .trim()
                 .parse::<i64>()
                 .map_err(|_| format!("'{raw}' is not a size like 1920x1080"))?;
-            if parts.next().is_some() || width <= 0 || height <= 0 {
+            if parts.next().is_some() || width < 1 || height < 1 {
                 return Err(format!("'{raw}' is not a size like 1920x1080"));
             }
-            doc.rule_set_integers(family, index, field.key, &[width, height]);
+            doc.rule_set_size_px(
+                family,
+                index,
+                field.key,
+                width.clamp(1, 100_000),
+                height.clamp(1, 100_000),
+            );
+        }
+        FieldKind::SizeFraction => {
+            let text = raw.replace(['x', 'X'], ",");
+            let mut parts = text.split(',');
+            let width = parts
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .parse::<f64>()
+                .map_err(|_| format!("'{raw}' is not a size like 0.5x0.6"))?;
+            let height = parts
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .parse::<f64>()
+                .map_err(|_| format!("'{raw}' is not a size like 0.5x0.6"))?;
+            if parts.next().is_some() {
+                return Err(format!("'{raw}' is not a size like 0.5x0.6"));
+            }
+            doc.rule_set_size_fraction(
+                family,
+                index,
+                field.key,
+                width.clamp(0.1, 1.0),
+                height.clamp(0.1, 1.0),
+            );
         }
         FieldKind::Position => {
             let mut parts = raw.split(',');
@@ -526,7 +577,8 @@ mod tests {
     fn field_text_round_trips_every_kind() {
         let mut doc = ConfigDocument::from_str(
             "[[window_rule]]\nmatch.app_id = \"kitty\"\nopacity = 0.8\n\
-             default_workspace = 3\ndefault_size = [1024, 768]\n\
+             default_workspace = 3\ndefault_floating_size_px = { width = 1024, height = 768 }\n\
+             default_scrolling_extent = 0.6\n\
              default_position = { x = 10, y = 20, anchor = \"top_left\" }\n",
         )
         .unwrap();
@@ -601,8 +653,22 @@ mod tests {
         assert_eq!(text("default_output"), "DP-1");
         // The pre-seeded first rule still reads back through the same path.
         assert_eq!(
-            field_text(&doc, "window_rule", 0, field("window_rule", "default_size")),
+            field_text(
+                &doc,
+                "window_rule",
+                0,
+                field("window_rule", "default_floating_size_px")
+            ),
             "1024x768"
+        );
+        assert_eq!(
+            field_text(
+                &doc,
+                "window_rule",
+                0,
+                field("window_rule", "default_scrolling_extent")
+            ),
+            "0.6"
         );
         assert_eq!(
             field_text(
@@ -685,7 +751,7 @@ mod tests {
                 &mut doc,
                 "window_rule",
                 0,
-                field("window_rule", "default_size"),
+                field("window_rule", "default_floating_size_px"),
                 "1920x"
             )
             .is_err()

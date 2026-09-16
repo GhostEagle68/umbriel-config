@@ -2,6 +2,7 @@
 //! family per page, every chain document's rules editable in place.
 
 use super::common::*;
+use super::page_outputs::output_names;
 use super::*;
 
 /// Which rule family a section page edits, if any.
@@ -51,7 +52,8 @@ fn rule_row(
     match &field.kind {
         rules::FieldKind::Text
         | rules::FieldKind::List
-        | rules::FieldKind::Size
+        | rules::FieldKind::SizePx
+        | rules::FieldKind::SizeFraction
         | rules::FieldKind::Position => {
             row.value = text.into();
         }
@@ -70,6 +72,17 @@ fn rule_row(
             } else {
                 text.into()
             };
+        }
+        rules::FieldKind::OutputChoice => {
+            row.kind = ValueKind::OpenChoice;
+            row.choices = Rc::new(VecModel::from(
+                output_names(shell)
+                    .into_iter()
+                    .map(SharedString::from)
+                    .collect::<Vec<_>>(),
+            ))
+            .into();
+            row.value = text.into();
         }
         rules::FieldKind::Float { min, max } => {
             row.kind = ValueKind::Float;

@@ -127,18 +127,37 @@ export component PointerRow inherits Rectangle {
 
 // LineEdit that commits on Enter or when focus leaves with edits pending.
 // `draft` holds the working text so blur can compare against the stored
-// value and only commits real changes.
-export component DraftEdit inherits LineEdit {
+// value and only commits real changes. Wrapped in a Rectangle (rather than
+// inheriting LineEdit directly) so an `invalid` edit can get a visible red
+// outline without reaching into the native widget's own styling.
+export component DraftEdit inherits Rectangle {
     in property <string> value;
+    in property <bool> invalid: false;
     callback commit(string);
 
     property <string> draft: root.value;
-    text <=> draft;
-    changed value => { self.draft = self.value; }
-    accepted(t) => { root.commit(t); }
-    changed has-focus => {
-        if (!self.has-focus && self.draft != root.value) {
-            root.commit(self.draft);
+    changed value => { root.draft = root.value; }
+
+    height: inner.preferred-height;
+    border-width: root.invalid ? 1px : 0px;
+    border-color: Theme.danger;
+    border-radius: Theme.radius-s;
+
+    inner := LineEdit {
+        width: 100%;
+        height: 100%;
+        // Shown only while text is truly empty — a real "" value (e.g.
+        // input.keyboard.layout, meaning "system default") reads as
+        // intentional rather than looking like a broken/blank box. The
+        // "—" unset placeholder is literal text, not an empty string, so
+        // this never fires for an unset row.
+        placeholder-text: "empty";
+        text <=> root.draft;
+        accepted(t) => { root.commit(t); }
+        changed has-focus => {
+            if (!self.has-focus && root.draft != root.value) {
+                root.commit(root.draft);
+            }
         }
     }
 }
@@ -258,7 +277,7 @@ export component SettingRowView inherits Rectangle {
                 spacing: Theme.space-s;
                 alignment: start;
 
-                if setting.max > setting.min && setting.value.to-float() == setting.value.to-float(): Slider {
+                if setting.max > setting.min && !setting.available: Slider {
                     width: 160px;
                     minimum: setting.min;
                     maximum: setting.max;
@@ -278,12 +297,8 @@ export component SettingRowView inherits Rectangle {
                 DraftEdit {
                     width: 140px;
                     value: setting.preview == "" ? setting.value : setting.preview;
+                    invalid: setting.error != "";
                     commit(t) => { root.set-value(setting.key, t); }
-                }
-
-                if setting.changed: ActionButton {
-                    text: "Reset";
-                    clicked => { root.reset-key(setting.key); }
                 }
             }
             if setting.kind == ValueKind.color: HorizontalLayout {
@@ -301,6 +316,7 @@ export component SettingRowView inherits Rectangle {
                 DraftEdit {
                     width: 140px;
                     value: setting.value;
+                    invalid: setting.error != "";
                     commit(t) => { root.set-value(setting.key, t); }
                 }
             }
@@ -313,11 +329,13 @@ export component SettingRowView inherits Rectangle {
             if setting.kind == ValueKind.list: DraftEdit {
                 width: 220px;
                 value: setting.value;
+                invalid: setting.error != "";
                 commit(t) => { root.set-value(setting.key, t); }
             }
             if setting.kind == ValueKind.text: DraftEdit {
                 width: 220px;
                 value: setting.value;
+                invalid: setting.error != "";
                 commit(t) => { root.set-value(setting.key, t); }
             }
             if setting.kind == ValueKind.choice: ComboBox {
@@ -326,6 +344,34 @@ export component SettingRowView inherits Rectangle {
                 current-value: setting.value;
                 selected(v) => { root.set-value(setting.key, v); }
             }
+            // A big-but-not-closed vocabulary (hot-corner actions, rule
+            // outputs): a dropdown of the known values plus a free-text
+            // box for anything else valid. Both read `setting.value`, so
+            // picking a dropdown item immediately fills the box too —
+            // there is only ever one value, shown two ways.
+            if setting.kind == ValueKind.open-choice: HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+
+                ComboBox {
+                    // Wide: Slint's ComboBox popup width follows the
+                    // closed box's own width, and some known values here
+                    // (e.g. hot-corner actions) run past 35 characters —
+                    // a narrow box truncates the dropdown list itself,
+                    // not just the closed-state label.
+                    width: 260px;
+                    model: setting.choices;
+                    current-value: setting.value;
+                    selected(v) => { root.set-value(setting.key, v); }
+                }
+
+                DraftEdit {
+                    width: 160px;
+                    value: setting.value;
+                    invalid: setting.error != "";
+                    commit(t) => { root.set-value(setting.key, t); }
+                }
+            }
             if setting.kind == ValueKind.unset: Text {
                 text: setting.value;
                 color: Theme.text-2;
@@ -333,13 +379,28 @@ export component SettingRowView inherits Rectangle {
                 font-size: Theme.font-small;
                 vertical-alignment: center;
             }
+
+            // One Reset for every editable kind, not just ranged
+            // numbers — the changed-dot above already lights up
+            // for any kind, so every kind needs a way back.
+            if setting.changed && setting.kind != ValueKind.unset: ActionButton {
+                text: "Reset";
+                clicked => { root.reset-key(setting.key); }
+            }
         }
 
         HorizontalLayout {
             spacing: Theme.space-s;
             alignment: start;
 
-            if setting.hint != "": Text {
+            if setting.error != "": Text {
+                text: setting.error;
+                color: Theme.danger;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+
+            if setting.error == "" && setting.hint != "": Text {
                 text: setting.hint;
                 color: Theme.text-2;
                 font-size: Theme.font-small;

@@ -523,6 +523,56 @@ impl ConfigDocument {
         self.rule_store(name, index, key, Value::InlineTable(inline));
     }
 
+    /// Inline `{ width, height }` pixel size.
+    pub fn rule_size_px(&self, name: &str, index: usize, key: &str) -> Option<(i64, i64)> {
+        let inline = self
+            .rule_item(name, index, key)?
+            .as_value()?
+            .as_inline_table()?;
+        let width = inline.get("width")?.as_integer()?;
+        let height = inline.get("height")?.as_integer()?;
+        Some((width, height))
+    }
+
+    pub fn rule_set_size_px(
+        &mut self,
+        name: &str,
+        index: usize,
+        key: &str,
+        width: i64,
+        height: i64,
+    ) {
+        let mut inline = InlineTable::new();
+        inline.insert("width", width.into());
+        inline.insert("height", height.into());
+        self.rule_store(name, index, key, Value::InlineTable(inline));
+    }
+
+    /// Inline `{ width, height }` fractional size, each 0.0-1.0.
+    pub fn rule_size_fraction(&self, name: &str, index: usize, key: &str) -> Option<(f64, f64)> {
+        let inline = self
+            .rule_item(name, index, key)?
+            .as_value()?
+            .as_inline_table()?;
+        let width = inline.get("width")?.as_float()?;
+        let height = inline.get("height")?.as_float()?;
+        Some((width, height))
+    }
+
+    pub fn rule_set_size_fraction(
+        &mut self,
+        name: &str,
+        index: usize,
+        key: &str,
+        width: f64,
+        height: f64,
+    ) {
+        let mut inline = InlineTable::new();
+        inline.insert("width", width.into());
+        inline.insert("height", height.into());
+        self.rule_store(name, index, key, Value::InlineTable(inline));
+    }
+
     /// Append an empty `[[name]]` rule, creating the array when absent.
     pub fn add_rule(&mut self, name: &str) {
         let entry = self.doc.as_table_mut().entry(name);
@@ -1022,6 +1072,30 @@ curve = \"easeout\"
         assert!(
             doc.text()
                 .contains("default_position = { x = 0, y = -40, anchor = \"bottom_right\" }")
+        );
+    }
+
+    #[test]
+    fn rule_size_px_round_trips_inline() {
+        let mut doc = ConfigDocument::from_str("[[window_rule]]\n").unwrap();
+        doc.rule_set_size_px("window_rule", 0, "default_floating_size_px", 1020, 900);
+        assert!(
+            doc.text()
+                .contains("default_floating_size_px = { width = 1020, height = 900 }")
+        );
+        assert_eq!(
+            doc.rule_size_px("window_rule", 0, "default_floating_size_px"),
+            Some((1020, 900))
+        );
+    }
+
+    #[test]
+    fn rule_size_fraction_round_trips_inline() {
+        let mut doc = ConfigDocument::from_str("[[window_rule]]\n").unwrap();
+        doc.rule_set_size_fraction("window_rule", 0, "default_floating_size", 0.5, 0.6);
+        assert_eq!(
+            doc.rule_size_fraction("window_rule", 0, "default_floating_size"),
+            Some((0.5, 0.6))
         );
     }
 

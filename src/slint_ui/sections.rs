@@ -285,6 +285,7 @@ fn other_card(
                     available: false,
                     is_new: false,
                     preview: String::new().into(),
+                    error: String::new().into(),
                 },
             );
         }

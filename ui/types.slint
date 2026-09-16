@@ -9,7 +9,7 @@ export struct SectionRow {
     // opens the keybinds page pre-filtered to the query.
     kind: string,
 }
-export enum ValueKind { unset, boolean, integer, float, text, list, choice, color, curve }
+export enum ValueKind { unset, boolean, integer, float, text, list, choice, color, curve, open-choice }
 
 export struct SettingRow {
     label: string,
@@ -33,6 +33,8 @@ export struct SettingRow {
     is-new: bool,
     // Live slider feedback for the text box; empty when not dragging.
     preview: string,
+    // Set when the last edit to this row was rejected; empty otherwise.
+    error: string,
 }
 
 export struct SettingsCard {

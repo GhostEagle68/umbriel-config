@@ -189,6 +189,7 @@ pub(super) fn blank_row(key: String, label: &str, home: i32) -> SettingRow {
         available: false,
         is_new: false,
         preview: String::new().into(),
+        error: String::new().into(),
     }
 }
 
@@ -258,7 +259,9 @@ pub(super) fn section_names(entries: &[schema::Entry]) -> Vec<SharedString> {
 /// Dropdown vocabulary for Choice kinds; empty for everything else.
 pub(super) fn choice_model(kind: &schema::Kind) -> slint::ModelRc<SharedString> {
     let choices: Vec<SharedString> = match kind {
-        schema::Kind::Choice(values) => values.iter().map(SharedString::from).collect(),
+        schema::Kind::Choice(values) | schema::Kind::OpenChoice(values) => {
+            values.iter().map(SharedString::from).collect()
+        }
         schema::Kind::Curve => schema::BUILTIN_CURVES
             .iter()
             .map(|name| SharedString::from(*name))

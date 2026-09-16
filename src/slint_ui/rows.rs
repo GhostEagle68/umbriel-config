@@ -31,6 +31,7 @@ fn setting_row(doc: &ConfigDocument, entry: &schema::Entry) -> SettingRow {
         available: false,
         is_new: false,
         preview: String::new().into(),
+        error: String::new().into(),
     }
 }
 
@@ -157,12 +158,26 @@ pub(super) fn rebuild_row(app: &AppWindow, shell: &Shell, key: &str, force: bool
     };
 
     // Same text = nothing to re-render; keeps the editor's focus. A
-    // forced rebuild also swaps changed options, and a lingering drag
-    // preview always clears.
+    // forced rebuild also swaps changed options, a lingering drag
+    // preview always clears, and a prior rejection's error clears once
+    // the doc has actually accepted a write for this key.
     update_row(app, key, |old| {
-        let write = force || old.value != row.value || !old.preview.is_empty();
+        let write =
+            force || old.value != row.value || !old.preview.is_empty() || !old.error.is_empty();
         if write {
             *old = row;
+        }
+        write
+    });
+}
+
+/// Stamp a rejected edit's message onto its row so the box that was
+/// actually typed into shows why, instead of just silently reverting.
+fn set_row_error(app: &AppWindow, key: &str, err: &str) {
+    update_row(app, key, |old| {
+        let write = old.error.as_str() != err;
+        if write {
+            old.error = err.into();
         }
         write
     });
@@ -208,6 +223,7 @@ fn value_kind(kind: &schema::Kind) -> ValueKind {
         schema::Kind::Choice(_) => ValueKind::Choice,
         schema::Kind::Color => ValueKind::Color,
         schema::Kind::Curve => ValueKind::Curve,
+        schema::Kind::OpenChoice(_) => ValueKind::OpenChoice,
     }
 }
 
@@ -261,13 +277,20 @@ pub(super) fn commit_value(kind: Option<&schema::Kind>, raw: &str) -> Result<Str
             }
             Ok(value.to_string())
         }
+        Some(schema::Kind::Color) => {
+            if parse_hex_color(raw).is_none() {
+                return Err(format!("'{raw}' is not a hex color (#RRGGBB or #RRGGBBAA)"));
+            }
+            Ok(format!("{raw:?}"))
+        }
         // Strings in the file are quoted; Debug-format escapes the same way
-        // TOML basic strings do for the ASCII values configs use.
+        // TOML basic strings do for the ASCII values configs use. OpenChoice
+        // is suggestions, not a closed enum — anything typed is accepted.
         Some(
             schema::Kind::Text
             | schema::Kind::Choice(_)
-            | schema::Kind::Color
-            | schema::Kind::Curve,
+            | schema::Kind::Curve
+            | schema::Kind::OpenChoice(_),
         ) => Ok(format!("{raw:?}")),
         _ => Ok(raw.to_owned()),
     }
@@ -285,7 +308,8 @@ fn typed_value(doc: &ConfigDocument, entry: &schema::Entry) -> Option<String> {
         schema::Kind::Text
         | schema::Kind::Choice(_)
         | schema::Kind::Color
-        | schema::Kind::Curve => doc.get_string(&parts),
+        | schema::Kind::Curve
+        | schema::Kind::OpenChoice(_) => doc.get_string(&parts),
     }
 }
 
@@ -312,19 +336,26 @@ fn list_text(doc: &ConfigDocument, parts: &[&str]) -> Option<String> {
     doc.get_strings(parts).map(|values| values.join(", "))
 }
 
+/// Parse `#RRGGBB` or `#RRGGBBAA` into (r, g, b, a) bytes; `None` for
+/// anything else (wrong length, non-hex digits, missing `#`).
+fn parse_hex_color(value: &str) -> Option<(u8, u8, u8, u8)> {
+    let hex = value.trim().strip_prefix('#')?;
+    if hex.len() != 6 && hex.len() != 8 {
+        return None;
+    }
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |range: std::ops::Range<usize>| u8::from_str_radix(&hex[range], 16).ok();
+    let (r, g, b) = (byte(0..2)?, byte(2..4)?, byte(4..6)?);
+    let a = if hex.len() == 8 { byte(6..8)? } else { 255 };
+    Some((r, g, b, a))
+}
+
 /// Hex color (#RRGGBB or #RRGGBBAA) to swatch brush; black when unparseable.
 fn swatch_for(value: &str) -> slint::Brush {
-    let hex = value.trim().trim_start_matches('#');
-    let channel = |range: std::ops::Range<usize>| {
-        hex.get(range)
-            .and_then(|bits| u8::from_str_radix(bits, 16).ok())
-            .unwrap_or(0)
-    };
-    slint::Brush::from(slint::Color::from_rgb_u8(
-        channel(0..2),
-        channel(2..4),
-        channel(4..6),
-    ))
+    let (r, g, b, _) = parse_hex_color(value).unwrap_or((0, 0, 0, 255));
+    slint::Brush::from(slint::Color::from_rgb_u8(r, g, b))
 }
 
 /// Mined metadata shown beside the editor: range from the Kind payload,
@@ -419,6 +450,7 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
             rules::apply_field_text(doc_at_mut(&mut shell, target), family, index, field, raw)
         };
         if let Err(err) = result {
+            set_row_error(app, key, &err);
             app.set_status(err.into());
             return;
         }
@@ -445,6 +477,7 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
     let value_text = match formatted {
         Ok(value_text) => value_text,
         Err(err) => {
+            set_row_error(app, key, &err);
             app.set_status(err.into());
             return;
         }
@@ -470,7 +503,9 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
         doc.set_leaf_text(key, &value_text)
     };
     if !accepted {
-        app.set_status(format!("umbriel would reject {key} = {value_text}").into());
+        let err = format!("umbriel would reject {key} = {value_text}");
+        set_row_error(app, key, &err);
+        app.set_status(err.into());
         return;
     }
     let shell = shell.borrow();
@@ -488,4 +523,78 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
         rebuild_row(app, &shell, &format!("output.{name}.refresh"), true);
     }
     app.set_changed_count(changed_count(&shell));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integer_kind_rejects_non_numeric_input() {
+        let kind = schema::Kind::Integer {
+            min: None,
+            max: None,
+        };
+        let err = commit_value(Some(&kind), "banana").unwrap_err();
+        assert_eq!(err, "'banana' is not a whole number");
+    }
+
+    #[test]
+    fn integer_kind_clamps_to_its_range() {
+        let kind = schema::Kind::Integer {
+            min: Some(0),
+            max: Some(10),
+        };
+        assert_eq!(commit_value(Some(&kind), "999").unwrap(), "10");
+        assert_eq!(commit_value(Some(&kind), "-5").unwrap(), "0");
+    }
+
+    #[test]
+    fn float_kind_rejects_non_numeric_input() {
+        let kind = schema::Kind::Float {
+            min: None,
+            max: None,
+        };
+        let err = commit_value(Some(&kind), "nope").unwrap_err();
+        assert_eq!(err, "'nope' is not a number");
+    }
+
+    #[test]
+    fn color_kind_accepts_valid_hex() {
+        assert_eq!(
+            commit_value(Some(&schema::Kind::Color), "#7AA3FFFF").unwrap(),
+            "\"#7AA3FFFF\""
+        );
+        assert!(commit_value(Some(&schema::Kind::Color), "#7AA3FF").is_ok());
+    }
+
+    #[test]
+    fn color_kind_rejects_garbage() {
+        let err = commit_value(Some(&schema::Kind::Color), "banana").unwrap_err();
+        assert_eq!(err, "'banana' is not a hex color (#RRGGBB or #RRGGBBAA)");
+        assert!(commit_value(Some(&schema::Kind::Color), "#12345").is_err());
+        assert!(commit_value(Some(&schema::Kind::Color), "#GGHHII").is_err());
+    }
+
+    #[test]
+    fn parses_hex_colors_with_and_without_alpha() {
+        assert_eq!(parse_hex_color("#7AA3FF"), Some((0x7A, 0xA3, 0xFF, 0xFF)));
+        assert_eq!(parse_hex_color("#7AA3FF80"), Some((0x7A, 0xA3, 0xFF, 0x80)));
+        assert_eq!(parse_hex_color("not a color"), None);
+    }
+
+    #[test]
+    fn open_choice_kind_accepts_anything_including_spawn_forms() {
+        let kind = schema::Kind::OpenChoice(vec!["overview-open".to_owned()]);
+        assert_eq!(
+            commit_value(Some(&kind), "overview-open").unwrap(),
+            "\"overview-open\""
+        );
+        // The whole point of OpenChoice: values outside the known list
+        // (spawn:/submap:/anything else) are still accepted, unquoted-raw.
+        assert_eq!(
+            commit_value(Some(&kind), "spawn:notify-send 'hi'").unwrap(),
+            "\"spawn:notify-send 'hi'\""
+        );
+    }
 }

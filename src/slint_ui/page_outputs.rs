@@ -27,7 +27,7 @@ pub(super) fn output_cards(shell: &Shell) -> Vec<SettingsCard> {
 }
 
 /// Detected-then-configured output names, deduplicated.
-fn output_names(shell: &Shell) -> Vec<String> {
+pub(super) fn output_names(shell: &Shell) -> Vec<String> {
     let main = shell.includes.docs.len();
     let mut names = outputs::configured(doc_at(shell, main));
     for monitor in &shell.guide_monitors {

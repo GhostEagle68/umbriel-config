@@ -33,6 +33,12 @@ pub enum Kind {
     /// `curve` under `[animation.*]`: a built-in easing name, a registered
     /// bezier/spring name, or an inline curve string.
     Curve,
+    /// A large-but-mostly-fixed vocabulary with a genuinely open escape
+    /// hatch (e.g. hot-corner actions: mostly fixed verbs, but also
+    /// `spawn:<cmd>`/`submap:<name>`). Rendered as a dropdown of the known
+    /// values alongside a free-text box; nothing outside the list is
+    /// rejected.
+    OpenChoice(Vec<String>),
 }
 
 /// A typed scalar value; also used for defaults.
@@ -125,6 +131,127 @@ pub const BUILTIN_CURVES: &[&str] = &[
     "stiff",
 ];
 
+/// Every argument-less (or optional-bracket-only, used bare) action verb,
+/// verbatim from umbriel's `docs/user/actions.md` — mirrors `umbriel msg
+/// --help`. Re-sync when umbriel adds actions. Excludes `spawn:<cmd>`,
+/// `submap:<name>`, and every action whose argument is required
+/// (`<angle>` forms): those aren't a fixed vocabulary a dropdown can offer
+/// as-is, and stay reachable through the paired free-text box instead.
+pub const ACTIONS: &[&str] = &[
+    // Focus
+    "column-focus-first",
+    "column-focus-last",
+    "output-focus-down",
+    "output-focus-left",
+    "output-focus-next",
+    "output-focus-previous",
+    "output-focus-right",
+    "output-focus-up",
+    "window-focus-down",
+    "window-focus-last",
+    "window-focus-left",
+    "window-focus-next",
+    "window-focus-or-output-down",
+    "window-focus-or-output-left",
+    "window-focus-or-output-right",
+    "window-focus-or-output-up",
+    "window-focus-or-workspace-down",
+    "window-focus-or-workspace-up",
+    "window-focus-previous",
+    "window-focus-right",
+    "window-focus-switch-floating",
+    "window-focus-up",
+    "workspace-focus-last",
+    // Move & size
+    "column-center",
+    "column-move-left",
+    "column-move-right",
+    "column-move-to-first",
+    "column-move-to-last",
+    "column-move-to-output-down",
+    "column-move-to-output-left",
+    "column-move-to-output-right",
+    "column-move-to-output-up",
+    "layout-master-count-decrease",
+    "layout-master-count-increase",
+    "layout-scroll-down",
+    "layout-scroll-drag",
+    "layout-scroll-left",
+    "layout-scroll-right",
+    "layout-scroll-up",
+    "window-center",
+    "window-consume-left",
+    "window-consume-or-expel-left",
+    "window-consume-or-expel-right",
+    "window-consume-right",
+    "window-cycle-primary-extent",
+    "window-cycle-primary-extent-back",
+    "window-cycle-secondary-extent",
+    "window-cycle-secondary-extent-back",
+    "window-move-down",
+    "window-move-or-output-down",
+    "window-move-or-output-left",
+    "window-move-or-output-right",
+    "window-move-or-output-up",
+    "window-move-or-workspace-down",
+    "window-move-or-workspace-up",
+    "window-move-to-output-down",
+    "window-move-to-output-left",
+    "window-move-to-output-next",
+    "window-move-to-output-previous",
+    "window-move-to-output-right",
+    "window-move-to-output-up",
+    "window-move-up",
+    "window-swap-next",
+    "window-swap-previous",
+    // Windows
+    "window-close",
+    "window-toggle-floating",
+    "window-toggle-fullscreen",
+    "window-toggle-maximize",
+    "window-toggle-maximize-to-edges",
+    "window-toggle-pinned",
+    // Scratchpad
+    "scratchpad-focus-next",
+    "scratchpad-toggle",
+    "window-move-to-scratchpad",
+    "window-restore-from-scratchpad",
+    "window-toggle-scratchpad",
+    // Workspaces
+    "column-move-to-workspace-next",
+    "column-move-to-workspace-previous",
+    "window-move-to-workspace-next",
+    "window-move-to-workspace-previous",
+    "workspace-move-down",
+    "workspace-move-to-output-down",
+    "workspace-move-to-output-left",
+    "workspace-move-to-output-right",
+    "workspace-move-to-output-up",
+    "workspace-move-up",
+    "workspace-next",
+    "workspace-previous",
+    "workspace-swap-active-output-down",
+    "workspace-swap-active-output-left",
+    "workspace-swap-active-output-next",
+    "workspace-swap-active-output-previous",
+    "workspace-swap-active-output-right",
+    "workspace-swap-active-output-up",
+    // Overview
+    "overview-close",
+    "overview-open",
+    "overview-toggle",
+    // System
+    "cheatsheet-close",
+    "cheatsheet-open",
+    "cheatsheet-toggle",
+    "config-reload",
+    "dpms-off",
+    "dpms-on",
+    "keyboard-layout-next",
+    "session-quit",
+    "shortcuts-inhibit-toggle",
+];
+
 /// Maintainer refinements over derived entries, keyed by dotted path.
 pub struct Overlay {
     /// Sections never offered as settings (handled by dedicated editors
@@ -146,19 +273,17 @@ pub const OVERLAY: Overlay = Overlay {
 /// under fully commented sections (`# [environment]`). Active keys always
 /// win; a commented duplicate is skipped.
 fn mine_comments(packaged: &str, entries: &mut Vec<Entry>) {
-    let known: std::collections::HashSet<String> = entries.iter().map(Entry::dotted).collect();
+    let mut known: std::collections::HashSet<String> = entries.iter().map(Entry::dotted).collect();
     let mut section = String::new();
     for line in packaged.lines() {
         let trimmed = line.trim();
         let Some(body) = trimmed.strip_prefix('#') else {
-            if let Some(header) = parse_header(trimmed) {
-                section = header;
-            }
+            reset_or_enter_section(trimmed, &mut section);
             continue;
         };
         let body = body.trim();
-        if let Some(header) = parse_header(body) {
-            section = header;
+        if body.starts_with('[') {
+            reset_or_enter_section(body, &mut section);
             continue;
         }
         let Some((key, raw)) = body.split_once('=') else {
@@ -176,8 +301,13 @@ fn mine_comments(packaged: &str, entries: &mut Vec<Entry>) {
             if key == "curve" && section.starts_with("animation") {
                 kind = Kind::Curve;
             }
+            if key == "action" && section.starts_with("hot_corners") {
+                kind =
+                    Kind::OpenChoice(ACTIONS.iter().map(|action| (*action).to_owned()).collect());
+            }
             let mut path: Vec<String> = section.split('.').map(str::to_owned).collect();
             path.push(key.to_owned());
+            known.insert(dotted.clone());
             entries.push(Entry {
                 label: overlay_label(&dotted, key),
                 restart: OVERLAY.restart.contains(&dotted.as_str()),
@@ -200,6 +330,20 @@ fn parse_header(line: &str) -> Option<String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.'))
     .then(|| inner.to_owned())
+}
+
+/// A `[...]` line (active or commented-out, `#` already stripped): enters
+/// the section when it parses as a plain, bare-dotted header, or clears it
+/// otherwise — an array-of-tables (`[[window_rule]]`, `[[layer_rule]]`) or
+/// a quoted/complex header (`[output."Some Make"]`) is left to its own
+/// dedicated editor, so keys mentioned after it (its many illustrative
+/// example blocks, for the rule families) must not keep leaking into
+/// whatever `[section]` came last. A no-op for a non-header line.
+fn reset_or_enter_section(line: &str, section: &mut String) {
+    if !line.starts_with('[') {
+        return;
+    }
+    *section = parse_header(line).unwrap_or_default();
 }
 
 fn is_bare_key(key: &str) -> bool {
@@ -343,10 +487,11 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
         toml_edit::Value::String(v) => {
             let text = v.value();
             let suffix = v.decor().suffix().and_then(toml_edit::RawString::as_str);
-            let kind = if path.last().map(String::as_str) == Some("curve")
-                && section.starts_with("animation")
-            {
+            let is_last = |name| path.last().map(String::as_str) == Some(name);
+            let kind = if is_last("curve") && section.starts_with("animation") {
                 Kind::Curve
+            } else if is_last("action") && section.starts_with("hot_corners") {
+                Kind::OpenChoice(ACTIONS.iter().map(|action| (*action).to_owned()).collect())
             } else if is_color(text) {
                 Kind::Color
             } else {
@@ -371,9 +516,24 @@ fn entry_for(path: &[String], value: &toml_edit::Value, section: &str) -> Option
     })
 }
 
+/// Split a numeric token from a unit glued directly onto it
+/// (`"100%"` -> `("100", Some("%"))`, `"4x"` -> `("4", Some("x"))`,
+/// `"10000"` -> `("10000", None)`). A leading `-` is kept with the number.
+fn split_number_suffix(token: &str) -> (&str, Option<&str>) {
+    match token
+        .char_indices()
+        .find(|&(i, c)| i > 0 && c != '.' && !c.is_ascii_digit())
+    {
+        Some((i, _)) => (&token[..i], Some(&token[i..])),
+        None => (token, None),
+    }
+}
+
 /// Best-effort numeric range from a value's trailing decor comment
-/// (`# 0-10000 ms`, `# -200 to 200`, `# 0.0-1.0`). Returns
-/// (min, max, unit) — the unit is a word after the max number, if any.
+/// (`# 0-10000 ms`, `# -200 to 200`, `# 0.0-1.0`, `# 0-100%`, or with a
+/// description before the number, `# Inner border width, 0-100 logical
+/// pixels`). Returns (min, max, unit) — the unit is a word after the max
+/// number, or one glued directly onto it, if any.
 fn mine_range(decor: &str) -> Option<(f64, f64, Option<String>)> {
     let comment = decor.split('#').nth(1)?;
     let body = comment.trim();
@@ -386,15 +546,29 @@ fn mine_range(decor: &str) -> Option<(f64, f64, Option<String>)> {
         let (min, max) = body.split_once('-')?;
         (min.trim().to_owned(), max.trim().to_owned())
     };
-    let min: f64 = a.split_whitespace().next().unwrap_or(&a).parse().ok()?;
-    let max: f64 = b.split_whitespace().next().unwrap_or(&b).parse().ok()?;
-    // A unit is a word after the max number ("# 1-10000 ms"); a trailing
-    // token that starts non-alphabetic is prose, not a unit.
+    // The number sits at the end of the min-side text, which may carry a
+    // description before it ("Inner border width, 0"), and at the start
+    // of the max-side text ("100 logical pixels"); a glued unit ("100%")
+    // rides along with either.
+    let (min_num, _) = split_number_suffix(a.split_whitespace().next_back().unwrap_or(&a));
+    let max_token = b.split_whitespace().next().unwrap_or(&b);
+    let (max_num, glued_unit) = split_number_suffix(max_token);
+    let min: f64 = min_num.parse().ok()?;
+    let max: f64 = max_num.parse().ok()?;
+    // A unit is a word after the max number ("# 1-10000 ms") or glued
+    // directly onto it ("# 0-100%"); only accept letters or "%" so a
+    // trailing clause's stray punctuation ("# 0-200; 0 is a hard edge")
+    // can't be misread as one.
     let unit = b
         .split_whitespace()
         .nth(1)
         .filter(|word| word.chars().next().is_some_and(|c| c.is_alphabetic()))
-        .map(str::to_owned);
+        .map(str::to_owned)
+        .or_else(|| {
+            glued_unit
+                .filter(|suffix| suffix.chars().all(|c| c.is_alphabetic() || c == '%'))
+                .map(str::to_owned)
+        });
     (max >= min).then_some((min, max, unit))
 }
 
@@ -686,6 +860,172 @@ files = []
     #[test]
     fn broken_input_yields_no_entries() {
         assert!(assemble("not [valid").is_empty());
+    }
+
+    #[test]
+    fn mines_range_with_unit_glued_to_the_max_number() {
+        assert_eq!(
+            mine_range("# 0-100%"),
+            Some((0.0, 100.0, Some("%".to_owned())))
+        );
+        assert_eq!(mine_range("# 1-4x"), Some((1.0, 4.0, Some("x".to_owned()))));
+    }
+
+    #[test]
+    fn mines_range_with_unit_as_a_separate_word() {
+        assert_eq!(
+            mine_range("# 1-10000 ms"),
+            Some((1.0, 10000.0, Some("ms".to_owned())))
+        );
+    }
+
+    #[test]
+    fn glued_unit_range_becomes_a_ranged_integer_kind() {
+        let entries = assemble(
+            r##"[general]
+opacity = 100                  # 0-100%
+"##,
+        );
+        let opacity = entries
+            .iter()
+            .find(|e| e.dotted() == "general.opacity")
+            .expect("mined entry");
+        assert_eq!(
+            opacity.kind,
+            Kind::Integer {
+                min: Some(0),
+                max: Some(100)
+            }
+        );
+        assert_eq!(opacity.unit, Some("%".to_owned()));
+    }
+
+    #[test]
+    fn mines_range_with_a_description_before_the_min_number() {
+        assert_eq!(
+            mine_range("# Inner border width, 0-100 logical pixels"),
+            Some((0.0, 100.0, Some("logical".to_owned())))
+        );
+        assert_eq!(
+            mine_range("# Horizontal offset, -200 to 200"),
+            Some((-200.0, 200.0, None))
+        );
+    }
+
+    #[test]
+    fn a_trailing_clause_after_the_max_number_is_not_mistaken_for_a_unit() {
+        assert_eq!(
+            mine_range("# Gaussian softness, 0-200; 0 is a hard edge"),
+            Some((0.0, 200.0, None))
+        );
+    }
+
+    #[test]
+    fn hot_corner_action_mines_as_open_choice() {
+        let entries = assemble(
+            r##"[hot_corners.top_left]
+enabled = true
+delay_ms = 500                                  # 0 activates immediately; maximum is 10000
+action = "overview-open"                        # Any normal Umbriel action is accepted
+"##,
+        );
+        let action = entries
+            .iter()
+            .find(|e| e.dotted() == "hot_corners.top_left.action")
+            .expect("mined entry");
+        match &action.kind {
+            Kind::OpenChoice(values) => {
+                assert!(values.contains(&"overview-open".to_owned()));
+                assert!(!values.iter().any(|v| v.starts_with("spawn")));
+                assert!(!values.iter().any(|v| v.starts_with("submap")));
+            }
+            other => panic!("expected OpenChoice, got {other:?}"),
+        }
+        // delay_ms's comment states a real range in prose with no
+        // parseable delimiter — a known, accepted mining gap.
+        let delay = entries
+            .iter()
+            .find(|e| e.dotted() == "hot_corners.top_left.delay_ms")
+            .expect("mined entry");
+        assert_eq!(
+            delay.kind,
+            Kind::Integer {
+                min: None,
+                max: None
+            }
+        );
+    }
+
+    #[test]
+    fn comments_with_no_delimiter_yield_no_range() {
+        assert_eq!(
+            mine_range("# Window opacity during a tiled or floating drag"),
+            None
+        );
+    }
+
+    #[test]
+    fn array_table_headers_stop_comments_leaking_into_the_prior_section() {
+        let entries = assemble(
+            r##"[layout.master]
+position = "left"                               # left, right, or center
+
+# [[window_rule]]
+# match.app_id = "^scratchpad-terminal$"
+# default_output = "DP-1"
+# default_workspace = 2
+
+# [[layer_rule]]
+# match.namespace = "^notifications$"
+# opacity = 0.9
+
+[animation]
+enabled = true
+"##,
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.dotted() != "layout.master.default_output"
+                    && e.dotted() != "layout.master.default_workspace"
+                    && e.dotted() != "layout.master.opacity"),
+            "commented rule-example keys must not leak into layout.master: {:?}",
+            entries.iter().map(Entry::dotted).collect::<Vec<_>>()
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.dotted() == "layout.master.position")
+        );
+        assert!(entries.iter().any(|e| e.dotted() == "animation.enabled"));
+    }
+
+    #[test]
+    fn quoted_headers_also_stop_the_leak() {
+        let entries = assemble(
+            r##"[colors]
+background = "#141419FF"
+
+# [output."Some Make ABC123"]
+# scale = 1.25
+"##,
+        );
+        assert!(entries.iter().all(|e| e.dotted() != "colors.scale"));
+    }
+
+    #[test]
+    fn repeated_commented_keys_within_one_section_do_not_duplicate_entries() {
+        let entries = assemble(
+            r##"[general]
+# autostart_delay = 500
+# autostart_delay = 750
+"##,
+        );
+        let count = entries
+            .iter()
+            .filter(|e| e.dotted() == "general.autostart_delay")
+            .count();
+        assert_eq!(count, 1);
     }
 
     const COMMENTED: &str = "\
