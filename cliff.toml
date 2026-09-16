@@ -1,7 +1,7 @@
 [changelog]
 header = "# Changelog\n"
 body = """
-## [{% if version %}{{ version | trim_start_matches(pat="v") }}{% else %}Unreleased{% endif %}] — {{ now() | date(format="%Y-%m-%d") }}
+{% if version %}## [{{ version | trim_start_matches(pat="v") }}] — {{ now() | date(format="%Y-%m-%d") }}{% else %}## [Unreleased]{% endif %}
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim }}
 {% for commit in commits %}{% set note = commit.footers | default(value=[]) | filter(attribute="token", value="Changelog") | first %}

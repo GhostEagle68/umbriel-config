@@ -89,6 +89,20 @@ Two layers, strictly separated:
 
   A dependency bump that closes a CVE is worth `fix(security):` rather
   than the `(deps)` scope that hides it.
+- **A feature spanning several commits gets a highlight fragment.** Five
+  commits produce five near-identical bullets, when what a reader wants
+  is one paragraph. When the feature is done, drop a file in `changes/` for example:
+
+  ```markdown
+  <!-- changes/shaders.md -->
+  **Shaders page.** Discover, download and assign GLSL animation effects
+  bundled with your own, or the community collection the app fetches for you.
+  ```
+
+  The release recipes fold every fragment into a **Highlights** section
+  above the per-commit lists and delete the files in the release commit,
+  so an empty `changes/` means everything shipped. Conventions and
+  examples: [changes/README.md](changes/README.md).
 - Two commit footers change what ships in the notes:
   - `Changelog: <text>` replaces the generated line with your wording.
   - `Changelog: skip` drops the commit from the notes entirely.

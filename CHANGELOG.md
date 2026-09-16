@@ -1,58 +1,5 @@
 # Changelog
 
-## [Unreleased]
-
-### Features
-
-- **Shaders page.** Discover, download, and assign the custom GLSL
-  animation shaders: the effects bundled with umbriel, your own, and
-  the community collection, which the app can download and update for
-  you over HTTPS, no git needed. Each event gets a dropdown, files
-  umbriel would reject are flagged before they save, and a shaders.toml
-  your include chain ignores is called out with a one-click fix. The
-  download button flips to Update, with an installed marker and an
-  update-available hint, once the collection is on disk.
-- **Shader editor with a visual effect builder.** Create your own GLSL
-  effects without writing code with stack steps: Fade, Scale, Slide,
-  Shatter, Wobble, Glow pulse, each with its own sliders, reorder
-  them, and the shader composes itself, with the generated code in
-  view for hand-tweaking. Your own shaders open for editing, community
-  and bundled ones fork into editable copies, and saving live-reloads
-  in umbriel. The editor's middle column scrolls as one, so tall step
-  stacks plus preview plus code fit any window height.
-- **Preview scrubber in the shader editor.** The editor renders your
-  code offscreen on a stand-in window and lets you scrub the animation
-  progress like a video timeline, with an In / Out toggle matching
-  windows_in and windows_out. The preview compiles with umbriel's own
-  GLSL prefix, so the GLSL errors it reports as you type are the errors
-  umbriel would report, down to the line numbers — and a broken draft
-  keeps showing the last good frame. Renders happen on a private
-  worker thread; if the GPU driver refuses the offscreen context the
-  preview degrades to a note instead of taking the editor down.
-
-### Fixed
-
-- Assigning a shader from a dropdown did nothing: the callback was
-  declared but never connected, so no edit was recorded and Save
-  stayed disabled.
-- Clearing a shader back to "(no shader)" or any other edit that
-  removes a key was invisible to Save: the change counter stayed at
-  zero and the save popup found "nothing to save" even though the
-  document was modified. Deletions now count as changes, appear in the
-  popup as "(removed)", can be discarded, and reset restores them.
-- The save popup preselected the wrong destination file for changes
-  living in included files (off by one in the dropdown).
-- The community-shaders download looked up the config directory from
-  the environment, so with `XDG_CONFIG_HOME` unset the button failed
-  with "Could not determine the config directory". It now targets the
-  folder of the config the app opened, and the library refreshes as
-  soon as the download lands.
-- Save-time validation no longer appends "umbriel validate exited
-  unsuccessfully without reporting diagnostics" to ordinary warnings.
-  umbriel exits nonzero for any diagnostic, warnings included, and
-  warning-only configs still apply. Warnings now show in the banner
-  by themselves and never block a save.
-
 ## [0.2.0-beta.1] — 2026-09-11
 
 First release on the Slint interface. The old EGUI interface is gone, and a lot
