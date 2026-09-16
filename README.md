@@ -47,7 +47,7 @@ Zcode GLM 5.3 models are used to help plan, review code and research only. All c
 Prebuilt binaries are attached to every release, no compiler needed.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/GhostEagle68/umbriel-config/main/packaging/get.sh | sh
+curl -fsSL https://raw.githubusercontent.com/GhostEagle68/umbriel-config/dev/packaging/get.sh | sh
 ```
 
 That picks the right build for your machine, verifies its checksum, and
