@@ -1,0 +1,27 @@
+umbriel-config — install
+
+  1. Open a terminal here.
+  2. Run:  ./install.sh
+  3. Start "Umbriel Config" from your application menu, or run:
+     umbriel-config
+
+install.sh copies the app into ~/.local with no root, nothing outside your
+home directory. For a system-wide install instead:
+
+  sudo PREFIX=/usr/local ./install.sh
+
+Updating
+  Installed this way, the app updates itself: Settings -> Updates ->
+  Install update. Pick the Stable or Pre-release channel there too.
+
+Uninstalling
+  rm ~/.local/bin/umbriel-config
+  rm ~/.local/share/applications/umbriel-config.desktop
+  rm ~/.local/share/icons/hicolor/scalable/apps/umbriel-config.svg
+  rm -r ~/.local/share/licenses/umbriel-config
+
+  Your umbriel config files and the backups the app made are your own
+  data; nothing here touches them.
+
+Questions and bug reports
+  https://github.com/GhostEagle68/umbriel-config/issues

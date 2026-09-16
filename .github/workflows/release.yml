@@ -37,15 +37,21 @@ jobs:
 
       - name: Package release artifacts
         run: |
-          mkdir -p stage/bin stage/share/licenses stage/share/applications stage/share/icons/hicolor/scalable/apps
-          cp target/release/umbriel-config stage/bin/
-          cp README.md LICENSE.md LICENSE-Slint.md stage/
-          cp assets/fonts/LICENSE-Inter.txt stage/share/licenses/
-          cp assets/fonts/LICENSE-JetBrainsMono.txt stage/share/licenses/
-          cp assets/umbriel-config.desktop stage/share/applications/
-          cp assets/umbriel-config.svg stage/share/icons/hicolor/scalable/apps/
-          tar -czf umbriel-config-${{ matrix.arch }}-linux.tar.gz -C stage .
-          sha256sum umbriel-config-${{ matrix.arch }}-linux.tar.gz > umbriel-config-${{ matrix.arch }}-linux.tar.gz.sha256
+          # One top-level folder, so extracting leaves a tidy directory
+          # to cd into instead of scattering bin/ and share/ into $PWD.
+          stage=umbriel-config-${{ matrix.arch }}-linux
+          mkdir -p $stage/bin $stage/share/licenses $stage/share/applications $stage/share/icons/hicolor/scalable/apps
+          cp target/release/umbriel-config $stage/bin/
+          cp README.md LICENSE.md LICENSE-Slint.md $stage/
+          cp assets/fonts/LICENSE-Inter.txt $stage/share/licenses/
+          cp assets/fonts/LICENSE-JetBrainsMono.txt $stage/share/licenses/
+          cp assets/umbriel-config.desktop $stage/share/applications/
+          cp assets/umbriel-config.svg $stage/share/icons/hicolor/scalable/apps/
+          # Extract-then-run-this, so the download isn't a puzzle.
+          install -m755 packaging/install.sh $stage/install.sh
+          cp packaging/INSTALL.txt $stage/
+          tar -czf $stage.tar.gz $stage
+          sha256sum $stage.tar.gz > $stage.tar.gz.sha256
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
@@ -117,8 +123,36 @@ jobs:
           awk -v version="$VERSION" '
             /^## \[/ { keep = (index($0, "## [" version "]") == 1); next }
             keep { print }
-          ' CHANGELOG.md > release_notes.md
-          [ -s release_notes.md ] || echo "No notes for this version." > release_notes.md
+          ' CHANGELOG.md > changelog_section.md
+          [ -s changelog_section.md ] || echo "No notes for this version." > changelog_section.md
+
+          # Newcomers land here first: say which file to take and what to
+          # do with it, before the list of changes.
+          {
+            echo "## Install"
+            echo ""
+            echo "Download the tarball for your machine below (\`x86_64\` for most PCs,"
+            echo "\`aarch64\` for ARM), then:"
+            echo ""
+            echo '```sh'
+            echo "tar -xzf umbriel-config-x86_64-linux.tar.gz"
+            echo "cd umbriel-config-x86_64-linux"
+            echo "./install.sh"
+            echo '```'
+            echo ""
+            echo "Or install it in one command:"
+            echo ""
+            echo '```sh'
+            echo "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/packaging/get.sh | sh"
+            echo '```'
+            echo ""
+            echo "Already have umbriel-config? It updates itself: **Settings → Updates**."
+            echo ""
+            echo "## Changes"
+            echo ""
+          } > release_notes.md
+          cat changelog_section.md >> release_notes.md
+          rm -f changelog_section.md
           exclude=()
           [ "${{ steps.channel.outputs.prerelease }}" = "true" ] || exclude=(--exclude '*-*')
           PREV_TAG=$(git describe --tags --abbrev=0 "${exclude[@]}" "${GITHUB_REF_NAME}^" 2>/dev/null || true)

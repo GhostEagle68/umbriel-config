@@ -41,17 +41,42 @@ Zcode GLM 5.3 models are used to help plan, review code and research only. All c
 Prebuilt binaries are attached to every release, no compiler needed.
 
 ```sh
-curl -fLO https://github.com/GhostEagle68/umbriel-config/releases/download/v0.2.0-beta.1/umbriel-config-x86_64-linux.tar.gz
-tar -xzf umbriel-config-x86_64-linux.tar.gz -C ~/.local
+curl -fsSL https://raw.githubusercontent.com/GhostEagle68/umbriel-config/main/packaging/get.sh | sh
 ```
 
-Grab the newest tag from the [releases page](https://github.com/GhostEagle68/umbriel-config/releases). The unversioned `releases/latest/download/…` link
-starts working with the first non-prerelease release. Pick the tarball
-matching your machine (`x86_64` or `aarch64`). This installs the binary to
-`~/.local/bin` plus a launcher entry and icon under `~/.local/share`, most
-desktops show it in the app menu after next login. Make sure `~/.local/bin`
-is on your `PATH`, then run `umbriel-config`. A `.sha256` checksum sits next
-to each tarball on the release page.
+That picks the right build for your machine, verifies its checksum, and
+installs into `~/.local`. Add `-s -- --prerelease` to follow the
+pre-release channel, or `-s -- --version XXX` for an exact
+version. Replace 'XXX' with exact version.
+
+Prefer to do it manually? Download the tarball for your machine from the
+[releases page](https://github.com/GhostEagle68/umbriel-config/releases)
+(`x86_64` for most PCs, `aarch64` for ARM), then:
+
+```sh
+tar -xzf umbriel-config-x86_64-linux.tar.gz
+cd umbriel-config-x86_64-linux
+./install.sh
+```
+
+Either way you get the binary in `~/.local/bin` plus a launcher entry and
+icon under `~/.local/share`, so most desktops list it in the app menu
+after the next login. Make sure `~/.local/bin` is on your `PATH`, then run
+`umbriel-config`. `PREFIX=/usr/local ./install.sh` installs system-wide
+instead, and a `.sha256` checksum sits beside every tarball.
+
+## Updating
+
+Installed from a tarball, the app updates itself: **Settings → Updates →
+Install update**, then Restart. The same card picks your channel —
+**Stable** for tested releases, **Pre-release** for new features first.
+
+Installed another way, the app tells you the command for it instead:
+
+```sh
+cargo install umbriel-config@0.2.0-beta.1   # cargo (pre-releases need the version)
+git pull && cargo build --release           # a clone of this repository
+```
 
 ### Build from source
 
