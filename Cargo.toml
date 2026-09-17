@@ -20,7 +20,7 @@ khronos-egl = { version = "6", features = ["dynamic"] }
 rfd = "0.15"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
-sha2 = "0.10"
+sha2 = "0.11"
 similar = "2"
 slint = "1"
 tar = "0.4.46"
