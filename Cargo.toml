@@ -21,7 +21,7 @@ rfd = "0.15"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.10"
-similar = "2"
+similar = "3"
 slint = "1"
 tar = "0.4.46"
 thiserror = "2.0.20"
