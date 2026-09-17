@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.2.6-beta.1] — 2026-09-16
+
+### 🚀 Features
+
+- (ui) Color picker popup for color swatches
+
+### 🐛 Fixed
+
+- (ui) Repair invalid-looking setting inputs and add open-choice fields
+  Several setting rows across the app looked broken or gave no feedback
+  on bad input:
+
+  - Invalid edits (bad color, out-of-range number) silently reverted
+    with no explanation; rows now show a red border and inline error.
+  - Ranged numeric rows showed a slider even when the value was unset,
+    and hid it in other cases due to a dead NaN check.
+  - A `mine_comments` section-tracking bug let commented example keys
+    inside `[[window_rule]]`/`[[layer_rule]]` blocks leak into the prior
+    `[layout.master]` section, producing duplicate phantom rows; the
+    duplicate-guard also failed to update as entries were mined, letting
+    repeats through.
+  - `mine_range` took the first word before a dash as the min value, so
+    any prose-prefixed range ("Inner border width, 0-100 logical
+    pixels") silently dropped its slider across Appearance/Blur/Shadows.
+  - Hot-corner actions and window/layer/security-context rule outputs
+    were plain text boxes with no hint of valid values; both now get a
+    new `Kind::OpenChoice` widget — a dropdown of known values (actions
+    mirrored from Umbriel's docs, live output names for rules) paired
+    with a free-text box that stays in sync, so open-ended values
+    (`spawn:...`, unlisted outputs) remain fully editable.
+  - The dropdown's popup width was tied to the closed box's width and
+    truncated long action names; widened to fit the longest entries.
+  - A real empty string (e.g. `input.keyboard.layout` meaning "system
+    default") looked identical to a broken blank box; text fields now
+    show a light "empty" placeholder to distinguish it from actual
+    content, without affecting the literal unset `"—"` placeholder.
+  - The Reset button only existed on ranged-number rows even though the
+    changed-indicator dot lights up for every kind; Reset now works
+    uniformly across all editable kinds.
+  - Window-rule size fields (`default_size`, `default_width`,
+    `default_height`) were renamed upstream to
+    `default_floating_size_px`/`default_floating_size`/
+    `default_scrolling_extent_px`/`default_scrolling_extent`; rules.rs
+    and document.rs updated to match, with new `rule_size_px`/
+    `rule_size_fraction` document helpers mirroring the existing
+    `rule_position` pattern.
+
+### 📦 Other
+
+- Change get.sh URL to use the dev branch for install
+
 ## [0.2.5-beta.2] — 2026-09-15
 
 ### Highlights
