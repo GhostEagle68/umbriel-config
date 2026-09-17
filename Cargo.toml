@@ -15,7 +15,7 @@ anyhow = "1.0.104"
 # Unpacking a release tarball over this binary (tarball installs only).
 flate2 = "1.1.10"
 # Offscreen GLES preview of user shader code (worker thread, pbuffer).
-glow = "0.17"
+glow = "0.18"
 khronos-egl = { version = "6", features = ["dynamic"] }
 rfd = "0.15"
 semver = "1.0.28"
