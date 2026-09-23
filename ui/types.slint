@@ -159,15 +159,14 @@ export struct ShaderAssignment {
     key: string,
     label: string,
     // Dropdown: index 0 = built-in, then shaders in order, then (when
-    // `missing`) one trailing entry standing for the unfound value.
+    // the value matches no library shader) one trailing entry for it.
     choices: [string],
     // Index into choices of the event's current shader.
     current: int,
-    // The raw current value, for the missing-file warning.
+    // The raw current value, for the warning.
     current-value: string,
-    // The current value names a file no scan found; `current` points
-    // at the trailing placeholder so "(no shader)" stays pickable.
-    missing: bool,
+    // Why umbriel won't load the value ("file not found", ...), or "".
+    warning: string,
 }
 
 // One changed key, as shown in the save popup.

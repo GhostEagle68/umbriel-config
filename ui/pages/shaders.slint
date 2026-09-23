@@ -167,8 +167,8 @@ export component ShadersPage inherits Rectangle {
                             selected => { root.assign(row.key, self.current-index); }
                         }
 
-                        if row.missing: Text {
-                            text: "⚠ " + row.current-value + " — file not found";
+                        if row.warning != "": Text {
+                            text: "⚠ " + row.current-value + " — " + row.warning;
                             color: Theme.warning;
                             font-size: Theme.font-small;
                             vertical-alignment: center;

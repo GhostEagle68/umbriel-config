@@ -208,6 +208,71 @@ pub fn current_assignment(docs: &[&ConfigDocument], event: &str) -> Option<(Stri
     found
 }
 
+/// Where umbriel reads an assignment's shader from: absolute values as
+/// written, relative ones from the declaring file's directory, then
+/// lexically normalized (`src/config/animation_shader.cpp`). There is
+/// no `~` or `$VAR` expansion — umbriel takes those literally.
+pub fn resolve(value: &str, declaring_file: &Path) -> PathBuf {
+    let path = Path::new(value);
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        declaring_file.parent().unwrap_or(Path::new("")).join(path)
+    };
+    normalize(&joined)
+}
+
+/// `std::filesystem::path::lexically_normal`: drop `.`, fold `..`
+/// against the previous component, touch nothing on disk.
+fn normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Whether two paths name the same file: through symlinks when both
+/// exist, lexically otherwise.
+pub fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => normalize(a) == normalize(b),
+    }
+}
+
+/// The value to write so `declaring_file` points at `shader`: relative
+/// when the shader sits under that file's directory (the config stays
+/// portable), absolute otherwise.
+pub fn value_for(shader: &Path, declaring_file: &Path) -> String {
+    let dir = declaring_file.parent().unwrap_or(Path::new(""));
+    match shader.strip_prefix(dir) {
+        Ok(relative) if !dir.as_os_str().is_empty() => relative.to_string_lossy().into_owned(),
+        _ => shader.to_string_lossy().into_owned(),
+    }
+}
+
+/// Why an assignment's value won't load, if it won't: umbriel has no
+/// `~` expansion, and the resolved file must exist.
+pub fn assignment_problem(value: &str, resolved: &Path) -> Option<&'static str> {
+    if value.starts_with('~') {
+        Some("umbriel doesn't expand ~, so use a full path")
+    } else if !resolved.is_file() {
+        Some("file not found")
+    } else {
+        None
+    }
+}
+
 /// Which document an assignment edit for `event` belongs in: the one
 /// whose value currently wins, or `None` for an unset event (see
 /// [`new_assignment_home`]).
@@ -1218,6 +1283,51 @@ mod tests {
         let (out, caret, _) = apply(text, text.len(), text.len(), Key::Newline);
         assert_eq!(out, "  é\n  ");
         assert_eq!(caret, out.len());
+    }
+
+    #[test]
+    fn shader_values_resolve_like_umbriel() {
+        let main = Path::new("/home/u/.config/umbriel/config.toml");
+        let nested = Path::new("/home/u/.config/umbriel/conf.d/shaders.toml");
+        let target = PathBuf::from("/home/u/.config/umbriel/shaders/test.glsl");
+        // Relative to the declaring file, with ./ and .. folded.
+        assert_eq!(resolve("shaders/test.glsl", main), target);
+        assert_eq!(resolve("./shaders/test.glsl", main), target);
+        assert_eq!(resolve("../shaders/test.glsl", nested), target);
+        assert_eq!(
+            resolve("/home/u/.config/umbriel/shaders/test.glsl", nested),
+            target
+        );
+        // No ~ expansion: it stays a literal (relative) component.
+        assert_eq!(
+            resolve("~/x.glsl", main),
+            PathBuf::from("/home/u/.config/umbriel/~/x.glsl")
+        );
+        // Writing: relative under the file's folder, absolute elsewhere.
+        assert_eq!(value_for(&target, main), "shaders/test.glsl");
+        assert_eq!(value_for(&target, nested), target.to_string_lossy());
+        let bundled = Path::new("/usr/share/umbriel/shaders/reveal.glsl");
+        assert_eq!(value_for(bundled, main), bundled.to_string_lossy());
+        // Round trip: what we write resolves back to the shader.
+        assert_eq!(resolve(&value_for(&target, nested), nested), target);
+    }
+
+    #[test]
+    fn assignment_problems_name_the_cause() {
+        let base = std::env::temp_dir().join(format!("umbriel-shaderpath-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let file = base.join("shaders/a.glsl");
+        write(&file, GLSL);
+        assert_eq!(assignment_problem("shaders/a.glsl", &file), None);
+        assert_eq!(
+            assignment_problem("shaders/b.glsl", &base.join("shaders/b.glsl")),
+            Some("file not found")
+        );
+        assert!(assignment_problem("~/a.glsl", &file).unwrap().contains('~'));
+        // Different spellings of one file match; different files don't.
+        assert!(same_file(&file, &base.join("shaders/./a.glsl")));
+        assert!(!same_file(&file, &base.join("shaders/b.glsl")));
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

@@ -29,6 +29,19 @@ pub(super) fn chain_docs(shell: &Shell) -> Vec<&ConfigDocument> {
     docs
 }
 
+/// File paths in chain order (includes first, main last), parallel to
+/// `chain_docs`.
+pub(super) fn chain_paths(shell: &Shell) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = shell
+        .includes
+        .docs
+        .iter()
+        .map(|inc| inc.path.clone())
+        .collect();
+    paths.push(shell.path.clone());
+    paths
+}
+
 /// Per-doc leaf-path sets over the include chain: includes in order, main
 /// last (chain indexing: include i = i, main = includes.docs.len()).
 pub(super) fn chain_path_sets(shell: &Shell) -> Vec<BTreeSet<String>> {

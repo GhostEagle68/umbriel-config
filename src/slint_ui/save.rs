@@ -243,12 +243,31 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
                     continue;
                 }
                 let parts: Vec<&str> = entry.key.split('.').collect();
+                // A relative shader path resolves from its file's folder:
+                // re-spell it for the destination so it still points at
+                // the same shader after the move.
+                let paths = chain_paths(&shell);
+                let shader_value = (entry.key.starts_with("animation.")
+                    && entry.key.ends_with(".shader"))
+                .then(|| doc_at(&shell, home).get_string(&parts))
+                .flatten()
+                .map(|value| {
+                    let resolved = shaders::resolve(&value, &paths[home]);
+                    shaders::value_for(&resolved, &paths[dest])
+                });
                 let target = if dest == main {
                     &mut shell.doc
                 } else {
                     &mut shell.includes.docs[dest].doc
                 };
-                if target.set_leaf_text(&entry.key, &entry.value) {
+                let written = match &shader_value {
+                    Some(value) => {
+                        target.set_string(&parts, value);
+                        true
+                    }
+                    None => target.set_leaf_text(&entry.key, &entry.value),
+                };
+                if written {
                     let source = if home == main {
                         &mut shell.doc
                     } else {

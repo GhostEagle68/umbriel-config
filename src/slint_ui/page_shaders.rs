@@ -285,13 +285,10 @@ fn open_shader_editor(
 /// Chain index for a brand-new assignment; see
 /// [`shaders::new_assignment_home`].
 fn new_home(shell: &Shell) -> usize {
-    let mut names: Vec<String> = shell
-        .includes
-        .docs
+    let names: Vec<String> = chain_paths(shell)
         .iter()
-        .map(|inc| file_name_of(&inc.path))
+        .map(|path| file_name_of(path))
         .collect();
-    names.push(file_name_of(&shell.path));
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     shaders::new_assignment_home(&chain_docs(shell), &names)
 }
@@ -427,29 +424,41 @@ pub(super) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
     app.set_shaders(Rc::new(VecModel::from(infos)).into());
 
     let docs = chain_docs(shell);
-    let choice_values: Vec<String> = shell
-        .shaders
-        .iter()
-        .map(|entry| entry.value.clone())
-        .collect();
+    let paths = chain_paths(shell);
     let rows: Vec<ShaderAssignment> = shaders::EVENTS
         .iter()
         .map(|event| {
             let mut choices: Vec<SharedString> = vec!["(no shader)".into()];
             choices.extend(shell.shaders.iter().map(|entry| entry.label.clone().into()));
-            let current = shaders::current_assignment(&docs, event).map(|(value, _)| value);
-            let index = current.as_ref().and_then(|value| {
-                choice_values
+            let current = shaders::current_assignment(&docs, event);
+            // Match by the file umbriel would actually read, so
+            // "./shaders/x.glsl" and an absolute path both find x.glsl.
+            let resolved = current
+                .as_ref()
+                .map(|(value, doc)| shaders::resolve(value, &paths[*doc]));
+            let index = resolved.as_ref().and_then(|resolved| {
+                shell
+                    .shaders
                     .iter()
-                    .position(|candidate| candidate == value)
+                    .position(|entry| shaders::same_file(&entry.path, resolved))
             });
-            // A value no scan found gets its own trailing entry, so the
-            // dropdown shows it and "(no shader)" is a real change.
-            let missing = current.is_some() && index.is_none();
+            let warning = match (&current, &resolved) {
+                (Some((value, _)), Some(resolved)) => {
+                    shaders::assignment_problem(value, resolved).unwrap_or_default()
+                }
+                _ => "",
+            };
+            // A value outside the library gets its own trailing entry, so
+            // the dropdown shows it and "(no shader)" is a real change.
             let current_index = match (index, &current) {
                 (Some(position), _) => position + 1,
-                (None, Some(value)) => {
-                    choices.push(format!("⚠ {value} (missing)").into());
+                (None, Some((value, _))) => {
+                    let label = if warning.is_empty() {
+                        format!("{value} (outside the library)")
+                    } else {
+                        format!("⚠ {value} (missing)")
+                    };
+                    choices.push(label.into());
                     choices.len() - 1
                 }
                 (None, None) => 0,
@@ -459,8 +468,8 @@ pub(super) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
                 label: prettify(event).into(),
                 choices: Rc::new(VecModel::from(choices)).into(),
                 current: current_index as i32,
-                current_value: current.unwrap_or_default().into(),
-                missing,
+                current_value: current.map(|(value, _)| value).unwrap_or_default().into(),
+                warning: warning.into(),
             }
         })
         .collect();
@@ -527,23 +536,22 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                 let mut shell = shell.borrow_mut();
                 // Resolve the pick against the list the dropdown was built
                 // from; an index past it changes nothing.
-                let value = match usize::try_from(index) {
-                    Ok(0) => None,
-                    Ok(index) => shell
-                        .shaders
-                        .get(index - 1)
-                        .map(|entry| entry.value.clone()),
-                    Err(_) => None,
+                let shader = match usize::try_from(index) {
+                    Ok(0) | Err(_) => None,
+                    Ok(index) => shell.shaders.get(index - 1).map(|entry| entry.path.clone()),
                 };
                 let clearing = index == 0;
                 let home = shaders::assignment_home(&chain_docs(&shell), &event);
                 let path = ["animation", event.as_str(), "shader"];
-                match (value, home) {
+                match (shader, home) {
                     // A typed string write, so the path is always quoted.
                     // A brand-new key starts beside the other assignments;
-                    // the save popup can still move it.
-                    (Some(value), home) => {
+                    // the save popup can still move it. The value is
+                    // spelled for the file it lands in, since umbriel
+                    // resolves relative paths from there.
+                    (Some(shader), home) => {
                         let target = home.unwrap_or_else(|| new_home(&shell));
+                        let value = shaders::value_for(&shader, &chain_paths(&shell)[target]);
                         doc_at_mut(&mut shell, target).set_string(&path, &value);
                     }
                     (None, Some(home)) if clearing => {
