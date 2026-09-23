@@ -522,9 +522,10 @@ pub mod builder {
             let value = |key: &str| step_value(def, step, key);
             let block = match step.kind {
                 "fade" => format!("    color *= mix(1.0, {:.2}, vis);\n", value("to")),
+                // No `\` line continuation here: it would also eat the
+                // first line's indentation.
                 "glow" => format!(
-                    "\
-    float pulse = {:.2} * sin(3.14159265 * p);
+                    "    float pulse = {:.2} * sin(3.14159265 * p);
     color = vec4(mix(color.rgb, vec3(1.0, 0.4, 0.1) * color.a, pulse), color.a);
 ",
                     value("strength")
@@ -538,8 +539,7 @@ pub mod builder {
                     value("offset")
                 ),
                 "shatter" => format!(
-                    "\
-    vec2 cell_id = floor(uv * {:.0}.0);
+                    "    vec2 cell_id = floor(uv * {:.0}.0);
     float seed = fract(sin(dot(cell_id, vec2(12.9898, 78.233)) + umbriel_random_seed.x) * 43758.5453);
     float t = clamp((p - seed * 0.5) / 0.5, 0.0, 1.0);
     uv -= vec2((seed - 0.5) * {:.2} * t, {:.2} * t * t);
@@ -792,6 +792,23 @@ mod tests {
         }]);
         assert!(clamped.contains("floor(uv * 12.0)"), "grid clamps to max");
         assert!(clamped.contains("0.00 * t * t"), "gravity clamps to min");
+    }
+
+    #[test]
+    fn builder_indents_every_body_line() {
+        for def in builder::STEP_DEFS {
+            let shader = builder::generate_stack(&[def.default_step()]);
+            let body = shader
+                .split_once("vec4 animation(vec2 uv) {\n")
+                .unwrap()
+                .1
+                .rsplit_once("\n}")
+                .unwrap()
+                .0;
+            for line in body.lines().filter(|line| !line.is_empty()) {
+                assert!(line.starts_with("    "), "{}: {line:?}", def.label);
+            }
+        }
     }
 
     #[test]
