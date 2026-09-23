@@ -309,10 +309,18 @@ pub fn write_user_shader(path: &Path, code: &str) -> Result<(), String> {
     })
 }
 
-/// Sanitize `name` and write the source to `shaders/<name>`.
+/// Sanitize `name` and write a new shader to `shaders/<name>`. An
+/// existing file is never replaced — editing goes through
+/// [`write_user_shader`] on the exact path instead.
 pub fn save_user_shader(config_dir: &Path, name: &str, code: &str) -> Result<PathBuf, String> {
     let file_name = sanitize_shader_name(name)?;
     let path = user_shaders_dir(config_dir).join(&file_name);
+    if path.exists() {
+        let stem = file_name.trim_end_matches(".glsl");
+        return Err(format!(
+            "A shader named \"{stem}\" already exists. Pick another name, or use Edit on it."
+        ));
+    }
     write_user_shader(&path, code)?;
     Ok(path)
 }
@@ -589,7 +597,8 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
-    const GLSL: &[u8] = b"vec4 animation(vec2 uv) { return umbriel_sample(uv); }\n";
+    const GLSL_STR: &str = "vec4 animation(vec2 uv) { return umbriel_sample(uv); }\n";
+    const GLSL: &[u8] = GLSL_STR.as_bytes();
 
     fn write(path: &Path, contents: &[u8]) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -721,13 +730,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(saved, config_dir.join("shaders/my effect.glsl"));
-        // Overwriting leaves exactly one file and no atomic temp behind.
-        save_user_shader(
-            &config_dir,
-            "my effect",
+        // A new shader never clobbers an existing one of the same name.
+        let clash = save_user_shader(&config_dir, "my effect", GLSL_STR).unwrap_err();
+        assert!(clash.contains("already exists"), "{clash}");
+        // Editing overwrites in place: exactly one file, no temp behind.
+        write_user_shader(
+            &saved,
             "vec4 animation(vec2 uv) { return umbriel_sample(uv) * 0.5; }\n",
         )
         .unwrap();
+        assert!(std::fs::read_to_string(&saved).unwrap().contains("* 0.5"));
         let entries: Vec<String> = std::fs::read_dir(config_dir.join("shaders"))
             .unwrap()
             .filter_map(|entry| entry.ok())
