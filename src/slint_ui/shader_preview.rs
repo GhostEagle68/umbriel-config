@@ -146,16 +146,20 @@ fn run_worker(cmd_rx: mpsc::Receiver<PreviewCommand>, evt_tx: mpsc::Sender<Previ
         return;
     };
     let _ = evt_tx.send(PreviewEvent::Ready);
-    while let Ok(mut cmd) = cmd_rx.recv() {
-        // A scrub burst only needs the newest frame; compile requests
-        // must all run (each keystroke wants its own errors).
-        while let Ok(next) = cmd_rx.try_recv() {
-            match next {
-                render @ PreviewCommand::Render { .. } => cmd = render,
-                other => apply(&mut state, &evt_tx, other),
+    while let Ok(first) = cmd_rx.recv() {
+        // A burst only needs its newest source and newest frame: older
+        // sources are already superseded, and their errors would only
+        // flash past. The source goes first so the frame uses it.
+        let (mut source, mut render) = (None, None);
+        for cmd in std::iter::once(first).chain(std::iter::from_fn(|| cmd_rx.try_recv().ok())) {
+            match cmd {
+                cmd @ PreviewCommand::SetSource(_) => source = Some(cmd),
+                cmd @ PreviewCommand::Render { .. } => render = Some(cmd),
             }
         }
-        apply(&mut state, &evt_tx, cmd);
+        for cmd in [source, render].into_iter().flatten() {
+            apply(&mut state, &evt_tx, cmd);
+        }
     }
 }
 
