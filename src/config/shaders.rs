@@ -494,6 +494,10 @@ pub mod builder {
         /// more than one line gets its own `{ }` block, so its locals
         /// never clash when the step is stacked twice.
         pub template: &'static str,
+        /// An older template this step used to emit. Saved shaders
+        /// written with it still open in the builder, and the next
+        /// builder change rewrites them with `template`.
+        pub legacy: Option<&'static str>,
     }
 
     /// A step as configured by the user: values are indexed parallel to
@@ -517,7 +521,9 @@ pub mod builder {
                 default: 0.0,
                 decimals: 2,
             }],
-            template: "color *= mix(1.0, {0}, vis);",
+            // Fully visible once the window has arrived (vis = 1).
+            template: "color *= mix({0}, 1.0, vis);",
+            legacy: Some("color *= mix(1.0, {0}, vis);"),
         },
         StepDef {
             kind: "glow",
@@ -535,6 +541,7 @@ pub mod builder {
                 "float pulse = {0} * sin(3.14159265 * p);\n",
                 "color = vec4(mix(color.rgb, vec3(1.0, 0.4, 0.1) * color.a, pulse), color.a);",
             ),
+            legacy: None,
         },
         StepDef {
             kind: "scale",
@@ -549,6 +556,7 @@ pub mod builder {
                 decimals: 2,
             }],
             template: "uv = (uv - 0.5) / mix({0}, 1.0, vis) + 0.5;",
+            legacy: None,
         },
         StepDef {
             kind: "slide",
@@ -563,6 +571,7 @@ pub mod builder {
                 decimals: 2,
             }],
             template: "uv -= vec2({0} * (1.0 - vis), 0.0);",
+            legacy: None,
         },
         StepDef {
             kind: "shatter",
@@ -597,9 +606,16 @@ pub mod builder {
             template: concat!(
                 "vec2 cell_id = floor(uv * {0}.0);\n",
                 "float seed = fract(sin(dot(cell_id, vec2(12.9898, 78.233)) + umbriel_random_seed.x) * 43758.5453);\n",
-                "float t = clamp((p - seed * 0.5) / 0.5, 0.0, 1.0);\n",
+                // Scattered while hidden, whole once shown (vis = 1).
+                "float t = clamp(((1.0 - vis) - seed * 0.5) / 0.5, 0.0, 1.0);\n",
                 "uv -= vec2((seed - 0.5) * {2} * t, {1} * t * t);",
             ),
+            legacy: Some(concat!(
+                "vec2 cell_id = floor(uv * {0}.0);\n",
+                "float seed = fract(sin(dot(cell_id, vec2(12.9898, 78.233)) + umbriel_random_seed.x) * 43758.5453);\n",
+                "float t = clamp((p - seed * 0.5) / 0.5, 0.0, 1.0);\n",
+                "uv -= vec2((seed - 0.5) * {2} * t, {1} * t * t);",
+            )),
         },
         StepDef {
             kind: "wobble",
@@ -614,6 +630,7 @@ pub mod builder {
                 decimals: 3,
             }],
             template: "uv.y += {0} * sin(uv.x * 12.566 + p * 9.0) * (1.0 - abs(2.0 * p - 1.0));",
+            legacy: None,
         },
     ];
 
@@ -694,17 +711,24 @@ pub mod builder {
 
     /// Compose the stack into a full shader.
     pub fn generate_stack(steps: &[BuilderStep]) -> String {
+        generate_with(steps, &[])
+    }
+
+    /// `generate_stack`, but steps flagged in `legacy` use their def's
+    /// older template: how the parser proves a saved shader is builder
+    /// output before the builder upgrades it.
+    fn generate_with(steps: &[BuilderStep], legacy: &[bool]) -> String {
         let mut motion = String::new();
         let mut color = String::new();
-        for step in steps {
+        for (index, step) in steps.iter().enumerate() {
             let Some(def) = step_def(step.kind) else {
                 continue;
             };
-            let lines: Vec<String> = def
-                .template
-                .lines()
-                .map(|line| fill(line, def, step))
-                .collect();
+            let template = match def.legacy {
+                Some(old) if legacy.get(index) == Some(&true) => old,
+                _ => def.template,
+            };
+            let lines: Vec<String> = template.lines().map(|line| fill(line, def, step)).collect();
             let block = if lines.len() > 1 {
                 let body: String = lines
                     .iter()
@@ -754,8 +778,9 @@ vec4 animation(vec2 uv) {{
         // a shorter one that happens to share its first line.
         let mut defs: Vec<&StepDef> = STEP_DEFS.iter().collect();
         defs.sort_by_key(|def| std::cmp::Reverse(def.template.lines().count()));
-        let mut motion = Vec::new();
-        let mut color = Vec::new();
+        // Each step with whether it matched its def's legacy template.
+        let mut motion: Vec<(BuilderStep, bool)> = Vec::new();
+        let mut color: Vec<(BuilderStep, bool)> = Vec::new();
         let mut index = 0;
         while index < lines.len() {
             if matches!(
@@ -768,28 +793,38 @@ vec4 animation(vec2 uv) {{
                 index += 1;
                 continue;
             }
-            let (def, params, used) = defs.iter().find_map(|def| {
-                match_template(def, &lines[index..]).map(|(params, used)| (*def, params, used))
-            })?;
+            let variants = defs.iter().flat_map(|def| {
+                std::iter::once((*def, def.template, false))
+                    .chain(def.legacy.map(|old| (*def, old, true)))
+            });
+            let mut matched = None;
+            for (def, template, legacy) in variants {
+                if let Some((params, used)) = match_template(def, template, &lines[index..]) {
+                    matched = Some((def, params, used, legacy));
+                    break;
+                }
+            }
+            let (def, params, used, legacy) = matched?;
             index += used;
             let step = BuilderStep {
                 kind: def.kind,
                 params,
             };
             if def.color {
-                color.push(step);
+                color.push((step, legacy));
             } else {
-                motion.push(step);
+                motion.push((step, legacy));
             }
         }
         motion.extend(color);
-        (normalized(&generate_stack(&motion)) == normalized(code)).then_some(motion)
+        let (steps, legacy): (Vec<BuilderStep>, Vec<bool>) = motion.into_iter().unzip();
+        (normalized(&generate_with(&steps, &legacy)) == normalized(code)).then_some(steps)
     }
 
     /// Match a def's template against the upcoming lines: the params it
     /// carries and how many lines it spans.
-    fn match_template(def: &StepDef, lines: &[&str]) -> Option<([f64; 3], usize)> {
-        let template: Vec<&str> = def.template.lines().collect();
+    fn match_template(def: &StepDef, template: &str, lines: &[&str]) -> Option<([f64; 3], usize)> {
+        let template: Vec<&str> = template.lines().collect();
         let mut params = [0.0; 3];
         for (template_line, line) in template.iter().zip(lines.get(..template.len())?) {
             let mut rest = *line;
@@ -1304,12 +1339,22 @@ vec2 cell_id = floor(uv * 12.0);
     uv -= vec2((seed - 0.5) * 0.30 * t, 0.40 * t * t);
 
     vec4 color = umbriel_sample(uv);
+    color *= mix(1.0, 0.25, vis);
 
     return color;
 }
 ";
+        // Old Fade and Shatter still read back...
         let parsed = builder::parse_stack(code).unwrap();
+        let kinds: Vec<&str> = parsed.iter().map(|step| step.kind).collect();
+        assert_eq!(kinds, vec!["shatter", "fade"]);
         assert_eq!(parsed[0].params, [12.0, 0.4, 0.3]);
+        assert_eq!(parsed[1].params[0], 0.25);
+        // ...and regenerate with the fixed direction.
+        let upgraded = builder::generate_stack(&parsed);
+        assert!(upgraded.contains("color *= mix(0.25, 1.0, vis);"));
+        assert!(upgraded.contains("clamp(((1.0 - vis) - seed * 0.5) / 0.5"));
+        assert_eq!(builder::parse_stack(&upgraded).unwrap(), parsed);
     }
 
     #[test]

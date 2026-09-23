@@ -790,6 +790,33 @@ mod tests {
         }
     }
 
+    /// Every builder effect finishes on the untouched window: at full
+    /// progress of an opening (vis = 1) nothing may still be faded,
+    /// moved or scattered. Skips where no EGL is available.
+    #[test]
+    fn every_builder_effect_ends_on_the_plain_window() {
+        use umbriel_config::config::shaders::builder;
+        let Ok(mut state) = PreviewState::new(64, 36) else {
+            return;
+        };
+        state
+            .compile("vec4 animation(vec2 uv) { return umbriel_sample(uv); }")
+            .unwrap();
+        let (_, _, plain) = state.render(1.0, 1.0).unwrap();
+        for def in builder::STEP_DEFS {
+            state
+                .compile(&builder::generate_stack(&[def.default_step()]))
+                .unwrap();
+            let (_, _, end) = state.render(1.0, 1.0).unwrap();
+            let worst = end.iter().zip(&plain).map(|(a, b)| a.abs_diff(*b)).max();
+            assert!(
+                worst <= Some(2),
+                "{} ends {worst:?} off the plain window",
+                def.label
+            );
+        }
+    }
+
     /// Full GL round-trip; skips silently where no EGL is available (CI,
     /// headless environments) so the suite stays green everywhere.
     #[test]
