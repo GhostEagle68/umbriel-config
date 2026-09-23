@@ -476,6 +476,9 @@ pub mod builder {
         pub min: f64,
         pub max: f64,
         pub default: f64,
+        /// Decimal places the value is written with; the parser reads
+        /// numbers back in exactly this shape.
+        pub decimals: usize,
     }
 
     /// One step kind in the palette.
@@ -486,6 +489,11 @@ pub mod builder {
         /// where they are sampled from.
         pub color: bool,
         pub params: &'static [StepParam],
+        /// The GLSL the step emits, one statement per line, unindented.
+        /// `{0}`..`{2}` stand for the params by index. A template of
+        /// more than one line gets its own `{ }` block, so its locals
+        /// never clash when the step is stacked twice.
+        pub template: &'static str,
     }
 
     /// A step as configured by the user: values are indexed parallel to
@@ -507,7 +515,9 @@ pub mod builder {
                 min: 0.0,
                 max: 1.0,
                 default: 0.0,
+                decimals: 2,
             }],
+            template: "color *= mix(1.0, {0}, vis);",
         },
         StepDef {
             kind: "glow",
@@ -519,7 +529,12 @@ pub mod builder {
                 min: 0.0,
                 max: 1.0,
                 default: 0.3,
+                decimals: 2,
             }],
+            template: concat!(
+                "float pulse = {0} * sin(3.14159265 * p);\n",
+                "color = vec4(mix(color.rgb, vec3(1.0, 0.4, 0.1) * color.a, pulse), color.a);",
+            ),
         },
         StepDef {
             kind: "scale",
@@ -531,7 +546,9 @@ pub mod builder {
                 min: 0.5,
                 max: 1.0,
                 default: 0.85,
+                decimals: 2,
             }],
+            template: "uv = (uv - 0.5) / mix({0}, 1.0, vis) + 0.5;",
         },
         StepDef {
             kind: "slide",
@@ -543,7 +560,9 @@ pub mod builder {
                 min: -0.5,
                 max: 0.5,
                 default: -0.3,
+                decimals: 2,
             }],
+            template: "uv -= vec2({0} * (1.0 - vis), 0.0);",
         },
         StepDef {
             kind: "shatter",
@@ -556,6 +575,7 @@ pub mod builder {
                     min: 2.0,
                     max: 12.0,
                     default: 6.0,
+                    decimals: 0,
                 },
                 StepParam {
                     key: "gravity",
@@ -563,6 +583,7 @@ pub mod builder {
                     min: 0.0,
                     max: 0.4,
                     default: 0.2,
+                    decimals: 2,
                 },
                 StepParam {
                     key: "scatter",
@@ -570,8 +591,15 @@ pub mod builder {
                     min: 0.0,
                     max: 0.3,
                     default: 0.1,
+                    decimals: 2,
                 },
             ],
+            template: concat!(
+                "vec2 cell_id = floor(uv * {0}.0);\n",
+                "float seed = fract(sin(dot(cell_id, vec2(12.9898, 78.233)) + umbriel_random_seed.x) * 43758.5453);\n",
+                "float t = clamp((p - seed * 0.5) / 0.5, 0.0, 1.0);\n",
+                "uv -= vec2((seed - 0.5) * {2} * t, {1} * t * t);",
+            ),
         },
         StepDef {
             kind: "wobble",
@@ -583,7 +611,9 @@ pub mod builder {
                 min: 0.0,
                 max: 0.06,
                 default: 0.02,
+                decimals: 3,
             }],
+            template: "uv.y += {0} * sin(uv.x * 12.566 + p * 9.0) * (1.0 - abs(2.0 * p - 1.0));",
         },
     ];
 
@@ -619,19 +649,47 @@ pub mod builder {
         ]
     }
 
-    fn step_value(def: &StepDef, step: &BuilderStep, key: &str) -> f64 {
-        def.params
-            .iter()
-            .enumerate()
-            .find(|(_, param)| param.key == key)
-            .map(|(index, param)| {
-                step.params
-                    .get(index)
-                    .copied()
-                    .unwrap_or(param.default)
-                    .clamp(param.min, param.max)
+    /// A template line with its `{n}` slots filled from the step's
+    /// (clamped) params.
+    fn fill(line: &str, def: &StepDef, step: &BuilderStep) -> String {
+        segments(line)
+            .map(|segment| match segment {
+                Segment::Literal(text) => text.to_owned(),
+                Segment::Slot(index) => {
+                    let param = &def.params[index];
+                    let value = step.params[index].clamp(param.min, param.max);
+                    format!("{value:.*}", param.decimals)
+                }
             })
-            .unwrap_or(0.0)
+            .collect()
+    }
+
+    enum Segment<'a> {
+        Literal(&'a str),
+        Slot(usize),
+    }
+
+    /// Split a template line into literal text and `{n}` slots.
+    fn segments(line: &str) -> impl Iterator<Item = Segment<'_>> {
+        let mut rest = line;
+        std::iter::from_fn(move || {
+            if rest.is_empty() {
+                return None;
+            }
+            if let Some(slot) = rest
+                .strip_prefix('{')
+                .and_then(|after| after.get(..2))
+                .filter(|slot| slot.ends_with('}'))
+                .and_then(|slot| slot[..1].parse::<usize>().ok())
+            {
+                rest = &rest[3..];
+                return Some(Segment::Slot(slot));
+            }
+            let end = rest[1..].find('{').map_or(rest.len(), |at| at + 1);
+            let (literal, tail) = rest.split_at(end);
+            rest = tail;
+            Some(Segment::Literal(literal))
+        })
     }
 
     /// Compose the stack into a full shader.
@@ -642,46 +700,19 @@ pub mod builder {
             let Some(def) = step_def(step.kind) else {
                 continue;
             };
-            let value = |key: &str| step_value(def, step, key);
-            let block = match step.kind {
-                "fade" => format!("    color *= mix(1.0, {:.2}, vis);\n", value("to")),
-                // Steps that declare locals get their own `{ }` scope, so
-                // the same effect can be stacked twice without clashing
-                // names. No `\` line continuations here: they would also
-                // eat the first line's indentation.
-                "glow" => format!(
-                    "    {{
-        float pulse = {:.2} * sin(3.14159265 * p);
-        color = vec4(mix(color.rgb, vec3(1.0, 0.4, 0.1) * color.a, pulse), color.a);
-    }}
-",
-                    value("strength")
-                ),
-                "scale" => format!(
-                    "    uv = (uv - 0.5) / mix({:.2}, 1.0, vis) + 0.5;\n",
-                    value("from")
-                ),
-                "slide" => format!(
-                    "    uv -= vec2({:.2} * (1.0 - vis), 0.0);\n",
-                    value("offset")
-                ),
-                "shatter" => format!(
-                    "    {{
-        vec2 cell_id = floor(uv * {:.0}.0);
-        float seed = fract(sin(dot(cell_id, vec2(12.9898, 78.233)) + umbriel_random_seed.x) * 43758.5453);
-        float t = clamp((p - seed * 0.5) / 0.5, 0.0, 1.0);
-        uv -= vec2((seed - 0.5) * {:.2} * t, {:.2} * t * t);
-    }}
-",
-                    value("grid"),
-                    value("scatter"),
-                    value("gravity")
-                ),
-                "wobble" => format!(
-                    "    uv.y += {:.3} * sin(uv.x * 12.566 + p * 9.0) * (1.0 - abs(2.0 * p - 1.0));\n",
-                    value("amp")
-                ),
-                _ => String::new(),
+            let lines: Vec<String> = def
+                .template
+                .lines()
+                .map(|line| fill(line, def, step))
+                .collect();
+            let block = if lines.len() > 1 {
+                let body: String = lines
+                    .iter()
+                    .map(|line| format!("        {line}\n"))
+                    .collect();
+                format!("    {{\n{body}    }}\n")
+            } else {
+                format!("    {}\n", lines[0])
             };
             if def.color {
                 color.push_str(&block);
@@ -719,70 +750,84 @@ vec4 animation(vec2 uv) {{
             .rsplit_once('}')?
             .0;
         let lines: Vec<&str> = normalized(body);
+        // Longer templates first, so a multi-line step is never read as
+        // a shorter one that happens to share its first line.
+        let mut defs: Vec<&StepDef> = STEP_DEFS.iter().collect();
+        defs.sort_by_key(|def| std::cmp::Reverse(def.template.lines().count()));
         let mut motion = Vec::new();
         let mut color = Vec::new();
         let mut index = 0;
         while index < lines.len() {
-            let line = lines[index];
-            index += 1;
             if matches!(
-                line,
+                lines[index],
                 "float p = umbriel_clamped_progress;"
                     | "float vis = umbriel_direction > 0.0 ? p : 1.0 - p;"
                     | "vec4 color = umbriel_sample(uv);"
                     | "return color;"
             ) {
+                index += 1;
                 continue;
             }
-            if let Some(to) = between(line, "color *= mix(1.0, ", ", vis);") {
-                color.push(step("fade", [to, 0.0, 0.0]));
-            } else if let Some(strength) =
-                between(line, "float pulse = ", " * sin(3.14159265 * p);")
-            {
-                // The second glow line is checked by the round trip.
-                index += 1;
-                color.push(step("glow", [strength, 0.0, 0.0]));
-            } else if let Some(from) = between(line, "uv = (uv - 0.5) / mix(", ", 1.0, vis) + 0.5;")
-            {
-                motion.push(step("scale", [from, 0.0, 0.0]));
-            } else if let Some(offset) = between(line, "uv -= vec2(", " * (1.0 - vis), 0.0);") {
-                motion.push(step("slide", [offset, 0.0, 0.0]));
-            } else if let Some(grid) = between(line, "vec2 cell_id = floor(uv * ", ");") {
-                // seed and t lines, then the displacement carrying the
-                // other two parameters.
-                let last = lines.get(index + 2)?;
-                index += 3;
-                let (scatter, gravity) =
-                    between_str(last, "uv -= vec2((seed - 0.5) * ", " * t * t);")?
-                        .split_once(" * t, ")?;
-                motion.push(step(
-                    "shatter",
-                    [grid, gravity.parse().ok()?, scatter.parse().ok()?],
-                ));
+            let (def, params, used) = defs.iter().find_map(|def| {
+                match_template(def, &lines[index..]).map(|(params, used)| (*def, params, used))
+            })?;
+            index += used;
+            let step = BuilderStep {
+                kind: def.kind,
+                params,
+            };
+            if def.color {
+                color.push(step);
             } else {
-                // The last known shape; anything else isn't builder output.
-                let amp = between(
-                    line,
-                    "uv.y += ",
-                    " * sin(uv.x * 12.566 + p * 9.0) * (1.0 - abs(2.0 * p - 1.0));",
-                )?;
-                motion.push(step("wobble", [amp, 0.0, 0.0]));
+                motion.push(step);
             }
         }
         motion.extend(color);
         (normalized(&generate_stack(&motion)) == normalized(code)).then_some(motion)
     }
 
-    fn step(kind: &'static str, params: [f64; 3]) -> BuilderStep {
-        BuilderStep { kind, params }
+    /// Match a def's template against the upcoming lines: the params it
+    /// carries and how many lines it spans.
+    fn match_template(def: &StepDef, lines: &[&str]) -> Option<([f64; 3], usize)> {
+        let template: Vec<&str> = def.template.lines().collect();
+        let mut params = [0.0; 3];
+        for (template_line, line) in template.iter().zip(lines.get(..template.len())?) {
+            let mut rest = *line;
+            for segment in segments(template_line) {
+                match segment {
+                    Segment::Literal(text) => rest = rest.strip_prefix(text)?,
+                    Segment::Slot(index) => {
+                        let (value, tail) = read_number(rest, def.params[index].decimals)?;
+                        params[index] = value;
+                        rest = tail;
+                    }
+                }
+            }
+            if !rest.is_empty() {
+                return None;
+            }
+        }
+        Some((params, template.len()))
     }
 
-    fn between_str<'a>(line: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
-        line.strip_prefix(prefix)?.strip_suffix(suffix)
-    }
-
-    fn between(line: &str, prefix: &str, suffix: &str) -> Option<f64> {
-        between_str(line, prefix, suffix)?.parse().ok()
+    /// A number written with exactly `decimals` places (`-0.30`, `12`),
+    /// and the text after it. Exact, so `{0}.0` after a whole number
+    /// still finds its literal `.0`.
+    fn read_number(text: &str, decimals: usize) -> Option<(f64, &str)> {
+        let sign = usize::from(text.starts_with('-'));
+        let digits = text[sign..].bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 {
+            return None;
+        }
+        let mut end = sign + digits;
+        if decimals > 0 {
+            let fraction = text.get(end..end + 1 + decimals)?;
+            if !fraction.starts_with('.') || !fraction[1..].bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            end += 1 + decimals;
+        }
+        Some((text[..end].parse().ok()?, &text[end..]))
     }
 
     /// Code compared by content: indentation, blank lines and the lone
