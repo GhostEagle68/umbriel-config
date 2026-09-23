@@ -181,6 +181,7 @@ export component AppWindow inherits Window {
     callback shader-step-remove(int);
     callback shader-step-move(int, int);
     callback shader-step-param(int, int, float);
+    callback shader-step-param-live(int, int, float);
     // Preview scrubber for the editor.
     in property <image> shader-preview-image;
     in-out property <float> shader-preview-progress: 0;
@@ -1313,6 +1314,7 @@ export component AppWindow inherits Window {
                         step-remove(i) => { root.shader-step-remove(i); }
                         step-move(i, d) => { root.shader-step-move(i, d); }
                         step-param(i, s, v) => { root.shader-step-param(i, s, v); }
+                        step-param-live(i, s, v) => { root.shader-step-param-live(i, s, v); }
                     }
 
                     VerticalLayout {

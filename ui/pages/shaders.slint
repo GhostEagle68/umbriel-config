@@ -304,6 +304,8 @@ export component ShaderBuilderPanel inherits Rectangle {
     callback step-remove(int);
     callback step-move(int, int);
     callback step-param(int, int, float);
+    // While dragging: code and preview follow, the cards stay put.
+    callback step-param-live(int, int, float);
 
     VerticalLayout {
         spacing: Theme.space-s;
@@ -439,11 +441,22 @@ export component ShaderBuilderPanel inherits Rectangle {
                                 min-width: 64px;
                             }
 
-                            Slider {
+                            slider1 := Slider {
                                 minimum: step.p1-min;
                                 maximum: step.p1-max;
                                 value: step.p1-value;
+                                changed(v) => { root.step-param-live(step.index, 0, v); }
                                 released(v) => { root.step-param(step.index, 0, v); }
+                            }
+
+                            Text {
+                                text: slider1.value.to-fixed(step.p1-decimals);
+                                color: Theme.text-1;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                                min-width: 44px;
                             }
                         }
 
@@ -458,11 +471,22 @@ export component ShaderBuilderPanel inherits Rectangle {
                                 min-width: 64px;
                             }
 
-                            Slider {
+                            slider2 := Slider {
                                 minimum: step.p2-min;
                                 maximum: step.p2-max;
                                 value: step.p2-value;
+                                changed(v) => { root.step-param-live(step.index, 1, v); }
                                 released(v) => { root.step-param(step.index, 1, v); }
+                            }
+
+                            Text {
+                                text: slider2.value.to-fixed(step.p2-decimals);
+                                color: Theme.text-1;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                                min-width: 44px;
                             }
                         }
 
@@ -477,11 +501,22 @@ export component ShaderBuilderPanel inherits Rectangle {
                                 min-width: 64px;
                             }
 
-                            Slider {
+                            slider3 := Slider {
                                 minimum: step.p3-min;
                                 maximum: step.p3-max;
                                 value: step.p3-value;
+                                changed(v) => { root.step-param-live(step.index, 2, v); }
                                 released(v) => { root.step-param(step.index, 2, v); }
+                            }
+
+                            Text {
+                                text: slider3.value.to-fixed(step.p3-decimals);
+                                color: Theme.text-1;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                                min-width: 44px;
                             }
                         }
                     }

@@ -6,3 +6,5 @@
 - **Thirteen new effects.** The builder adds Rotate, Swirl, Ripple,
   Pixelate, Stretch, Flip, Drop, Iris, Wipe, Dissolve, Desaturate, Tint
   and Ghost trail, and any effect can be stacked more than once.
+- **Live sliders.** Dragging a builder slider updates the code and the
+  preview as you move it, and each slider shows its current value.

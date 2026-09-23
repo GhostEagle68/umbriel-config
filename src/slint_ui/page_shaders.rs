@@ -167,11 +167,13 @@ fn push_builder_rows(app: &AppWindow, steps: &[shaders::builder::BuilderStep]) {
             let mut values = [0.0f32; 3];
             let mut mins = [0.0f32; 3];
             let mut maxs = [0.0f32; 3];
+            let mut decimals = [0i32; 3];
             for (slot, param) in def.params.iter().enumerate() {
                 labels[slot] = param.label.into();
                 values[slot] = step.params[slot] as f32;
                 mins[slot] = param.min as f32;
                 maxs[slot] = param.max as f32;
+                decimals[slot] = param.decimals as i32;
             }
             Some(ShaderStep {
                 index: index as i32,
@@ -180,14 +182,17 @@ fn push_builder_rows(app: &AppWindow, steps: &[shaders::builder::BuilderStep]) {
                 p1_value: values[0],
                 p1_min: mins[0],
                 p1_max: maxs[0],
+                p1_decimals: decimals[0],
                 p2_label: labels[1].clone(),
                 p2_value: values[1],
                 p2_min: mins[1],
                 p2_max: maxs[1],
+                p2_decimals: decimals[1],
                 p3_label: labels[2].clone(),
                 p3_value: values[2],
                 p3_min: mins[2],
                 p3_max: maxs[2],
+                p3_decimals: decimals[2],
                 p_count: def.params.len() as i32,
             })
         })
@@ -199,14 +204,17 @@ fn push_builder_rows(app: &AppWindow, steps: &[shaders::builder::BuilderStep]) {
 /// pane from it. Callers only reach this with the builder unlocked, so
 /// the code being replaced is itself builder output.
 fn regen_builder(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
-    let (steps, code) = {
-        let shell = shell.borrow();
-        let steps = shell.builder_steps.clone();
-        let code = shaders::builder::generate_stack(&steps);
-        (steps, code)
-    };
+    let steps = shell.borrow().builder_steps.clone();
     push_builder_rows(app, &steps);
     app.set_shader_builder_locked(false);
+    regen_code(app, shell);
+}
+
+/// Regenerate the code pane (and the preview's source) from the builder
+/// stack, leaving the step cards alone: a slider mid-drag must not be
+/// recreated under the pointer.
+fn regen_code(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    let code = shaders::builder::generate_stack(&shell.borrow().builder_steps);
     let preview_text = code.clone();
     app.set_shader_editor_text(code.into());
     // Stack changes regenerate the code, so the preview compiles the new
@@ -214,6 +222,23 @@ fn regen_builder(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     shell
         .borrow_mut()
         .preview_command(shader_preview::PreviewCommand::SetSource(preview_text));
+}
+
+/// Set one builder parameter (clamped to its range). False when the
+/// step or slot doesn't exist.
+fn set_step_param(shell: &Rc<RefCell<Shell>>, index: i32, param: i32, value: f32) -> bool {
+    let mut shell = shell.borrow_mut();
+    let Some(step) = shell.builder_steps.get_mut(index as usize) else {
+        return false;
+    };
+    let Some(def) = shaders::builder::step_def(step.kind) else {
+        return false;
+    };
+    let Some(slot) = def.params.get(param as usize) else {
+        return false;
+    };
+    step.params[param as usize] = (value as f64).clamp(slot.min, slot.max);
+    true
 }
 
 /// Point the builder at whatever the code pane holds: builder output
@@ -902,24 +927,20 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         app.on_shader_step_param(move |index, param, value| {
             let Some(app) = weak.upgrade() else { return };
             settle_now(&app, &shell);
-            if app.get_shader_builder_locked() {
-                return;
+            if !app.get_shader_builder_locked() && set_step_param(&shell, index, param, value) {
+                regen_builder(&app, &shell);
             }
-            {
-                let mut shell = shell.borrow_mut();
-                let Some(step) = shell.builder_steps.get_mut(index as usize) else {
-                    return;
-                };
-                let Some(def) = shaders::builder::step_def(step.kind) else {
-                    return;
-                };
-                let Some(slot) = def.params.get(param as usize) else {
-                    return;
-                };
-                let clamped = (value as f64).clamp(slot.min, slot.max);
-                step.params[param as usize] = clamped;
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(shell);
+        app.on_shader_step_param_live(move |index, param, value| {
+            let Some(app) = weak.upgrade() else { return };
+            settle_now(&app, &shell);
+            if !app.get_shader_builder_locked() && set_step_param(&shell, index, param, value) {
+                regen_code(&app, &shell);
             }
-            regen_builder(&app, &shell);
         });
     }
     {
