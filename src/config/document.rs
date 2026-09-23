@@ -1025,6 +1025,20 @@ curve = \"easeout\"
     }
 
     #[test]
+    fn removing_a_new_key_restores_the_original_text() {
+        // What discarding an unsaved new key does: the file must stop
+        // counting as modified, with no empty table left behind.
+        let text = "[animation]\n[animation.windows_in]\nshader = \"a.glsl\"\n";
+        let path = ["animation", "windows_move", "shader"];
+        let mut doc = ConfigDocument::from_str(text).unwrap();
+        doc.set_string(&path, "shaders/test.glsl");
+        assert!(doc.is_modified());
+        assert!(doc.remove_leaf(&path));
+        assert!(!doc.is_modified(), "{}", doc.text());
+        assert_eq!(doc.text(), text);
+    }
+
+    #[test]
     fn remove_leaf_deletes_the_key_and_prunes_empty_parents() {
         let mut doc = ConfigDocument::from_str(
             "[animation.windows_in]\nshader = \"shaders/reveal.glsl\"\nduration_ms = 150\n",

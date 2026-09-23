@@ -154,8 +154,8 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
             let entries = build_save_entries(&shell);
             app.set_show_save_popup(!entries.is_empty());
             app.set_save_entries(Rc::new(VecModel::from(entries)).into());
-            app.set_changed_count(changed_count(&shell));
             refresh_row(&app, &shell, &key);
+            super::sections::refresh_shown_page(&app, &shell);
         });
     }
     {
@@ -197,9 +197,8 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
                 }
             }
             let shell = shell.borrow();
-            super::sections::refill_page(&app, &shell, app.get_current_section().as_str());
+            super::sections::refresh_shown_page(&app, &shell);
             app.set_show_save_popup(false);
-            app.set_changed_count(changed_count(&shell));
             app.set_status("Discarded all unsaved changes.".into());
         });
     }
@@ -260,8 +259,7 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
             }
 
             if save_all_and_validate(&app, &mut shell, &env) {
-                let section = app.get_current_section().to_string();
-                super::sections::refill_page(&app, &shell, &section);
+                super::sections::refresh_shown_page(&app, &shell);
             }
         });
     }

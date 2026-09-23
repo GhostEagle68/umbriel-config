@@ -11,6 +11,20 @@ pub(super) fn refill_page(app: &AppWindow, shell: &Shell, page_id: &str) {
     app.set_changed_count(changed_count(shell));
 }
 
+/// Redraw whichever page is showing from the documents, plus the Save
+/// button's state. For bulk changes (discard, per-key reset, save with
+/// moves) that can touch any page's values, not just settings cards.
+pub(super) fn refresh_shown_page(app: &AppWindow, shell: &Shell) {
+    match app.get_page() {
+        Page::Shaders => super::page_shaders::rebuild_shaders(app, shell),
+        Page::Outputs => super::page_outputs::rebuild_outputs(app, shell),
+        Page::Rules => super::page_rules::rebuild_rule_page(app, shell),
+        _ => refill_page(app, shell, app.get_current_section().as_str()),
+    }
+    app.set_dirty(shell.any_modified());
+    app.set_changed_count(changed_count(shell));
+}
+
 /// Which page a schema sub-section belongs to: its claimed page, else the
 /// first page covering its top-level area, else the MORE fallback page
 /// (whose id is the top-level name itself).
