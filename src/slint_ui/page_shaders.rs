@@ -8,6 +8,8 @@ use super::*;
 const SHADERS_UPSTREAM_COMMITS: &str =
     "https://api.github.com/repos/noctalia-dev/community-umbriel-shaders/commits?per_page=1";
 const SHADERS_UPSTREAM_MARKER: &str = ".upstream";
+/// Largest community archive the download accepts.
+const ARCHIVE_LIMIT: u64 = 64 * 1024 * 1024;
 
 /// The community repo's newest commit SHA, or `None` when GitHub is
 /// unreachable — an unknown upstream never flips the update marker.
@@ -79,7 +81,15 @@ fn download_community_shaders(target: &Path) -> Result<String, String> {
         .timeout_global(Some(std::time::Duration::from_secs(60)))
         .build()
         .call()
-        .and_then(|mut response| response.body_mut().read_to_vec())
+        // ureq's plain read_to_vec stops at 10 MB; the collection only
+        // grows, so allow well past that.
+        .and_then(|mut response| {
+            response
+                .body_mut()
+                .with_config()
+                .limit(ARCHIVE_LIMIT)
+                .read_to_vec()
+        })
         .map_err(|err| format!("Download failed: {err}"))?;
 
     let staging = target.with_file_name(".community-staging");
