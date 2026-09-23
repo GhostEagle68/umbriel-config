@@ -17,7 +17,7 @@ live-reloads and the change applies immediately.
 
 ## Disclaimer
 
-Zcode GLM 5.3 models are used to help plan, review code and research only. All code is looked over and written by me and tested locally.
+Zcode GLM 5.3 and Claude Opus 5.5 models are used to help plan, review code, fix/find bugs and research only. All code is looked over and written by me and tested locally.
 
 ## Features
 
