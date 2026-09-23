@@ -81,7 +81,7 @@ pub fn scan(config_dir: &Path, data_dirs: &[PathBuf]) -> Vec<ShaderEntry> {
         };
 
     let config_shaders = config_dir.join("shaders");
-    for path in glsl_files(&config_shaders, 0) {
+    for path in glsl_files(&config_shaders) {
         let source = if path.starts_with(config_shaders.join("community")) {
             Source::Community
         } else {
@@ -90,7 +90,7 @@ pub fn scan(config_dir: &Path, data_dirs: &[PathBuf]) -> Vec<ShaderEntry> {
         push(path, source, &mut entries, &mut seen);
     }
     for data_dir in data_dirs {
-        for path in glsl_files(&data_dir.join("umbriel").join("shaders"), 0) {
+        for path in glsl_files(&data_dir.join("umbriel").join("shaders")) {
             push(path, Source::Bundled, &mut entries, &mut seen);
         }
     }
@@ -98,11 +98,24 @@ pub fn scan(config_dir: &Path, data_dirs: &[PathBuf]) -> Vec<ShaderEntry> {
 }
 
 /// Recursively collect `*.glsl` files, depth-limited, skipping hidden
-/// directories — one small walk instead of a new dependency.
-fn glsl_files(dir: &Path, depth: usize) -> Vec<PathBuf> {
+/// directories — one small walk instead of a new dependency. Symlinked
+/// folders are followed (dotfile managers link whole trees), each real
+/// directory at most once so a link loop can't recurse forever.
+fn glsl_files(dir: &Path) -> Vec<PathBuf> {
+    let mut visited = Vec::new();
+    glsl_walk(dir, 0, &mut visited)
+}
+
+fn glsl_walk(dir: &Path, depth: usize, visited: &mut Vec<PathBuf>) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if depth > 4 {
         return out;
+    }
+    if let Ok(real) = dir.canonicalize() {
+        if visited.contains(&real) {
+            return out;
+        }
+        visited.push(real);
     }
     let Ok(read) = std::fs::read_dir(dir) else {
         return out;
@@ -112,9 +125,12 @@ fn glsl_files(dir: &Path, depth: usize) -> Vec<PathBuf> {
         let Ok(file_type) = item.file_type() else {
             continue;
         };
-        if file_type.is_dir() {
+        // A symlink counts as whatever it points at.
+        let is_dir = file_type.is_dir()
+            || (file_type.is_symlink() && std::fs::metadata(&path).is_ok_and(|meta| meta.is_dir()));
+        if is_dir {
             if !item.file_name().to_string_lossy().starts_with('.') {
-                out.extend(glsl_files(&path, depth + 1));
+                out.extend(glsl_walk(&path, depth + 1, visited));
             }
         } else if path.extension().is_some_and(|ext| ext == "glsl") {
             out.push(path);
@@ -927,6 +943,26 @@ mod tests {
         // absolute, matching umbriel's path resolution.
         assert_eq!(entries[1].value, "shaders/reveal.glsl");
         assert!(entries[2].value.starts_with('/'));
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn scan_follows_symlinked_folders_once() {
+        let base = std::env::temp_dir().join(format!("umbriel-shaderlink-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let config_dir = base.join("config");
+        let elsewhere = base.join("dotfiles/effects");
+        write(&elsewhere.join("glow.glsl"), GLSL);
+        std::fs::create_dir_all(config_dir.join("shaders")).unwrap();
+        // A linked folder (stow-style) and a loop back to shaders/.
+        std::os::unix::fs::symlink(&elsewhere, config_dir.join("shaders/mine")).unwrap();
+        std::os::unix::fs::symlink(config_dir.join("shaders"), config_dir.join("shaders/loop"))
+            .unwrap();
+
+        let entries = scan(&config_dir, &[]);
+        let values: Vec<&str> = entries.iter().map(|entry| entry.value.as_str()).collect();
+        assert_eq!(values, vec!["shaders/mine/glow.glsl"]);
+        assert_eq!(entries[0].source, Source::ConfigDir);
         std::fs::remove_dir_all(&base).ok();
     }
 
