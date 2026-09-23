@@ -222,6 +222,35 @@ fn open_shader_editor(
     kick_shader_preview(app, shell);
 }
 
+/// Delete one of the user's own shaders, then rescan. An editor open on
+/// that same file closes with it.
+fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &Path) {
+    let result = shell
+        .borrow()
+        .path
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "could not determine the config directory.".to_owned())
+        .and_then(|dir| shaders::delete_user_shader(&dir, path));
+    match result {
+        Ok(()) => {
+            {
+                let mut shell = shell.borrow_mut();
+                if shell.shader_editing.as_deref() == Some(path) {
+                    shell.shader_editing = None;
+                    app.set_shader_editor_open(false);
+                }
+                scan_shaders(&mut shell);
+            }
+            let shell = shell.borrow();
+            rebuild_shaders(app, &shell);
+            app.set_status(format!("Deleted {}.", path.display()).into());
+        }
+        Err(err) if app.get_shader_editor_open() => app.set_shader_editor_note(err.into()),
+        Err(err) => app.set_status(err.into()),
+    }
+}
+
 /// Reset the scrubber and hand the freshly loaded code to the preview
 /// worker, which renders the opening frame.
 fn kick_shader_preview(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
@@ -561,22 +590,24 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             let Some(path) = shell.borrow().shader_editing.clone() else {
                 return;
             };
-            let result = shell
+            delete_shader(&app, &shell, &path);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(shell);
+        // A library card's Delete names its own file; it never goes
+        // through the editor's remembered path, which may be stale.
+        app.on_shader_delete_file(move |path| {
+            let Some(app) = weak.upgrade() else { return };
+            let path = PathBuf::from(path.as_str());
+            let own = shell
                 .borrow()
-                .path
-                .parent()
-                .map(Path::to_path_buf)
-                .ok_or_else(|| "could not determine the config directory.".to_owned())
-                .and_then(|dir| shaders::delete_user_shader(&dir, &path));
-            match result {
-                Ok(()) => {
-                    app.set_shader_editor_open(false);
-                    scan_shaders(&mut shell.borrow_mut());
-                    let shell = shell.borrow();
-                    rebuild_shaders(&app, &shell);
-                    app.set_status(format!("Deleted {}.", path.display()).into());
-                }
-                Err(err) => app.set_shader_editor_note(err.into()),
+                .shaders
+                .iter()
+                .any(|entry| entry.source == shaders::Source::ConfigDir && entry.path == path);
+            if own {
+                delete_shader(&app, &shell, &path);
             }
         });
     }

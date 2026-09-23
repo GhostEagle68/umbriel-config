@@ -161,6 +161,8 @@ export component AppWindow inherits Window {
     callback shader-editor-fork(string, string);
     callback shader-editor-save();
     callback shader-editor-delete();
+    // Delete a library card's own shader by path.
+    callback shader-delete-file(string);
     callback shader-editor-close();
     callback shader-editor-text-changed(string);
     callback shader-step-add(string);
@@ -523,7 +525,7 @@ export component AppWindow inherits Window {
                         editor-new => { root.shader-editor-new(); }
                         editor-edit(p) => { root.shader-editor-edit(p); }
                         editor-fork(p, n) => { root.shader-editor-fork(p, n); }
-                        editor-delete(p) => { root.shader-editor-delete(); }
+                        editor-delete(p) => { root.shader-delete-file(p); }
                     }
                 }
 
@@ -1358,8 +1360,15 @@ export component AppWindow inherits Window {
                     spacing: Theme.space-s;
 
                     if root.shader-editor-editing: ActionButton {
-                        text: "Delete";
-                        clicked => { root.shader-editor-delete(); }
+                        property <bool> confirming: false;
+                        text: self.confirming ? "Really delete?" : "Delete";
+                        clicked => {
+                            if (self.confirming) {
+                                root.shader-editor-delete();
+                            } else {
+                                self.confirming = true;
+                            }
+                        }
                     }
 
                     ActionButton {

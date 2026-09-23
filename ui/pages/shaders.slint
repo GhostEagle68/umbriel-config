@@ -254,9 +254,17 @@ export component ShadersPage inherits Rectangle {
                                 clicked => { root.editor-edit(shader.path); }
                             }
 
+                            // Two clicks: deleting a file can't be undone.
                             if shader.is-own: ActionButton {
-                                text: "Delete";
-                                clicked => { root.editor-delete(shader.path); }
+                                property <bool> confirming: false;
+                                text: self.confirming ? "Really delete?" : "Delete";
+                                clicked => {
+                                    if (self.confirming) {
+                                        root.editor-delete(shader.path);
+                                    } else {
+                                        self.confirming = true;
+                                    }
+                                }
                             }
 
                             if !shader.is-own: ActionButton {
