@@ -318,6 +318,91 @@ fn open_shader_editor(
     kick_shader_preview(app, shell);
 }
 
+/// Point `event` at `shader`, or clear it with `None`, as an unsaved
+/// change. An existing key is edited where it lives; a brand-new one
+/// starts beside the other assignments (the save popup can move it).
+/// The value is spelled for the file it lands in, since umbriel
+/// resolves relative paths from there, and written as a typed string
+/// so it is always quoted.
+fn assign_event(shell: &mut Shell, event: &str, shader: Option<&Path>) {
+    let home = shaders::assignment_home(&chain_docs(shell), event);
+    let key = ["animation", event, "shader"];
+    match (shader, home) {
+        (Some(shader), home) => {
+            let target = home.unwrap_or_else(|| new_home(shell));
+            let value = shaders::value_for(shader, &chain_paths(shell)[target]);
+            doc_at_mut(shell, target).set_string(&key, &value);
+        }
+        (None, Some(home)) => {
+            doc_at_mut(shell, home).remove_leaf(&key);
+        }
+        (None, None) => {}
+    }
+}
+
+/// The "Use for" checklist: every event, what it uses now, ticked when
+/// it already uses the shader being saved or is the one being previewed.
+fn use_for_rows(shell: &Shell) -> Vec<ShaderUse> {
+    let docs = chain_docs(shell);
+    let paths = chain_paths(shell);
+    let this = shell.shader_editing.as_deref();
+    shaders::EVENTS
+        .iter()
+        .enumerate()
+        .map(|(index, event)| {
+            let resolved = shaders::current_assignment(&docs, event)
+                .map(|(value, doc)| (shaders::resolve(&value, &paths[doc]), value));
+            let uses_this = match (&resolved, this) {
+                (Some((resolved, _)), Some(this)) => shaders::same_file(resolved, this),
+                _ => false,
+            };
+            let current = match &resolved {
+                None => String::new(),
+                Some(_) if uses_this => "uses this shader".to_owned(),
+                Some((resolved, value)) => {
+                    let name = shell
+                        .shaders
+                        .iter()
+                        .find(|entry| shaders::same_file(&entry.path, resolved))
+                        .map_or(value.as_str(), |entry| entry.name.as_str());
+                    format!("uses {name}")
+                }
+            };
+            ShaderUse {
+                label: prettify(event).into(),
+                current: current.into(),
+                checked: uses_this || index == shell.shader_preview_event,
+            }
+        })
+        .collect()
+}
+
+/// Apply the "Use for" checklist to the saved shader at `path`: ticked
+/// events switch to it, unticked ones that used it are cleared, as
+/// unsaved changes. Returns what changed, for the status line.
+fn apply_use_for(shell: &mut Shell, app: &AppWindow, path: &Path) -> Vec<String> {
+    let rows = app.get_shader_use_for();
+    let using: Vec<&str> = assignments_of(shell, path)
+        .iter()
+        .map(|(event, _)| *event)
+        .collect();
+    let mut changes = Vec::new();
+    for (index, event) in shaders::EVENTS.iter().enumerate() {
+        let Some(row) = rows.row_data(index) else {
+            continue;
+        };
+        let uses = using.contains(event);
+        if row.checked && !uses {
+            assign_event(shell, event, Some(path));
+            changes.push(format!("now used for {}", prettify(event)));
+        } else if !row.checked && uses {
+            assign_event(shell, event, None);
+            changes.push(format!("no longer used for {}", prettify(event)));
+        }
+    }
+    changes
+}
+
 /// Chain index for a brand-new assignment; see
 /// [`shaders::new_assignment_home`].
 fn new_home(shell: &Shell) -> usize {
@@ -719,24 +804,10 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                     Ok(0) | Err(_) => None,
                     Ok(index) => shell.shaders.get(index - 1).map(|entry| entry.path.clone()),
                 };
-                let clearing = index == 0;
-                let home = shaders::assignment_home(&chain_docs(&shell), &event);
-                let path = ["animation", event.as_str(), "shader"];
-                match (shader, home) {
-                    // A typed string write, so the path is always quoted.
-                    // A brand-new key starts beside the other assignments;
-                    // the save popup can still move it. The value is
-                    // spelled for the file it lands in, since umbriel
-                    // resolves relative paths from there.
-                    (Some(shader), home) => {
-                        let target = home.unwrap_or_else(|| new_home(&shell));
-                        let value = shaders::value_for(&shader, &chain_paths(&shell)[target]);
-                        doc_at_mut(&mut shell, target).set_string(&path, &value);
-                    }
-                    (None, Some(home)) if clearing => {
-                        doc_at_mut(&mut shell, home).remove_leaf(&path);
-                    }
-                    _ => {}
+                match shader {
+                    Some(shader) => assign_event(&mut shell, &event, Some(&shader)),
+                    None if index == 0 => assign_event(&mut shell, &event, None),
+                    None => {}
                 }
             }
             // Always rebuild so the dropdowns mirror the documents, even
@@ -827,6 +898,17 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(shell);
+        // Save's first step: which events should use this shader.
+        app.on_shader_editor_save_request(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let rows = use_for_rows(&shell.borrow());
+            app.set_shader_use_for(Rc::new(VecModel::from(rows)).into());
+            app.set_shader_use_open(true);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(shell);
         app.on_shader_editor_save(move || {
             let Some(app) = weak.upgrade() else { return };
             let text = app.get_shader_editor_text().to_string();
@@ -860,7 +942,8 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             };
             match result {
                 Ok(path) => {
-                    {
+                    // What the "Use for" step switched on or off.
+                    let use_changes = {
                         let mut shell = shell.borrow_mut();
                         shell.shader_editing = Some(path.clone());
                         shell.shader_editor_baseline = text.clone();
@@ -878,38 +961,36 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                         if let Err(err) = write_assignments(&mut shell, &repoints) {
                             app.set_status(err.into());
                         }
+                        let changes = apply_use_for(&mut shell, &app, &path);
                         scan_shaders(&mut shell);
-                    }
+                        changes
+                    };
                     let shell = shell.borrow();
                     app.set_dirty(shell.any_modified());
                     rebuild_shaders(&app, &shell);
                     app.set_shader_editor_note(String::new().into());
                     app.set_shader_editor_used_by(used_by(&shell, &path).into());
                     app.set_shader_editor_open(false);
-                    if creating {
-                        app.set_status(
-                            format!(
-                                "Created {} — assign it to an event to use it.",
-                                path.display()
-                            )
-                            .into(),
-                        );
+                    let mut status = if creating {
+                        format!("Created {}.", path.display())
                     } else if !renamed.is_empty() {
                         let events: Vec<String> =
                             renamed.iter().map(|(event, _)| prettify(event)).collect();
-                        app.set_status(
-                            format!(
-                                "Saved as {} and pointed {} at it.",
-                                path.display(),
-                                events.join(", ")
-                            )
-                            .into(),
-                        );
+                        format!(
+                            "Saved as {} and pointed {} at it.",
+                            path.display(),
+                            events.join(", ")
+                        )
                     } else {
-                        app.set_status(
-                            format!("Saved {} — umbriel live-reloads it.", path.display()).into(),
-                        );
+                        format!("Saved {} — umbriel live-reloads it.", path.display())
+                    };
+                    if !use_changes.is_empty() {
+                        status.push_str(&format!(
+                            " {}: save your config to apply.",
+                            use_changes.join(", ")
+                        ));
                     }
+                    app.set_status(status.into());
                 }
                 Err(err) => app.set_shader_editor_note(err.into()),
             }

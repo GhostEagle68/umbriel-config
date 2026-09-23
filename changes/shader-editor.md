@@ -15,3 +15,6 @@
 - **Preview as any event.** Pick which event the preview plays as: it
   shows a fitting stand-in (a window, a workspace, a bar, a focus border)
   and plays with that event's own curve and timing from your config.
+- **Choose where it is used.** Saving a shader asks which events should
+  use it, showing what each uses now, so a new effect is assigned in the
+  same step.

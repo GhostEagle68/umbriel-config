@@ -159,6 +159,14 @@ export struct ShaderStep {
     p-count: int,
 }
 
+// One row of the editor's "Use for" checklist on Save.
+export struct ShaderUse {
+    label: string,
+    // What the event uses now ("uses reveal", "uses this shader"), or "".
+    current: string,
+    checked: bool,
+}
+
 // One animation event's shader assignment row.
 export struct ShaderAssignment {
     // Dotted schema key, e.g. animation.windows_in.shader.

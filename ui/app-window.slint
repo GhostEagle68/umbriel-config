@@ -13,7 +13,13 @@ export {
 // Re-exported for the Rust side too: rows.rs installs the ColorMath
 // handlers that the picker popup's bindings call.
 export { ColorMath }
-import { ComboBox, LineEdit, ScrollView, TextEdit } from "std-widgets.slint";
+import {
+    CheckBox,
+    ComboBox,
+    LineEdit,
+    ScrollView,
+    TextEdit,
+} from "std-widgets.slint";
 
 import {
     ActionButton,
@@ -35,6 +41,7 @@ import {
     ShaderAssignment,
     ShaderInfo,
     ShaderStep,
+    ShaderUse,
 } from "types.slint";
 import { CategoryPage } from "pages/category.slint";
 import { SettingsPage } from "pages/settings.slint";
@@ -166,7 +173,12 @@ export component AppWindow inherits Window {
     callback shader-editor-new();
     callback shader-editor-edit(string);
     callback shader-editor-fork(string, string);
+    // Save asks which events use the shader first: request fills the
+    // checklist and opens it, save does the work.
+    callback shader-editor-save-request();
     callback shader-editor-save();
+    in-out property <[ShaderUse]> shader-use-for;
+    in-out property <bool> shader-use-open;
     callback shader-editor-delete();
     // Delete a library card's own shader by path.
     callback shader-delete-file(string);
@@ -1434,7 +1446,87 @@ export component AppWindow inherits Window {
                     if !root.shader-editor-confirm-close: ActionButton {
                         text: "Save";
                         primary: true;
-                        clicked => { root.shader-editor-save(); }
+                        clicked => { root.shader-editor-save-request(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── shader "Use for" checklist (the editor's Save step) ──
+    if root.shader-editor-open && root.shader-use-open: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000066;
+
+        // Absorb clicks: this step is left with Back or Save.
+        TouchArea { }
+
+        Rectangle {
+            width: min(440px, parent.width - 48px);
+            height: use-layout.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.bg-1;
+            border-radius: Theme.radius-l;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            use-layout := VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-s;
+
+                Text {
+                    text: "Use this shader for";
+                    color: Theme.text-1;
+                    font-size: Theme.font-large;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "Ticked events switch to this shader and unticked ones stop using it, as changes you save with the main Save button.";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
+                }
+
+                for row in root.shader-use-for: HorizontalLayout {
+                    spacing: Theme.space-m;
+
+                    CheckBox {
+                        text: row.label;
+                        checked: row.checked;
+                        toggled => { row.checked = self.checked; }
+                    }
+
+                    Text {
+                        text: row.current;
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-s;
+                    padding-top: Theme.space-s;
+
+                    ActionButton {
+                        text: "Back";
+                        clicked => { root.shader-use-open = false; }
+                    }
+
+                    ActionButton {
+                        text: "Save";
+                        primary: true;
+                        clicked => {
+                            root.shader-use-open = false;
+                            root.shader-editor-save();
+                        }
                     }
                 }
             }
