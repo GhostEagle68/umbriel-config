@@ -43,12 +43,16 @@ pub(super) fn maybe_check_shader_updates(app: &AppWindow, shell: &Rc<RefCell<She
             .unwrap_or_default();
         installed_commit_sha(&target)
     };
+    // No recorded SHA: nothing to compare against, so don't guess.
+    let Some(marker) = marker else {
+        return;
+    };
     let weak = app.as_weak();
     std::thread::spawn(move || {
         let Some(upstream) = fetch_latest_commit_sha() else {
             return;
         };
-        let update_available = marker.as_deref() != Some(upstream.as_str());
+        let update_available = marker != upstream;
         let _ = slint::invoke_from_event_loop(move || {
             let Some(app) = weak.upgrade() else { return };
             app.set_shader_update_available(update_available);
