@@ -280,17 +280,19 @@ fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &Path) {
     }
 }
 
-/// Reset the scrubber and hand the freshly loaded code to the preview
-/// worker, which renders the opening frame.
+/// Park the scrubber mid-animation and hand the freshly loaded code to
+/// the preview worker. Not the opening frame: at progress 0 a fade-in
+/// is fully transparent and the preview looks broken.
 fn kick_shader_preview(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
-    app.set_shader_preview_progress(0.0);
+    const START: f32 = 0.5;
+    app.set_shader_preview_progress(START);
     app.set_shader_preview_direction(1.0);
     app.set_shader_preview_note(String::new().into());
     let text = app.get_shader_editor_text().to_string();
     let mut shell = shell.borrow_mut();
     shell.preview_command(shader_preview::PreviewCommand::SetSource(text));
     shell.preview_command(shader_preview::PreviewCommand::Render {
-        progress: 0.0,
+        progress: START,
         direction: 1.0,
     });
 }
