@@ -444,7 +444,11 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                         Ok(note) => {
                             // Re-enter the page's own open path: rescans
                             // the library and rebuilds the assignments.
-                            app.invoke_section_selected("shaders".into());
+                            // Elsewhere, leave the user where they are;
+                            // the page rescans when next opened.
+                            if app.get_page() == Page::Shaders {
+                                app.invoke_section_selected("shaders".into());
+                            }
                             app.set_shader_update_available(false);
                             app.set_shader_download_note(note.into());
                         }
