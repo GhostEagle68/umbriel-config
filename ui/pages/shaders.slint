@@ -287,13 +287,15 @@ export component ShadersPage inherits Rectangle {
 }
 
 // The shader editor's effect-builder panel: the step stack plus the
-// Add-an-effect row. Instantiated as a left column on wide editor cards
-// and as a full-width section on narrow ones; all behavior lives behind
-// these callbacks so both placements stay identical.
+// Add-an-effect row. Shown for new, forked and edited shaders alike;
+// when the code isn't builder output the panel locks and offers a
+// confirmed reset instead of overwriting hand-written code.
 export component ShaderBuilderPanel inherits Rectangle {
     in property <[ShaderStep]> steps;
     in property <[string]> kinds;
+    in property <bool> locked;
     callback add(string);
+    callback reset();
     callback step-remove(int);
     callback step-move(int, int);
     callback step-param(int, int, float);
@@ -306,6 +308,43 @@ export component ShaderBuilderPanel inherits Rectangle {
             color: Theme.text-2;
             font-size: Theme.font-small;
             font-weight: 700;
+        }
+
+        if root.locked: Rectangle {
+            background: Theme.bg-0;
+            border-radius: Theme.radius-m;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            VerticalLayout {
+                padding: Theme.space-s;
+                spacing: Theme.space-s;
+
+                Text {
+                    text: "This code was edited by hand, so the builder can't read it. Your code is safe: the builder stays off until you start over.";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: start;
+
+                    // Two clicks: starting over replaces the code pane.
+                    ActionButton {
+                        property <bool> confirming: false;
+                        text: self.confirming ? "Replace the code?" : "Start over with builder";
+                        clicked => {
+                            if (self.confirming) {
+                                self.confirming = false;
+                                root.reset();
+                            } else {
+                                self.confirming = true;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Add row sits above the stack so it never fights the list for
@@ -324,10 +363,12 @@ export component ShaderBuilderPanel inherits Rectangle {
                 min-width: 110px;
                 horizontal-stretch: 1;
                 model: root.kinds;
+                enabled: !root.locked;
             }
 
             ActionButton {
                 text: "Add";
+                enabled: !root.locked;
                 clicked => { root.add(add-kind.current-value); }
             }
         }

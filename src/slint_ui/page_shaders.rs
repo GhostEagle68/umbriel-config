@@ -140,17 +140,9 @@ fn download_community_shaders(target: &Path) -> Result<String, String> {
     })
 }
 
-/// Push the builder stack into the step panel and regenerate the code
-/// pane. Only called in new-shader mode; hand edits to the code are
-/// overwritten by the next stack change — the builder is a starting
-/// point, the code view is for finishing touches.
-fn regen_builder(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
-    let (steps, code) = {
-        let shell = shell.borrow();
-        let steps = shell.builder_steps.clone();
-        let code = shaders::builder::generate_stack(&steps);
-        (steps, code)
-    };
+/// Show the builder stack as step cards. Rows only: the code pane is
+/// the caller's business.
+fn push_builder_rows(app: &AppWindow, steps: &[shaders::builder::BuilderStep]) {
     let rows: Vec<ShaderStep> = steps
         .iter()
         .enumerate()
@@ -187,6 +179,20 @@ fn regen_builder(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         })
         .collect();
     app.set_shader_steps(Rc::new(VecModel::from(rows)).into());
+}
+
+/// Push the builder stack into the step panel and regenerate the code
+/// pane from it. Callers only reach this with the builder unlocked, so
+/// the code being replaced is itself builder output.
+fn regen_builder(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    let (steps, code) = {
+        let shell = shell.borrow();
+        let steps = shell.builder_steps.clone();
+        let code = shaders::builder::generate_stack(&steps);
+        (steps, code)
+    };
+    push_builder_rows(app, &steps);
+    app.set_shader_builder_locked(false);
     let preview_text = code.clone();
     app.set_shader_editor_text(code.into());
     // Stack changes regenerate the code, so the preview compiles the new
@@ -194,6 +200,24 @@ fn regen_builder(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     shell
         .borrow_mut()
         .preview_command(shader_preview::PreviewCommand::SetSource(preview_text));
+}
+
+/// Point the builder at whatever the code pane holds: builder output
+/// fills the stack, anything else locks the builder so its next change
+/// can't overwrite hand-written code.
+fn sync_builder_from_code(app: &AppWindow, shell: &Rc<RefCell<Shell>>, code: &str) {
+    match shaders::builder::parse_stack(code) {
+        Some(steps) => {
+            push_builder_rows(app, &steps);
+            shell.borrow_mut().builder_steps = steps;
+            app.set_shader_builder_locked(false);
+        }
+        None => {
+            push_builder_rows(app, &[]);
+            shell.borrow_mut().builder_steps.clear();
+            app.set_shader_builder_locked(true);
+        }
+    }
 }
 
 /// Open the overlay editor pre-loaded with a shader file's content.
@@ -216,6 +240,7 @@ fn open_shader_editor(
     shell.borrow_mut().shader_editing = editing.then(|| PathBuf::from(path));
     app.set_shader_editor_editing(editing);
     app.set_shader_editor_name(name.into());
+    sync_builder_from_code(app, shell, &text);
     app.set_shader_editor_text(text.into());
     app.set_shader_editor_note(String::new().into());
     app.set_shader_editor_open(true);
@@ -623,6 +648,9 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                 format!("⚠ {}", problems.join("; "))
             };
             app.set_shader_editor_note(note.into());
+            // The builder follows the code: typing builder-shaped code
+            // updates the steps, anything else locks the builder.
+            sync_builder_from_code(&app, &shell, &text);
             // Live GLSL checking: the preview worker compiles as you type.
             shell
                 .borrow_mut()
@@ -638,11 +666,24 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         });
     }
     {
+        // Locked builder's way out: discard the code for a fresh stack.
+        let weak = app.as_weak();
+        let shell = Rc::clone(shell);
+        app.on_shader_builder_reset(move || {
+            let Some(app) = weak.upgrade() else { return };
+            shell.borrow_mut().builder_steps = shaders::builder::default_steps();
+            regen_builder(&app, &shell);
+        });
+    }
+    {
         // The builder stack: every mutation regenerates the code.
         let weak = app.as_weak();
         let shell = Rc::clone(shell);
         app.on_shader_step_add(move |label| {
             let Some(app) = weak.upgrade() else { return };
+            if app.get_shader_builder_locked() {
+                return;
+            }
             let Some(def) = shaders::builder::STEP_DEFS
                 .iter()
                 .find(|def| def.label == label.as_str())
@@ -658,6 +699,9 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_step_remove(move |index| {
             let Some(app) = weak.upgrade() else { return };
+            if app.get_shader_builder_locked() {
+                return;
+            }
             {
                 let mut shell = shell.borrow_mut();
                 if (index as usize) < shell.builder_steps.len() {
@@ -672,6 +716,9 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_step_move(move |index, delta| {
             let Some(app) = weak.upgrade() else { return };
+            if app.get_shader_builder_locked() {
+                return;
+            }
             {
                 let mut shell = shell.borrow_mut();
                 let from = index as usize;
@@ -688,6 +735,9 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_step_param(move |index, param, value| {
             let Some(app) = weak.upgrade() else { return };
+            if app.get_shader_builder_locked() {
+                return;
+            }
             {
                 let mut shell = shell.borrow_mut();
                 let Some(step) = shell.builder_steps.get_mut(index as usize) else {

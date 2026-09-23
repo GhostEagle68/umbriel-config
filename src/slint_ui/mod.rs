@@ -84,7 +84,8 @@ struct Shell {
     shaders_update_checked: bool,
     // The shader being edited in the overlay editor; None = creating new.
     shader_editing: Option<PathBuf>,
-    // The effect builder's step stack (new-shader mode only).
+    // The effect builder's step stack; mirrors the code pane whenever
+    // the builder can read it (the window's builder-locked flag).
     builder_steps: Vec<shaders::builder::BuilderStep>,
     // Offscreen preview worker; started on first editor use. After an
     // init failure it stays off until the next app run (best-effort).

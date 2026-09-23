@@ -155,6 +155,9 @@ export component AppWindow inherits Window {
     in-out property <string> shader-editor-text;
     in property <string> shader-editor-note;
     in property <[ShaderStep]> shader-steps;
+    // The code pane isn't builder output (hand-edited or foreign), so
+    // the builder is read-only until reset.
+    in property <bool> shader-builder-locked;
     in property <[string]> shader-step-kinds;
     callback shader-editor-new();
     callback shader-editor-edit(string);
@@ -166,6 +169,7 @@ export component AppWindow inherits Window {
     callback shader-editor-close();
     callback shader-editor-text-changed(string);
     callback shader-step-add(string);
+    callback shader-builder-reset();
     callback shader-step-remove(int);
     callback shader-step-move(int, int);
     callback shader-step-param(int, int, float);
@@ -1289,12 +1293,14 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                     spacing: Theme.space-m;
 
-                    if !root.shader-editor-editing: ShaderBuilderPanel {
+                    ShaderBuilderPanel {
                         min-width: 280px;
                         max-width: 460px;
                         horizontal-stretch: 2;
                         steps: root.shader-steps;
                         kinds: root.shader-step-kinds;
+                        locked: root.shader-builder-locked;
+                        reset => { root.shader-builder-reset(); }
                         add(k) => { root.shader-step-add(k); }
                         step-remove(i) => { root.shader-step-remove(i); }
                         step-move(i, d) => { root.shader-step-move(i, d); }

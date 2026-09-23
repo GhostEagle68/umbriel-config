@@ -577,6 +577,97 @@ vec4 animation(vec2 uv) {{
         )
     }
 
+    /// Read a builder stack back out of shader code, for editing a saved
+    /// shader with the builder. Only code the builder itself produced
+    /// qualifies: the parsed stack must regenerate the same code (line
+    /// by line, ignoring indentation), so a hand edit anywhere, even in
+    /// a comment, returns `None` rather than being silently dropped by
+    /// the next regeneration.
+    pub fn parse_stack(code: &str) -> Option<Vec<BuilderStep>> {
+        let body = code
+            .split_once("vec4 animation(vec2 uv) {")?
+            .1
+            .rsplit_once('}')?
+            .0;
+        let lines: Vec<&str> = body
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        let mut motion = Vec::new();
+        let mut color = Vec::new();
+        let mut index = 0;
+        while index < lines.len() {
+            let line = lines[index];
+            index += 1;
+            if matches!(
+                line,
+                "float p = umbriel_clamped_progress;"
+                    | "float vis = umbriel_direction > 0.0 ? p : 1.0 - p;"
+                    | "vec4 color = umbriel_sample(uv);"
+                    | "return color;"
+            ) {
+                continue;
+            }
+            if let Some(to) = between(line, "color *= mix(1.0, ", ", vis);") {
+                color.push(step("fade", [to, 0.0, 0.0]));
+            } else if let Some(strength) =
+                between(line, "float pulse = ", " * sin(3.14159265 * p);")
+            {
+                // The second glow line is checked by the round trip.
+                index += 1;
+                color.push(step("glow", [strength, 0.0, 0.0]));
+            } else if let Some(from) = between(line, "uv = (uv - 0.5) / mix(", ", 1.0, vis) + 0.5;")
+            {
+                motion.push(step("scale", [from, 0.0, 0.0]));
+            } else if let Some(offset) = between(line, "uv -= vec2(", " * (1.0 - vis), 0.0);") {
+                motion.push(step("slide", [offset, 0.0, 0.0]));
+            } else if let Some(grid) = between(line, "vec2 cell_id = floor(uv * ", ");") {
+                // seed and t lines, then the displacement carrying the
+                // other two parameters.
+                let last = lines.get(index + 2)?;
+                index += 3;
+                let (scatter, gravity) =
+                    between_str(last, "uv -= vec2((seed - 0.5) * ", " * t * t);")?
+                        .split_once(" * t, ")?;
+                motion.push(step(
+                    "shatter",
+                    [grid, gravity.parse().ok()?, scatter.parse().ok()?],
+                ));
+            } else {
+                // The last known shape; anything else isn't builder output.
+                let amp = between(
+                    line,
+                    "uv.y += ",
+                    " * sin(uv.x * 12.566 + p * 9.0) * (1.0 - abs(2.0 * p - 1.0));",
+                )?;
+                motion.push(step("wobble", [amp, 0.0, 0.0]));
+            }
+        }
+        motion.extend(color);
+        (normalized(&generate_stack(&motion)) == normalized(code)).then_some(motion)
+    }
+
+    fn step(kind: &'static str, params: [f64; 3]) -> BuilderStep {
+        BuilderStep { kind, params }
+    }
+
+    fn between_str<'a>(line: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+        line.strip_prefix(prefix)?.strip_suffix(suffix)
+    }
+
+    fn between(line: &str, prefix: &str, suffix: &str) -> Option<f64> {
+        between_str(line, prefix, suffix)?.parse().ok()
+    }
+
+    /// Code compared by content: indentation and blank lines ignored.
+    fn normalized(code: &str) -> Vec<&str> {
+        code.lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect()
+    }
+
     /// The do-nothing shader: documents the contract right in the code.
     pub const SCAFFOLD: &str = "\
 // umbriel calls animation() for every pixel of the animating window.
@@ -808,6 +899,82 @@ mod tests {
             for line in body.lines().filter(|line| !line.is_empty()) {
                 assert!(line.starts_with("    "), "{}: {line:?}", def.label);
             }
+        }
+    }
+
+    #[test]
+    fn parse_stack_round_trips_builder_output() {
+        // Every kind alone, at defaults and at off-default values.
+        for def in builder::STEP_DEFS {
+            let step = def.default_step();
+            let code = builder::generate_stack(&[step]);
+            let parsed = builder::parse_stack(&code).expect(def.label);
+            assert_eq!(parsed.len(), 1, "{}", def.label);
+            assert_eq!(parsed[0].kind, def.kind);
+            assert_eq!(parsed[0].params, step.params, "{}", def.label);
+        }
+        // A mixed stack comes back motion-first, which regenerates the
+        // same code.
+        let stack = [
+            builder::BuilderStep {
+                kind: "fade",
+                params: [0.25, 0.0, 0.0],
+            },
+            builder::BuilderStep {
+                kind: "shatter",
+                params: [9.0, 0.35, 0.05],
+            },
+            builder::BuilderStep {
+                kind: "glow",
+                params: [0.5, 0.0, 0.0],
+            },
+            builder::BuilderStep {
+                kind: "wobble",
+                params: [0.015, 0.0, 0.0],
+            },
+        ];
+        let code = builder::generate_stack(&stack);
+        let parsed = builder::parse_stack(&code).unwrap();
+        let kinds: Vec<&str> = parsed.iter().map(|step| step.kind).collect();
+        assert_eq!(kinds, vec!["shatter", "wobble", "fade", "glow"]);
+        assert_eq!(builder::generate_stack(&parsed), code);
+        // An empty stack is still builder output.
+        assert!(
+            builder::parse_stack(&builder::generate_stack(&[]))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn parse_stack_reads_older_unindented_output() {
+        // Before the indentation fix, shatter's first line sat at
+        // column 0; those saved files still open in the builder.
+        let code = builder::generate_stack(&[builder::BuilderStep {
+            kind: "shatter",
+            params: [12.0, 0.4, 0.3],
+        }])
+        .replace("    vec2 cell_id", "vec2 cell_id");
+        let parsed = builder::parse_stack(&code).unwrap();
+        assert_eq!(parsed[0].params, [12.0, 0.4, 0.3]);
+    }
+
+    #[test]
+    fn parse_stack_rejects_hand_edited_code() {
+        let code = builder::generate_stack(&builder::default_steps());
+        // An extra statement, a tweaked constant, an edited comment,
+        // or code from elsewhere entirely.
+        let extra = code.replace("return color;", "color.rgb *= 0.9;\n    return color;");
+        let tweaked = code.replace("float vis", "float vis = 0.5; float unused");
+        let comment = code.replace("effect builder.", "effect builder, then tuned.");
+        for edited in [
+            extra.as_str(),
+            tweaked.as_str(),
+            comment.as_str(),
+            GLSL_STR,
+            builder::SCAFFOLD,
+        ] {
+            assert!(builder::parse_stack(edited).is_none(), "{edited}");
         }
     }
 
