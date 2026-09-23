@@ -690,6 +690,9 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         app.on_shader_editor_save(move || {
             let Some(app) = weak.upgrade() else { return };
             let text = app.get_shader_editor_text().to_string();
+            // New and forked shaders close on their first save; saving an
+            // existing one keeps the editor open for more tweaks.
+            let creating = shell.borrow().shader_editing.is_none();
             let result = {
                 let shell = shell.borrow_mut();
                 match shell.shader_editing.clone() {
@@ -714,12 +717,21 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                     }
                     let shell = shell.borrow();
                     rebuild_shaders(&app, &shell);
-                    // Subsequent saves overwrite the same file.
-                    app.set_shader_editor_editing(true);
                     app.set_shader_editor_note(String::new().into());
-                    app.set_status(
-                        format!("Saved {} — umbriel live-reloads it.", path.display()).into(),
-                    );
+                    if creating {
+                        app.set_shader_editor_open(false);
+                        app.set_status(
+                            format!(
+                                "Created {} — assign it to an event to use it.",
+                                path.display()
+                            )
+                            .into(),
+                        );
+                    } else {
+                        app.set_status(
+                            format!("Saved {} — umbriel live-reloads it.", path.display()).into(),
+                        );
+                    }
                 }
                 Err(err) => app.set_shader_editor_note(err.into()),
             }
