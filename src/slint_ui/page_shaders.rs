@@ -322,21 +322,30 @@ pub(super) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
         .map(|event| {
             let mut choices: Vec<SharedString> = vec!["(no shader)".into()];
             choices.extend(shell.shaders.iter().map(|entry| entry.label.clone().into()));
-            let current = shaders::current_assignment(&docs, event);
-            let index = current.as_ref().and_then(|(value, _)| {
+            let current = shaders::current_assignment(&docs, event).map(|(value, _)| value);
+            let index = current.as_ref().and_then(|value| {
                 choice_values
                     .iter()
                     .position(|candidate| candidate == value)
             });
+            // A value no scan found gets its own trailing entry, so the
+            // dropdown shows it and "(no shader)" is a real change.
+            let missing = current.is_some() && index.is_none();
+            let current_index = match (index, &current) {
+                (Some(position), _) => position + 1,
+                (None, Some(value)) => {
+                    choices.push(format!("⚠ {value} (missing)").into());
+                    choices.len() - 1
+                }
+                (None, None) => 0,
+            };
             ShaderAssignment {
                 key: format!("animation.{event}.shader").into(),
                 label: prettify(event).into(),
                 choices: Rc::new(VecModel::from(choices)).into(),
-                current: match index {
-                    Some(position) => (position + 1) as i32,
-                    None => -1,
-                },
-                current_value: current.map(|(value, _)| value).unwrap_or_default().into(),
+                current: current_index as i32,
+                current_value: current.unwrap_or_default().into(),
+                missing,
             }
         })
         .collect();

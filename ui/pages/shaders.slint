@@ -158,11 +158,11 @@ export component ShadersPage inherits Rectangle {
                         ComboBox {
                             width: 300px;
                             model: row.choices;
-                            current-index: row.current < 0 ? 0 : row.current;
+                            current-index: row.current;
                             selected => { root.assign(row.key, self.current-index); }
                         }
 
-                        if row.current < 0 && row.current-value != "": Text {
+                        if row.missing: Text {
                             text: "⚠ " + row.current-value + " — file not found";
                             color: Theme.warning;
                             font-size: Theme.font-small;

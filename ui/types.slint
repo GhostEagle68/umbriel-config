@@ -150,13 +150,16 @@ export struct ShaderAssignment {
     // Dotted schema key, e.g. animation.windows_in.shader.
     key: string,
     label: string,
-    // Dropdown: index 0 = built-in, then shaders in order.
+    // Dropdown: index 0 = built-in, then shaders in order, then (when
+    // `missing`) one trailing entry standing for the unfound value.
     choices: [string],
-    // Index into choices of the event's current shader; -1 marks a
-    // current value that no scan found (missing or external file).
+    // Index into choices of the event's current shader.
     current: int,
     // The raw current value, for the missing-file warning.
     current-value: string,
+    // The current value names a file no scan found; `current` points
+    // at the trailing placeholder so "(no shader)" stays pickable.
+    missing: bool,
 }
 
 // One changed key, as shown in the save popup.
