@@ -406,8 +406,12 @@ fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &Path) {
                     shell.shader_editing = None;
                     app.set_shader_editor_open(false);
                 }
-                for (event, doc) in &assigned {
-                    doc_at_mut(&mut shell, *doc).remove_leaf(&["animation", event, "shader"]);
+                let clears: Vec<_> = assigned
+                    .iter()
+                    .map(|(event, doc)| (*event, *doc, None))
+                    .collect();
+                if let Err(err) = write_assignments(&mut shell, &clears) {
+                    app.set_status(err.into());
                 }
                 scan_shaders(&mut shell);
             }
@@ -420,7 +424,7 @@ fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &Path) {
                 let events: Vec<String> =
                     assigned.iter().map(|(event, _)| prettify(event)).collect();
                 format!(
-                    "Deleted {} and cleared it from {}. Save to apply.",
+                    "Deleted {} and cleared it from {}.",
                     path.display(),
                     events.join(", ")
                 )
