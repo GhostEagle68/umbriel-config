@@ -390,27 +390,45 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(shell);
-        app.on_shader_clear(move |key| {
+        app.on_shader_assign(move |key, index| {
             let Some(app) = weak.upgrade() else { return };
-            let event = match key.rsplit('.').nth(1) {
-                Some(event) => event.to_string(),
-                None => return,
+            let Some(event) = key.rsplit('.').nth(1).map(str::to_owned) else {
+                return;
             };
-            let target = {
-                let shell = shell.borrow();
-                let docs = chain_docs(&shell);
-                shaders::current_assignment(&docs, &event).map(|(_, index)| index)
-            };
-            if let Some(doc_index) = target {
-                doc_at_mut(&mut shell.borrow_mut(), doc_index).remove_leaf(&[
-                    "animation",
-                    &event,
-                    "shader",
-                ]);
-                let shell = shell.borrow();
-                app.set_dirty(shell.any_modified());
-                rebuild_shaders(&app, &shell);
+            {
+                let mut shell = shell.borrow_mut();
+                // Resolve the pick against the list the dropdown was built
+                // from; an index past it changes nothing.
+                let value = match usize::try_from(index) {
+                    Ok(0) => None,
+                    Ok(index) => shell
+                        .shaders
+                        .get(index - 1)
+                        .map(|entry| entry.value.clone()),
+                    Err(_) => None,
+                };
+                let clearing = index == 0;
+                let home = shaders::assignment_home(&chain_docs(&shell), &event);
+                let path = ["animation", event.as_str(), "shader"];
+                match (value, home) {
+                    // A typed string write, so the path is always quoted.
+                    // A brand-new key starts in the main file; the save
+                    // popup can move it.
+                    (Some(value), home) => {
+                        let target = home.unwrap_or(shell.includes.docs.len());
+                        doc_at_mut(&mut shell, target).set_string(&path, &value);
+                    }
+                    (None, Some(home)) if clearing => {
+                        doc_at_mut(&mut shell, home).remove_leaf(&path);
+                    }
+                    _ => {}
+                }
             }
+            // Always rebuild so the dropdowns mirror the documents, even
+            // when the pick changed nothing.
+            let shell = shell.borrow();
+            app.set_dirty(shell.any_modified());
+            rebuild_shaders(&app, &shell);
         });
     }
     {

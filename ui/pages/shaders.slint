@@ -8,7 +8,7 @@ import { ShaderAssignment, ShaderInfo, ShaderStep } from "../types.slint";
 import { Theme } from "../theme.slint";
 
 // Shaders page: the library plus the per-event assignment rows.
-// Assignments flow through the normal set-value path (dirty → Save →
+// Assignments write straight into the owning document (dirty → Save →
 // validate); "(no shader)" removes the key so umbriel's default
 // animation applies.
 export component ShadersPage inherits Rectangle {
@@ -22,8 +22,9 @@ export component ShadersPage inherits Rectangle {
     in property <bool> update-available;
     in-out property <bool> downloading;
     callback download();
-    callback assign(string, string);
-    callback clear(string);
+    // (key, choice index): Rust resolves the index against its own
+    // shader list; 0 is "(no shader)".
+    callback assign(string, int);
     callback fix-include();
     callback editor-new();
     callback editor-edit(string);
@@ -158,13 +159,7 @@ export component ShadersPage inherits Rectangle {
                             width: 300px;
                             model: row.choices;
                             current-index: row.current < 0 ? 0 : row.current;
-                            selected => {
-                                if (self.current-index == 0) {
-                                    root.clear(row.key);
-                                } else {
-                                    root.assign(row.key, root.shaders[self.current-index - 1].value);
-                                }
-                            }
+                            selected => { root.assign(row.key, self.current-index); }
                         }
 
                         if row.current < 0 && row.current-value != "": Text {

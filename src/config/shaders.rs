@@ -208,6 +208,13 @@ pub fn current_assignment(docs: &[&ConfigDocument], event: &str) -> Option<(Stri
     found
 }
 
+/// Which document an assignment edit for `event` belongs in: the one
+/// whose value currently wins, or `None` for an unset event (the caller
+/// picks where a new key starts).
+pub fn assignment_home(docs: &[&ConfigDocument], event: &str) -> Option<usize> {
+    current_assignment(docs, event).map(|(_, index)| index)
+}
+
 /// The include gap: a `shaders.toml` sits next to the main config, but
 /// no include directive names it — umbriel never reads the file. Returns
 /// the entry to append (`shaders.toml`) when so.
@@ -792,6 +799,26 @@ mod tests {
         let fade = shader.find("color *= mix(").unwrap();
         assert!(slide < sample, "motion precedes the sample");
         assert!(sample < fade, "color follows the sample");
+    }
+
+    #[test]
+    fn assignment_writes_land_quoted_in_the_winning_document() {
+        let mut include =
+            ConfigDocument::from_str("[animation.windows_in]\nshader = \"shaders/old.glsl\"\n")
+                .unwrap();
+        let main = ConfigDocument::from_str("[general]\nxwayland = true\n").unwrap();
+        assert_eq!(assignment_home(&[&include, &main], "windows_in"), Some(0));
+        assert_eq!(assignment_home(&[&include, &main], "windows_move"), None);
+        // Paths are not bare TOML: the typed write must quote them.
+        include.set_string(
+            &["animation", "windows_move", "shader"],
+            "shaders/test.glsl",
+        );
+        assert!(include.text().contains("shader = \"shaders/test.glsl\""));
+        assert_eq!(
+            current_assignment(&[&include, &main], "windows_move"),
+            Some(("shaders/test.glsl".to_owned(), 0))
+        );
     }
 
     #[test]

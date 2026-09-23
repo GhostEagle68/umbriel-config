@@ -118,7 +118,8 @@ export component AppWindow inherits Window {
     callback toggle-monitor(string);
     callback toggle-rule(int, int);
     callback shaders-download();
-    callback shader-clear(string);
+    // Assignment dropdown pick: (key, choice index); 0 clears.
+    callback shader-assign(string, int);
     callback shader-fix-include();
     // What's new / changelog overlay.
     in-out property <bool> show-whatsnew;
@@ -515,11 +516,10 @@ export component AppWindow inherits Window {
                         downloading <=> root.shader-downloading;
                         download => { root.shaders-download(); }
 
-                        clear(k) => { root.shader-clear(k); }
                         fix-include => { root.shader-fix-include(); }
                         // Without this wiring the dropdowns silently no-op:
                         // no edit, no dirty flag, nothing to save.
-                        assign(k, v) => { root.set-value(k, v); }
+                        assign(k, i) => { root.shader-assign(k, i); }
                         editor-new => { root.shader-editor-new(); }
                         editor-edit(p) => { root.shader-editor-edit(p); }
                         editor-fork(p, n) => { root.shader-editor-fork(p, n); }
