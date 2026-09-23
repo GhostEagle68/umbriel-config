@@ -390,7 +390,7 @@ pub mod builder {
 
     /// A step as configured by the user: values are indexed parallel to
     /// the definition's params.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct BuilderStep {
         pub kind: &'static str,
         pub params: [f64; 3],

@@ -210,17 +210,48 @@ fn regen_builder(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
 /// fills the stack, anything else locks the builder so its next change
 /// can't overwrite hand-written code.
 fn sync_builder_from_code(app: &AppWindow, shell: &Rc<RefCell<Shell>>, code: &str) {
-    match shaders::builder::parse_stack(code) {
-        Some(steps) => {
-            push_builder_rows(app, &steps);
-            shell.borrow_mut().builder_steps = steps;
-            app.set_shader_builder_locked(false);
-        }
-        None => {
-            push_builder_rows(app, &[]);
-            shell.borrow_mut().builder_steps.clear();
-            app.set_shader_builder_locked(true);
-        }
+    let steps = shaders::builder::parse_stack(code);
+    let locked = steps.is_none();
+    let steps = steps.unwrap_or_default();
+    // Rebuilding the step cards recreates every slider: only do it when
+    // the stack or the lock actually changed.
+    let unchanged =
+        shell.borrow().builder_steps == steps && app.get_shader_builder_locked() == locked;
+    if unchanged {
+        return;
+    }
+    push_builder_rows(app, &steps);
+    shell.borrow_mut().builder_steps = steps;
+    app.set_shader_builder_locked(locked);
+}
+
+/// How long typing must pause before the code is re-checked.
+const CODE_SETTLE: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The per-edit work, run once typing settles: lint note, builder sync
+/// (the builder follows the code) and a preview compile.
+fn code_settled(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    let text = app.get_shader_editor_text().to_string();
+    let problems = shaders::lint_source(&text);
+    let note = if problems.is_empty() {
+        String::new()
+    } else {
+        format!("⚠ {}", problems.join("; "))
+    };
+    app.set_shader_editor_note(note.into());
+    sync_builder_from_code(app, shell, &text);
+    shell
+        .borrow_mut()
+        .preview_command(shader_preview::PreviewCommand::SetSource(text));
+}
+
+/// Run a pending settle now, so a builder action never acts on stale
+/// code (typed a moment ago, not yet synced).
+fn settle_now(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    let pending = shell.borrow().shader_code_settle.running();
+    if pending {
+        shell.borrow().shader_code_settle.stop();
+        code_settled(app, shell);
     }
 }
 
@@ -297,6 +328,8 @@ fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &Path) {
 /// Show the editor overlay over whatever code is loaded, remembering it
 /// as the unsaved-changes baseline.
 fn show_editor(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    // A settle left over from the last session would re-check old code.
+    shell.borrow().shader_code_settle.stop();
     shell.borrow_mut().shader_editor_baseline = app.get_shader_editor_text().to_string();
     app.set_shader_editor_confirm_close(false);
     app.set_shader_editor_open(true);
@@ -672,22 +705,20 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(shell);
-        app.on_shader_editor_text_changed(move |text| {
+        app.on_shader_editor_text_changed(move |_| {
             let Some(app) = weak.upgrade() else { return };
-            let problems = shaders::lint_source(&text);
-            let note = if problems.is_empty() {
-                String::new()
-            } else {
-                format!("⚠ {}", problems.join("; "))
-            };
-            app.set_shader_editor_note(note.into());
-            // The builder follows the code: typing builder-shaped code
-            // updates the steps, anything else locks the builder.
-            sync_builder_from_code(&app, &shell, &text);
-            // Live GLSL checking: the preview worker compiles as you type.
-            shell
-                .borrow_mut()
-                .preview_command(shader_preview::PreviewCommand::SetSource(text.to_string()));
+            // Restart the settle timer; the work runs once typing pauses.
+            let weak = app.as_weak();
+            let settle_shell = Rc::downgrade(&shell);
+            shell.borrow().shader_code_settle.start(
+                slint::TimerMode::SingleShot,
+                CODE_SETTLE,
+                move || {
+                    if let (Some(app), Some(shell)) = (weak.upgrade(), settle_shell.upgrade()) {
+                        code_settled(&app, &shell);
+                    }
+                },
+            );
         });
     }
     // Code-editor keys: pure text surgery, see shaders::code_edit.
@@ -727,6 +758,8 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_builder_reset(move || {
             let Some(app) = weak.upgrade() else { return };
+            // A pending settle must not re-lock after the reset.
+            shell.borrow().shader_code_settle.stop();
             shell.borrow_mut().builder_steps = shaders::builder::default_steps();
             regen_builder(&app, &shell);
         });
@@ -737,6 +770,7 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_step_add(move |label| {
             let Some(app) = weak.upgrade() else { return };
+            settle_now(&app, &shell);
             if app.get_shader_builder_locked() {
                 return;
             }
@@ -755,6 +789,7 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_step_remove(move |index| {
             let Some(app) = weak.upgrade() else { return };
+            settle_now(&app, &shell);
             if app.get_shader_builder_locked() {
                 return;
             }
@@ -772,6 +807,7 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_step_move(move |index, delta| {
             let Some(app) = weak.upgrade() else { return };
+            settle_now(&app, &shell);
             if app.get_shader_builder_locked() {
                 return;
             }
@@ -791,6 +827,7 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_step_param(move |index, param, value| {
             let Some(app) = weak.upgrade() else { return };
+            settle_now(&app, &shell);
             if app.get_shader_builder_locked() {
                 return;
             }

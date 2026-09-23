@@ -86,6 +86,9 @@ struct Shell {
     // The editor's code as last opened or saved: closing with anything
     // else asks first.
     shader_editor_baseline: String,
+    // Typing settles before the code is re-checked: lint, builder sync
+    // and the preview compile run once per pause, not per keystroke.
+    shader_code_settle: slint::Timer,
     shader_editing: Option<PathBuf>,
     // The effect builder's step stack; mirrors the code pane whenever
     // the builder can read it (the window's builder-locked flag).
@@ -149,6 +152,7 @@ impl Shell {
             shaders_update_checked: false,
             shader_editing: None,
             shader_editor_baseline: String::new(),
+            shader_code_settle: slint::Timer::default(),
             builder_steps: Vec::new(),
             shader_preview: None,
             shader_preview_failed: false,
