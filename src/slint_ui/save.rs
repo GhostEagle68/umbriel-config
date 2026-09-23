@@ -254,7 +254,9 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
                     } else {
                         &mut shell.includes.docs[home].doc
                     };
-                    source.remove_table(&parts);
+                    // remove_leaf prunes the tables left empty, so the
+                    // old file doesn't keep a bare section header.
+                    source.remove_leaf(&parts);
                 }
             }
 
