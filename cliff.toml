@@ -1,16 +1,24 @@
 [changelog]
 header = "# Changelog\n"
 body = """
-{% if version %}## [{{ version | trim_start_matches(pat="v") }}] — {{ now() | date(format="%Y-%m-%d") }}{% else %}## [Unreleased]{% endif %}
-{% for group, commits in commits | group_by(attribute="group") %}
-### {{ group | striptags | trim }}
-{% for commit in commits %}{% set note = commit.footers | default(value=[]) | filter(attribute="token", value="Changelog") | first %}{% set nv = "" %}{% if note %}{% set nv = note.value | trim %}{% endif %}
-- {% if commit.scope %}({{ commit.scope }}) {% endif %}{% if nv != "" and nv != "short" %}{{ note.value }}{% else %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}{% endif %}{% if commit.breaking and commit.breaking_description and commit.breaking_description != commit.message %} — {{ commit.breaking_description }}{% endif %}
+{% macro entry(commit) %}{% set note = commit.footers | default(value=[]) | filter(attribute="token", value="Changelog") | first %}{% set nv = "" %}{% if note %}{% set nv = note.value | trim %}{% endif %}
+- {% if nv != "" and nv != "short" %}{{ note.value }}{% else %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}{% endif %}{% if commit.breaking and commit.breaking_description and commit.breaking_description != commit.message %} — {{ commit.breaking_description }}{% endif %}
 {%- if commit.body and nv == "" %}
 {{ commit.body | trim | indent(prefix="  ", first=true) }}
 {%- endif %}
-{%- endfor %}
-
+{%- endmacro entry %}
+{% if version %}## [{{ version | trim_start_matches(pat="v") }}] — {{ now() | date(format="%Y-%m-%d") }}{% else %}## [Unreleased]{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{# One sub-heading per area (the commit scope), unscoped last. #}
+{% for scope, scoped in commits | group_by(attribute="scope") %}
+#### {% if scope == "ui" %}UI{% else %}{{ scope | upper_first }}{% endif %}
+{% for commit in scoped %}{{ self::entry(commit=commit) }}{% endfor %}
+{% endfor %}
+{%- set_global general = false %}
+{%- for commit in commits %}{% if not commit.scope %}{% if not general %}
+#### General
+{% set_global general = true %}{% endif %}{{ self::entry(commit=commit) }}{% endif %}{% endfor %}
 {% endfor %}"""
 footer = ""
 trim = false
