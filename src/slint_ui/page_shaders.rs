@@ -247,7 +247,7 @@ fn open_shader_editor(
     sync_builder_from_code(app, shell, &text);
     app.set_shader_editor_text(text.into());
     app.set_shader_editor_note(String::new().into());
-    app.set_shader_editor_open(true);
+    show_editor(app, shell);
     kick_shader_preview(app, shell);
 }
 
@@ -292,6 +292,14 @@ fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &Path) {
         Err(err) if app.get_shader_editor_open() => app.set_shader_editor_note(err.into()),
         Err(err) => app.set_status(err.into()),
     }
+}
+
+/// Show the editor overlay over whatever code is loaded, remembering it
+/// as the unsaved-changes baseline.
+fn show_editor(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    shell.borrow_mut().shader_editor_baseline = app.get_shader_editor_text().to_string();
+    app.set_shader_editor_confirm_close(false);
+    app.set_shader_editor_open(true);
 }
 
 /// Park the scrubber mid-animation and hand the freshly loaded code to
@@ -558,7 +566,7 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             app.set_shader_editor_name(String::new().into());
             regen_builder(&app, &shell);
             app.set_shader_editor_note(String::new().into());
-            app.set_shader_editor_open(true);
+            show_editor(&app, &shell);
             kick_shader_preview(&app, &shell);
         });
     }
@@ -616,6 +624,7 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                     {
                         let mut shell = shell.borrow_mut();
                         shell.shader_editing = Some(path.clone());
+                        shell.shader_editor_baseline = text.clone();
                         scan_shaders(&mut shell);
                     }
                     let shell = shell.borrow();
@@ -683,8 +692,15 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     }
     {
         let weak = app.as_weak();
+        let shell = Rc::clone(shell);
+        // Cancel and the scrim both land here: unsaved code asks first.
         app.on_shader_editor_close(move || {
-            if let Some(app) = weak.upgrade() {
+            let Some(app) = weak.upgrade() else { return };
+            let unsaved =
+                app.get_shader_editor_text().as_str() != shell.borrow().shader_editor_baseline;
+            if unsaved {
+                app.set_shader_editor_confirm_close(true);
+            } else {
                 app.set_shader_editor_open(false);
             }
         });

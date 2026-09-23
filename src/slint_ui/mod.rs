@@ -83,6 +83,9 @@ struct Shell {
     // The upstream commit check ran this session (once per launch).
     shaders_update_checked: bool,
     // The shader being edited in the overlay editor; None = creating new.
+    // The editor's code as last opened or saved: closing with anything
+    // else asks first.
+    shader_editor_baseline: String,
     shader_editing: Option<PathBuf>,
     // The effect builder's step stack; mirrors the code pane whenever
     // the builder can read it (the window's builder-locked flag).
@@ -145,6 +148,7 @@ impl Shell {
             shaders_installed: false,
             shaders_update_checked: false,
             shader_editing: None,
+            shader_editor_baseline: String::new(),
             builder_steps: Vec::new(),
             shader_preview: None,
             shader_preview_failed: false,

@@ -166,7 +166,9 @@ export component AppWindow inherits Window {
     callback shader-editor-delete();
     // Delete a library card's own shader by path.
     callback shader-delete-file(string);
+    // Close request; with unsaved code Rust raises confirm-close instead.
     callback shader-editor-close();
+    in-out property <bool> shader-editor-confirm-close;
     callback shader-editor-text-changed(string);
     callback shader-step-add(string);
     callback shader-builder-reset();
@@ -1365,7 +1367,26 @@ export component AppWindow inherits Window {
                     alignment: end;
                     spacing: Theme.space-s;
 
-                    if root.shader-editor-editing: ActionButton {
+                    if root.shader-editor-confirm-close: Text {
+                        text: "Discard unsaved changes?";
+                        color: Theme.warning;
+                        vertical-alignment: center;
+                    }
+
+                    if root.shader-editor-confirm-close: ActionButton {
+                        text: "Keep editing";
+                        clicked => { root.shader-editor-confirm-close = false; }
+                    }
+
+                    if root.shader-editor-confirm-close: ActionButton {
+                        text: "Discard";
+                        clicked => {
+                            root.shader-editor-confirm-close = false;
+                            root.shader-editor-open = false;
+                        }
+                    }
+
+                    if !root.shader-editor-confirm-close && root.shader-editor-editing: ActionButton {
                         property <bool> confirming: false;
                         text: self.confirming ? "Really delete?" : "Delete";
                         clicked => {
@@ -1377,12 +1398,12 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    ActionButton {
+                    if !root.shader-editor-confirm-close: ActionButton {
                         text: "Cancel";
                         clicked => { root.shader-editor-close(); }
                     }
 
-                    ActionButton {
+                    if !root.shader-editor-confirm-close: ActionButton {
                         text: "Save";
                         primary: true;
                         clicked => { root.shader-editor-save(); }
