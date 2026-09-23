@@ -645,11 +645,15 @@ pub mod builder {
             let value = |key: &str| step_value(def, step, key);
             let block = match step.kind {
                 "fade" => format!("    color *= mix(1.0, {:.2}, vis);\n", value("to")),
-                // No `\` line continuation here: it would also eat the
-                // first line's indentation.
+                // Steps that declare locals get their own `{ }` scope, so
+                // the same effect can be stacked twice without clashing
+                // names. No `\` line continuations here: they would also
+                // eat the first line's indentation.
                 "glow" => format!(
-                    "    float pulse = {:.2} * sin(3.14159265 * p);
-    color = vec4(mix(color.rgb, vec3(1.0, 0.4, 0.1) * color.a, pulse), color.a);
+                    "    {{
+        float pulse = {:.2} * sin(3.14159265 * p);
+        color = vec4(mix(color.rgb, vec3(1.0, 0.4, 0.1) * color.a, pulse), color.a);
+    }}
 ",
                     value("strength")
                 ),
@@ -662,10 +666,12 @@ pub mod builder {
                     value("offset")
                 ),
                 "shatter" => format!(
-                    "    vec2 cell_id = floor(uv * {:.0}.0);
-    float seed = fract(sin(dot(cell_id, vec2(12.9898, 78.233)) + umbriel_random_seed.x) * 43758.5453);
-    float t = clamp((p - seed * 0.5) / 0.5, 0.0, 1.0);
-    uv -= vec2((seed - 0.5) * {:.2} * t, {:.2} * t * t);
+                    "    {{
+        vec2 cell_id = floor(uv * {:.0}.0);
+        float seed = fract(sin(dot(cell_id, vec2(12.9898, 78.233)) + umbriel_random_seed.x) * 43758.5453);
+        float t = clamp((p - seed * 0.5) / 0.5, 0.0, 1.0);
+        uv -= vec2((seed - 0.5) * {:.2} * t, {:.2} * t * t);
+    }}
 ",
                     value("grid"),
                     value("scatter"),
@@ -712,11 +718,7 @@ vec4 animation(vec2 uv) {{
             .1
             .rsplit_once('}')?
             .0;
-        let lines: Vec<&str> = body
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect();
+        let lines: Vec<&str> = normalized(body);
         let mut motion = Vec::new();
         let mut color = Vec::new();
         let mut index = 0;
@@ -783,11 +785,13 @@ vec4 animation(vec2 uv) {{
         between_str(line, prefix, suffix)?.parse().ok()
     }
 
-    /// Code compared by content: indentation and blank lines ignored.
+    /// Code compared by content: indentation, blank lines and the lone
+    /// braces scoping a step ignored — shaders saved before steps were
+    /// scoped still read back.
     fn normalized(code: &str) -> Vec<&str> {
         code.lines()
             .map(str::trim)
-            .filter(|line| !line.is_empty())
+            .filter(|line| !line.is_empty() && *line != "{" && *line != "}")
             .collect()
     }
 
@@ -1216,15 +1220,50 @@ mod tests {
     }
 
     #[test]
+    fn the_same_effect_can_be_stacked_twice() {
+        let shatter = builder::STEP_DEFS
+            .iter()
+            .find(|def| def.kind == "shatter")
+            .unwrap()
+            .default_step();
+        let code = builder::generate_stack(&[shatter, shatter]);
+        // Each copy declares its locals inside its own block, never at
+        // the function's top level.
+        let body = code.split_once("vec4 animation(vec2 uv) {").unwrap().1;
+        let mut depth = 0;
+        for line in body.lines() {
+            if line.contains("vec2 cell_id") {
+                assert_eq!(depth, 1, "cell_id must sit in a step block");
+            }
+            depth += line.matches('{').count() as i32;
+            depth -= line.matches('}').count() as i32;
+        }
+        // And the doubled stack still reads back.
+        assert_eq!(builder::parse_stack(&code).unwrap().len(), 2);
+    }
+
+    #[test]
     fn parse_stack_reads_older_unindented_output() {
-        // Before the indentation fix, shatter's first line sat at
-        // column 0; those saved files still open in the builder.
-        let code = builder::generate_stack(&[builder::BuilderStep {
-            kind: "shatter",
-            params: [12.0, 0.4, 0.3],
-        }])
-        .replace("    vec2 cell_id", "vec2 cell_id");
-        let parsed = builder::parse_stack(&code).unwrap();
+        // A file saved by earlier versions: shatter unscoped, its first
+        // line at column 0. Those still open in the builder.
+        let code = "\
+// Composed with umbriel-config's effect builder.
+// p is the animation progress; vis runs 0 -> 1 in the window's own
+// direction (opening or closing).
+vec4 animation(vec2 uv) {
+    float p = umbriel_clamped_progress;
+    float vis = umbriel_direction > 0.0 ? p : 1.0 - p;
+vec2 cell_id = floor(uv * 12.0);
+    float seed = fract(sin(dot(cell_id, vec2(12.9898, 78.233)) + umbriel_random_seed.x) * 43758.5453);
+    float t = clamp((p - seed * 0.5) / 0.5, 0.0, 1.0);
+    uv -= vec2((seed - 0.5) * 0.30 * t, 0.40 * t * t);
+
+    vec4 color = umbriel_sample(uv);
+
+    return color;
+}
+";
+        let parsed = builder::parse_stack(code).unwrap();
         assert_eq!(parsed[0].params, [12.0, 0.4, 0.3]);
     }
 

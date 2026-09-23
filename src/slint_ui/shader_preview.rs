@@ -771,6 +771,25 @@ mod tests {
         assert_eq!(summarize_log("  \n"), "shader rejected by the driver");
     }
 
+    /// Every builder effect compiles, alone and stacked twice (repeats
+    /// must not redeclare locals). Skips where no EGL is available.
+    #[test]
+    fn every_builder_effect_compiles_alone_and_doubled() {
+        use umbriel_config::config::shaders::builder;
+        let Ok(mut state) = PreviewState::new(32, 24) else {
+            return;
+        };
+        for def in builder::STEP_DEFS {
+            let step = def.default_step();
+            for stack in [vec![step], vec![step, step]] {
+                let code = builder::generate_stack(&stack);
+                if let Err(err) = state.compile(&code) {
+                    panic!("{} x{} failed: {err}\n{code}", def.label, stack.len());
+                }
+            }
+        }
+    }
+
     /// Full GL round-trip; skips silently where no EGL is available (CI,
     /// headless environments) so the suite stays green everywhere.
     #[test]
