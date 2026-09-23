@@ -209,10 +209,33 @@ pub fn current_assignment(docs: &[&ConfigDocument], event: &str) -> Option<(Stri
 }
 
 /// Which document an assignment edit for `event` belongs in: the one
-/// whose value currently wins, or `None` for an unset event (the caller
-/// picks where a new key starts).
+/// whose value currently wins, or `None` for an unset event (see
+/// [`new_assignment_home`]).
 pub fn assignment_home(docs: &[&ConfigDocument], event: &str) -> Option<usize> {
     current_assignment(docs, event).map(|(_, index)| index)
+}
+
+/// Where a brand-new assignment starts: the document already holding
+/// the most shader assignments, where the user keeps them (a tie goes
+/// to the later file, so main wins). With none anywhere, an included
+/// `shaders.toml`, else main (the last doc). `file_names` parallels
+/// `docs`.
+pub fn new_assignment_home(docs: &[&ConfigDocument], file_names: &[&str]) -> usize {
+    let main = docs.len().saturating_sub(1);
+    let count = |doc: &ConfigDocument| {
+        EVENTS
+            .iter()
+            .filter(|event| doc.get_string(&["animation", event, "shader"]).is_some())
+            .count()
+    };
+    let busiest = (0..docs.len()).max_by_key(|index| count(docs[*index]));
+    match busiest {
+        Some(index) if count(docs[index]) > 0 => index,
+        _ => file_names
+            .iter()
+            .position(|name| *name == "shaders.toml")
+            .unwrap_or(main),
+    }
 }
 
 /// The include gap: a `shaders.toml` sits next to the main config, but
@@ -1014,6 +1037,28 @@ mod tests {
         assert_eq!(
             current_assignment(&[&include, &main], "windows_move"),
             Some(("shaders/test.glsl".to_owned(), 0))
+        );
+    }
+
+    #[test]
+    fn new_assignments_start_where_the_others_live() {
+        let shaders =
+            ConfigDocument::from_str("[animation.windows_in]\nshader = \"shaders/a.glsl\"\n")
+                .unwrap();
+        let keybinds = ConfigDocument::from_str("[keybinds]\n").unwrap();
+        let main = ConfigDocument::from_str("[general]\nxwayland = true\n").unwrap();
+        let names = ["keybinds.toml", "shaders.toml", "config.toml"];
+        assert_eq!(
+            new_assignment_home(&[&keybinds, &shaders, &main], &names),
+            1
+        );
+        // No assignments anywhere: an included shaders.toml still wins.
+        let empty = ConfigDocument::from_str("").unwrap();
+        assert_eq!(new_assignment_home(&[&keybinds, &empty, &main], &names), 1);
+        // Neither: the main config.
+        assert_eq!(
+            new_assignment_home(&[&keybinds, &main], &["keybinds.toml", "config.toml"]),
+            1
         );
     }
 

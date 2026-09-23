@@ -251,6 +251,20 @@ fn open_shader_editor(
     kick_shader_preview(app, shell);
 }
 
+/// Chain index for a brand-new assignment; see
+/// [`shaders::new_assignment_home`].
+fn new_home(shell: &Shell) -> usize {
+    let mut names: Vec<String> = shell
+        .includes
+        .docs
+        .iter()
+        .map(|inc| file_name_of(&inc.path))
+        .collect();
+    names.push(file_name_of(&shell.path));
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    shaders::new_assignment_home(&chain_docs(shell), &names)
+}
+
 /// Delete one of the user's own shaders, then rescan. An editor open on
 /// that same file closes with it.
 fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &Path) {
@@ -485,10 +499,10 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                 let path = ["animation", event.as_str(), "shader"];
                 match (value, home) {
                     // A typed string write, so the path is always quoted.
-                    // A brand-new key starts in the main file; the save
-                    // popup can move it.
+                    // A brand-new key starts beside the other assignments;
+                    // the save popup can still move it.
                     (Some(value), home) => {
-                        let target = home.unwrap_or(shell.includes.docs.len());
+                        let target = home.unwrap_or_else(|| new_home(&shell));
                         doc_at_mut(&mut shell, target).set_string(&path, &value);
                     }
                     (None, Some(home)) if clearing => {
