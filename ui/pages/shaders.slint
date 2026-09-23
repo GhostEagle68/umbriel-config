@@ -537,7 +537,36 @@ export component ShaderPreviewRow inherits Rectangle {
     callback scrub(float);
     callback toggle-direction();
 
+    // Playback: a frame tick advances the scrubber over the chosen
+    // length, holds briefly on the last frame, then loops. Dragging the
+    // scrubber takes over and pauses.
+    property <bool> playing: false;
+    property <[string]> lengths: ["0.3 s", "0.6 s", "1.2 s"];
+    property <int> length-index: 1;
+    property <float> length-ms: root.length-index == 0 ? 300 : root.length-index == 1 ? 600 : 1200;
+    property <float> hold-ms: 0;
+
     horizontal-stretch: 1;
+
+    Timer {
+        interval: 16ms;
+        running: root.playing;
+        triggered => {
+            if (root.hold-ms > 0) {
+                root.hold-ms -= 16;
+                if (root.hold-ms <= 0) {
+                    root.progress = 0;
+                    root.scrub(0);
+                }
+                return;
+            }
+            root.progress = min(1, root.progress + 16 / root.length-ms);
+            root.scrub(root.progress);
+            if (root.progress >= 1) {
+                root.hold-ms = 500;
+            }
+        }
+    }
 
     HorizontalLayout {
         spacing: Theme.space-m;
@@ -570,7 +599,10 @@ export component ShaderPreviewRow inherits Rectangle {
                 minimum: 0;
                 maximum: 1;
                 value <=> root.progress;
-                changed(v) => { root.scrub(v); }
+                changed(v) => {
+                    root.playing = false;
+                    root.scrub(v);
+                }
             }
         }
 
@@ -588,7 +620,7 @@ export component ShaderPreviewRow inherits Rectangle {
             }
 
             Text {
-                text: "Scrub the animation on a stand-in window. Typing re-renders at this position; the frame is a fake window, assign the shader to an event to see it for real.";
+                text: "Scrub or play the animation on a stand-in window. Typing re-renders at this position; the frame is a fake window, assign the shader to an event to see it for real.";
                 color: Theme.text-2;
                 font-size: Theme.font-small;
                 wrap: word-wrap;
@@ -607,6 +639,24 @@ export component ShaderPreviewRow inherits Rectangle {
                 ActionButton {
                     text: root.direction-in ? "In" : "Out";
                     clicked => { root.toggle-direction(); }
+                }
+
+                ActionButton {
+                    text: root.playing ? "Pause" : "Play";
+                    clicked => {
+                        if (!root.playing && root.progress >= 1) {
+                            root.progress = 0;
+                            root.scrub(0);
+                        }
+                        root.hold-ms = 0;
+                        root.playing = !root.playing;
+                    }
+                }
+
+                ComboBox {
+                    width: 90px;
+                    model: root.lengths;
+                    current-index <=> root.length-index;
                 }
 
                 Rectangle {

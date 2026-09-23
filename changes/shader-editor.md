@@ -8,3 +8,5 @@
   and Ghost trail, and any effect can be stacked more than once.
 - **Live sliders.** Dragging a builder slider updates the code and the
   preview as you move it, and each slider shows its current value.
+- **Play.** The preview can play the animation on a loop at 0.3, 0.6
+  or 1.2 seconds, instead of only being scrubbed by hand.
