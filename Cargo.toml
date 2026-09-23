@@ -37,3 +37,9 @@ slint-build = "1"
 [profile.release]
 strip = true
 lto = "thin"
+
+# Dependencies (Slint's renderer and text layout above all) build
+# optimized even in dev: unoptimized they drop the editor to ~40 fps and
+# make typing lag. Our own crate stays at opt-level 0 for debugging.
+[profile.dev.package."*"]
+opt-level = 2
