@@ -10,3 +10,5 @@
   preview as you move it, and each slider shows its current value.
 - **Play.** The preview can play the animation on a loop at 0.3, 0.6
   or 1.2 seconds, instead of only being scrubbed by hand.
+- **Rename.** Your own shaders can be renamed from the editor, and every
+  event using the shader follows it to the new name.

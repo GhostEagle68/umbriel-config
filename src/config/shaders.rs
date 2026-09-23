@@ -448,6 +448,53 @@ pub fn save_user_shader(config_dir: &Path, name: &str, code: &str) -> Result<Pat
     Ok(path)
 }
 
+/// Rename one of the user's shaders in place (same folder, so shaders
+/// in linked subfolders stay there). The new name is sanitized like a
+/// new shader's; an existing file is never replaced. Returns the new
+/// path, which equals `path` when the name didn't change.
+pub fn rename_user_shader(
+    config_dir: &Path,
+    path: &Path,
+    new_name: &str,
+) -> Result<PathBuf, String> {
+    let Ok(relative) = path.strip_prefix(user_shaders_dir(config_dir)) else {
+        return Err(format!("{} is not a user shader", path.display()));
+    };
+    if relative.starts_with("community") {
+        return Err(
+            "community shaders are managed by the download — fork one to change it".to_owned(),
+        );
+    }
+    let file_name = sanitize_shader_name(new_name)?;
+    let target = path.with_file_name(&file_name);
+    if target == path {
+        return Ok(target);
+    }
+    if target.exists() {
+        let stem = file_name.trim_end_matches(".glsl");
+        return Err(format!(
+            "A shader named \"{stem}\" already exists. Pick another name."
+        ));
+    }
+    std::fs::rename(path, &target)
+        .map_err(|err| format!("could not rename {}: {err}", path.display()))?;
+    Ok(target)
+}
+
+/// A name for a new shader in `shaders/` that no file uses yet: `base`,
+/// else `base-2`, `base-3`, ...
+pub fn unused_shader_name(config_dir: &Path, base: &str) -> String {
+    let dir = user_shaders_dir(config_dir);
+    let free = |name: &str| !dir.join(format!("{name}.glsl")).exists();
+    if free(base) {
+        return base.to_owned();
+    }
+    (2..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|name| free(name))
+        .unwrap_or_else(|| base.to_owned())
+}
+
 /// Delete a user shader by path. Only files inside the shaders
 /// directory qualify — the git-managed community clone is refused.
 pub fn delete_user_shader(config_dir: &Path, path: &Path) -> Result<(), String> {
@@ -1494,6 +1541,49 @@ mod tests {
         write(&community, GLSL);
         assert!(delete_user_shader(&config_dir, &community).is_err());
         assert!(delete_user_shader(&config_dir, &config_dir.join("config.toml")).is_err());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn rename_moves_the_file_and_refuses_clashes() {
+        let base =
+            std::env::temp_dir().join(format!("umbriel-shaderrename-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let config_dir = base.join("config");
+        let old = config_dir.join("shaders/old.glsl");
+        write(&old, GLSL);
+        write(&config_dir.join("shaders/taken.glsl"), GLSL);
+
+        // Same name: nothing happens.
+        assert_eq!(rename_user_shader(&config_dir, &old, "old").unwrap(), old);
+        // A taken name or a path trick is refused, and the file stays.
+        assert!(
+            rename_user_shader(&config_dir, &old, "taken")
+                .unwrap_err()
+                .contains("already exists")
+        );
+        assert!(rename_user_shader(&config_dir, &old, "../evil").is_err());
+        assert!(old.exists());
+        // A real rename moves the file.
+        let new = rename_user_shader(&config_dir, &old, "fresh").unwrap();
+        assert_eq!(new, config_dir.join("shaders/fresh.glsl"));
+        assert!(new.exists() && !old.exists());
+        // Community shaders are never renamed.
+        let community = config_dir.join("shaders/community/x/shader.glsl");
+        write(&community, GLSL);
+        assert!(rename_user_shader(&config_dir, &community, "mine").is_err());
+
+        // Fork names skip ones already used.
+        assert_eq!(
+            unused_shader_name(&config_dir, "reveal-fork"),
+            "reveal-fork"
+        );
+        write(&config_dir.join("shaders/reveal-fork.glsl"), GLSL);
+        write(&config_dir.join("shaders/reveal-fork-2.glsl"), GLSL);
+        assert_eq!(
+            unused_shader_name(&config_dir, "reveal-fork"),
+            "reveal-fork-3"
+        );
         std::fs::remove_dir_all(&base).ok();
     }
 

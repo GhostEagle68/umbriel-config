@@ -344,6 +344,38 @@ fn assignments_of(shell: &Shell, shader: &Path) -> Vec<(&'static str, usize)> {
         .collect()
 }
 
+/// Write assignment changes straight to their files (`None` clears).
+/// Renaming or deleting a shader happens on disk at once, so the
+/// assignments that follow it must too: left unsaved, a Discard would
+/// point them at a file that no longer exists. Other unsaved edits in
+/// those files stay unsaved.
+fn write_assignments(
+    shell: &mut Shell,
+    edits: &[(&'static str, usize, Option<String>)],
+) -> Result<(), String> {
+    let paths = chain_paths(shell);
+    for (event, doc, value) in edits {
+        let key = ["animation", event, "shader"];
+        doc_at_mut(shell, *doc)
+            .write_through(&paths[*doc], |d| match value {
+                Some(value) => d.set_string(&key, value),
+                None => {
+                    d.remove_leaf(&key);
+                }
+            })
+            .map_err(|err| format!("could not update {}: {err}", paths[*doc].display()))?;
+        // The file is the new baseline for "changed" dots and the popup.
+        let saved: ConfigDocument = doc_at(shell, *doc)
+            .original_text()
+            .parse()
+            .map_err(|err| format!("{err}"))?;
+        if let Some(slot) = shell.saved.get_mut(*doc) {
+            *slot = saved.leaf_values().into_iter().collect();
+        }
+    }
+    Ok(())
+}
+
 /// "Windows out, Overview" for the events assigned `shader`.
 fn used_by(shell: &Shell, shader: &Path) -> String {
     assignments_of(shell, shader)
@@ -406,6 +438,7 @@ fn show_editor(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     // A settle left over from the last session would re-check old code.
     shell.borrow().shader_code_settle.stop();
     shell.borrow_mut().shader_editor_baseline = app.get_shader_editor_text().to_string();
+    shell.borrow_mut().shader_editor_baseline_name = app.get_shader_editor_name().to_string();
     app.set_shader_editor_confirm_close(false);
     app.set_shader_editor_open(true);
 }
@@ -716,7 +749,12 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_editor_fork(move |path, name| {
             let Some(app) = weak.upgrade() else { return };
-            open_shader_editor(&app, &shell, &path, false, format!("{name}-fork"));
+            // "reveal-fork", or "reveal-fork-2" when that's taken.
+            let fork_name = match shell.borrow().path.parent() {
+                Some(dir) => shaders::unused_shader_name(dir, &format!("{name}-fork")),
+                None => format!("{name}-fork"),
+            };
+            open_shader_editor(&app, &shell, &path, false, fork_name);
         });
     }
     {
@@ -728,16 +766,27 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             // Every successful save closes the editor; creating only
             // changes the status wording.
             let creating = shell.borrow().shader_editing.is_none();
+            let name = app.get_shader_editor_name().to_string();
+            // Events to repoint when an edited shader is renamed.
+            let mut renamed: Vec<(&'static str, usize)> = Vec::new();
             let result = {
-                let shell = shell.borrow_mut();
+                let shell = shell.borrow();
                 match shell.shader_editing.clone() {
-                    Some(path) => shaders::write_user_shader(&path, &text).map(|_| path),
+                    // Save the code first, then rename: a failed rename
+                    // still leaves the edits on disk under the old name.
+                    Some(path) => match shell.path.parent().map(Path::to_path_buf) {
+                        Some(dir) => shaders::write_user_shader(&path, &text).and_then(|()| {
+                            let assigned = assignments_of(&shell, &path);
+                            let new = shaders::rename_user_shader(&dir, &path, &name)?;
+                            if new != path {
+                                renamed = assigned;
+                            }
+                            Ok(new)
+                        }),
+                        None => Err("could not determine the config directory.".to_owned()),
+                    },
                     None => match shell.path.parent().map(Path::to_path_buf) {
-                        Some(dir) => shaders::save_user_shader(
-                            &dir,
-                            app.get_shader_editor_name().as_str(),
-                            &text,
-                        ),
+                        Some(dir) => shaders::save_user_shader(&dir, &name, &text),
                         None => Err("could not determine the config directory.".to_owned()),
                     },
                 }
@@ -748,17 +797,44 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                         let mut shell = shell.borrow_mut();
                         shell.shader_editing = Some(path.clone());
                         shell.shader_editor_baseline = text.clone();
+                        shell.shader_editor_baseline_name = name.clone();
+                        // A renamed shader keeps its assignments: each is
+                        // rewritten (unsaved) to the new file, spelled for
+                        // the document it lives in.
+                        let paths = chain_paths(&shell);
+                        let repoints: Vec<_> = renamed
+                            .iter()
+                            .map(|(event, doc)| {
+                                (*event, *doc, Some(shaders::value_for(&path, &paths[*doc])))
+                            })
+                            .collect();
+                        if let Err(err) = write_assignments(&mut shell, &repoints) {
+                            app.set_status(err.into());
+                        }
                         scan_shaders(&mut shell);
                     }
                     let shell = shell.borrow();
+                    app.set_dirty(shell.any_modified());
                     rebuild_shaders(&app, &shell);
                     app.set_shader_editor_note(String::new().into());
+                    app.set_shader_editor_used_by(used_by(&shell, &path).into());
                     app.set_shader_editor_open(false);
                     if creating {
                         app.set_status(
                             format!(
                                 "Created {} — assign it to an event to use it.",
                                 path.display()
+                            )
+                            .into(),
+                        );
+                    } else if !renamed.is_empty() {
+                        let events: Vec<String> =
+                            renamed.iter().map(|(event, _)| prettify(event)).collect();
+                        app.set_status(
+                            format!(
+                                "Saved as {} and pointed {} at it.",
+                                path.display(),
+                                events.join(", ")
                             )
                             .into(),
                         );
@@ -842,8 +918,11 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         // Cancel and the scrim both land here: unsaved code asks first.
         app.on_shader_editor_close(move || {
             let Some(app) = weak.upgrade() else { return };
-            let unsaved =
-                app.get_shader_editor_text().as_str() != shell.borrow().shader_editor_baseline;
+            let unsaved = {
+                let shell = shell.borrow();
+                app.get_shader_editor_text().as_str() != shell.shader_editor_baseline
+                    || app.get_shader_editor_name().as_str() != shell.shader_editor_baseline_name
+            };
             if unsaved {
                 app.set_shader_editor_confirm_close(true);
             } else {

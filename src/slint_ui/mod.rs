@@ -86,6 +86,8 @@ struct Shell {
     // The editor's code as last opened or saved: closing with anything
     // else asks first.
     shader_editor_baseline: String,
+    // The name field as last opened or saved (a rename is unsaved too).
+    shader_editor_baseline_name: String,
     // Typing settles before the code is re-checked: lint, builder sync
     // and the preview compile run once per pause, not per keystroke.
     shader_code_settle: slint::Timer,
@@ -152,6 +154,7 @@ impl Shell {
             shaders_update_checked: false,
             shader_editing: None,
             shader_editor_baseline: String::new(),
+            shader_editor_baseline_name: String::new(),
             shader_code_settle: slint::Timer::default(),
             builder_steps: Vec::new(),
             shader_preview: None,

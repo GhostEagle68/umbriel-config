@@ -108,6 +108,24 @@ impl ConfigDocument {
         self.doc.to_string() != self.original
     }
 
+    /// Write one change straight to disk: `edit` is applied to the file
+    /// as last saved (which is written to `path`) and to this document.
+    /// Other unsaved edits here stay unsaved. For changes that must land
+    /// together with a file operation, like repointing assignments when a
+    /// shader is renamed or deleted.
+    pub fn write_through(
+        &mut self,
+        path: &Path,
+        edit: impl Fn(&mut ConfigDocument),
+    ) -> Result<(), ConfigError> {
+        let mut on_disk: ConfigDocument = self.original.parse()?;
+        edit(&mut on_disk);
+        on_disk.save(path)?;
+        edit(self);
+        self.original = on_disk.original;
+        Ok(())
+    }
+
     /// Atomically write the document to `path`, leaving a one-time backup at
     /// `<path>.bak` holding the pre-GUI content from the first-ever save.
     pub fn save(&mut self, path: &Path) -> Result<(), ConfigError> {
@@ -1022,6 +1040,37 @@ curve = \"easeout\"
         doc.set_keybind("Mod+R", "config-reload", None, None, None);
         assert_eq!(doc.keybinds()[1].action, "config-reload");
         assert!(!doc.text().contains("repeat = false"));
+    }
+
+    #[test]
+    fn write_through_saves_one_change_and_keeps_the_rest_unsaved() {
+        let dir = std::env::temp_dir().join(format!("umbriel-writethrough-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shaders.toml");
+        let text = "[animation.windows_in]\nshader = \"shaders/old.glsl\"\n";
+        std::fs::write(&path, text).unwrap();
+        let mut doc: ConfigDocument = text.parse().unwrap();
+        // An unrelated unsaved edit...
+        doc.set_integer(&["animation", "windows_in", "duration_ms"], 300);
+        // ...survives a write-through of the shader key, unsaved.
+        let key = ["animation", "windows_in", "shader"];
+        doc.write_through(&path, |d| d.set_string(&key, "shaders/new.glsl"))
+            .unwrap();
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("shaders/new.glsl"));
+        assert!(!on_disk.contains("duration_ms"));
+        assert_eq!(doc.get_string(&key).as_deref(), Some("shaders/new.glsl"));
+        assert!(doc.is_modified(), "duration_ms is still unsaved");
+        // With nothing else pending, the document matches the file.
+        let mut clean: ConfigDocument = on_disk.parse().unwrap();
+        clean
+            .write_through(&path, |d| {
+                d.remove_leaf(&key);
+            })
+            .unwrap();
+        assert!(!clean.is_modified());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
