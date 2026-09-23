@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, TableLike, Value};
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("failed to read {path}: {source}")]
@@ -172,6 +172,17 @@ impl ConfigDocument {
         table.get(last)
     }
 
+    /// `item_at` that also walks inline tables (`a = { b = 1 }`), for
+    /// readers of values commonly written inline, such as named springs.
+    fn item_at_any<'t>(doc: &'t DocumentMut, path: &[&str]) -> Option<&'t Item> {
+        let (last, parents) = path.split_last()?;
+        let mut table: &dyn TableLike = doc.as_table();
+        for key in parents {
+            table = table.get(key)?.as_table_like()?;
+        }
+        table.get(last)
+    }
+
     fn table_at_or_create<'t>(doc: &'t mut DocumentMut, path: &[&str]) -> Option<&'t mut Table> {
         let mut table = doc.as_table_mut();
         for key in path {
@@ -221,6 +232,38 @@ impl ConfigDocument {
 
     pub fn get_string(&self, path: &[&str]) -> Option<String> {
         Self::item_at(&self.doc, path)?.as_str().map(str::to_owned)
+    }
+
+    /// A number written either way TOML allows (`1` or `1.0`).
+    pub fn get_number(&self, path: &[&str]) -> Option<f64> {
+        let value = Self::item_at_any(&self.doc, path)?.as_value()?;
+        value
+            .as_float()
+            .or_else(|| value.as_integer().map(|n| n as f64))
+    }
+
+    /// An array of numbers, each written either way TOML allows.
+    pub fn get_numbers(&self, path: &[&str]) -> Option<Vec<f64>> {
+        let array = Self::item_at_any(&self.doc, path)?.as_value()?.as_array()?;
+        array
+            .iter()
+            .map(|value| {
+                value
+                    .as_float()
+                    .or_else(|| value.as_integer().map(|n| n as f64))
+            })
+            .collect()
+    }
+
+    /// The keys of the table (or inline table) at `path`, in file order.
+    pub fn table_keys(&self, path: &[&str]) -> Vec<String> {
+        let Some(item) = Self::item_at_any(&self.doc, path) else {
+            return Vec::new();
+        };
+        match item.as_table_like() {
+            Some(table) => table.iter().map(|(key, _)| key.to_owned()).collect(),
+            None => Vec::new(),
+        }
     }
 
     pub fn get_integers(&self, path: &[&str]) -> Option<Vec<i64>> {

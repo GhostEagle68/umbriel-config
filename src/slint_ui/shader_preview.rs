@@ -72,13 +72,52 @@ void main() {
 /// transition; a constant keeps the preview stable while dragging).
 const RANDOM_SEED: [f32; 4] = [0.734, 0.151, 0.892, 0.417];
 
+/// The stand-in for what an event's shader actually draws, per
+/// umbriel's scene graph (`view.cpp`, `workspace.cpp`, `overview.cpp`,
+/// `scratchpad.cpp`, `layer_surface.cpp`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// A window's content (windows in/out/move, dim unfocused).
+    Window,
+    /// The output's window tree during a workspace switch: tiled
+    /// windows, no wallpaper (that's a separate layer).
+    Workspace,
+    /// The overview: the zoomed-out filmstrip of workspace cards.
+    Overview,
+    /// A scratchpad window over its dim backdrop (both shaded).
+    Scratchpad,
+    /// A layer surface, bar-shaped.
+    Layer,
+    /// A window's border ring alone; the content is its own target.
+    Border,
+}
+
+impl Target {
+    /// The target's size within the preview surface: bar-shaped for a
+    /// layer, the full frame otherwise, so `uv` and `umbriel_size` match
+    /// what the shader really gets.
+    pub fn size(self, width: u32, height: u32) -> (u32, u32) {
+        match self {
+            Target::Layer => (width, (width / 12).max(8)),
+            _ => (width, height),
+        }
+    }
+}
+
 /// What the UI asks the worker to do.
 pub enum PreviewCommand {
     /// Compile this source (umbriel's assembly of prefix + user code).
     SetSource(String),
-    /// Render at a scrub position. Progress is the eased 0..1 value,
-    /// direction is +1 (in) or -1 (out) exactly like umbriel's uniforms.
-    Render { progress: f32, direction: f32 },
+    /// Swap the stand-in frames.
+    SetTarget(Target),
+    /// Render at a scrub position: `linear` is the timeline position,
+    /// `eased` the curve's value there (overshoot kept), direction +1
+    /// (in) or -1 (out) — exactly umbriel's uniforms.
+    Render {
+        linear: f32,
+        eased: f32,
+        direction: f32,
+    },
 }
 
 /// What the worker tells the UI.
@@ -150,14 +189,15 @@ fn run_worker(cmd_rx: mpsc::Receiver<PreviewCommand>, evt_tx: mpsc::Sender<Previ
         // A burst only needs its newest source and newest frame: older
         // sources are already superseded, and their errors would only
         // flash past. The source goes first so the frame uses it.
-        let (mut source, mut render) = (None, None);
+        let (mut target, mut source, mut render) = (None, None, None);
         for cmd in std::iter::once(first).chain(std::iter::from_fn(|| cmd_rx.try_recv().ok())) {
             match cmd {
+                cmd @ PreviewCommand::SetTarget(_) => target = Some(cmd),
                 cmd @ PreviewCommand::SetSource(_) => source = Some(cmd),
                 cmd @ PreviewCommand::Render { .. } => render = Some(cmd),
             }
         }
-        for cmd in [source, render].into_iter().flatten() {
+        for cmd in [target, source, render].into_iter().flatten() {
             apply(&mut state, &evt_tx, cmd);
         }
     }
@@ -170,8 +210,8 @@ fn apply(state: &mut PreviewState, evt_tx: &mpsc::Sender<PreviewEvent>, cmd: Pre
                 let _ = evt_tx.send(PreviewEvent::Compiled(None));
                 // Re-render at the last scrub position so typing and
                 // builder changes update the image without a scrub.
-                let (progress, direction) = state.last_position();
-                match state.render(progress, direction) {
+                let (linear, eased, direction) = state.last_position();
+                match state.render(linear, eased, direction) {
                     Ok((w, h, pixels)) => {
                         let _ = evt_tx.send(PreviewEvent::Frame(w, h, pixels));
                     }
@@ -184,11 +224,19 @@ fn apply(state: &mut PreviewState, evt_tx: &mpsc::Sender<PreviewEvent>, cmd: Pre
                 let _ = evt_tx.send(PreviewEvent::Compiled(Some(err)));
             }
         },
+        PreviewCommand::SetTarget(target) => {
+            state.set_target(target);
+            let (linear, eased, direction) = state.last_position();
+            if let Ok((w, h, pixels)) = state.render(linear, eased, direction) {
+                let _ = evt_tx.send(PreviewEvent::Frame(w, h, pixels));
+            }
+        }
         PreviewCommand::Render {
-            progress,
+            linear,
+            eased,
             direction,
         } => {
-            if let Ok((w, h, pixels)) = state.render(progress, direction) {
+            if let Ok((w, h, pixels)) = state.render(linear, eased, direction) {
                 let _ = evt_tx.send(PreviewEvent::Frame(w, h, pixels));
             }
         }
@@ -218,7 +266,10 @@ struct PreviewState {
     tex_current: glow::Texture,
     tex_previous: glow::Texture,
     program: Option<LinkedProgram>,
-    last: (f32, f32),
+    /// Last render: (linear, eased, direction).
+    last: (f32, f32, f32),
+    /// The current target's size (at most the surface's).
+    target_size: (u32, u32),
     width: u32,
     height: u32,
 }
@@ -325,7 +376,7 @@ impl PreviewState {
             gl.disable(glow::DEPTH_TEST);
         }
 
-        let (current, previous) = test_frames(width, height);
+        let (current, previous) = test_frames(width, height, Target::Window);
         let tex_current = upload_texture(&gl, width, height, &current)?;
         let tex_previous = upload_texture(&gl, width, height, &previous)?;
 
@@ -340,14 +391,38 @@ impl PreviewState {
             tex_current,
             tex_previous,
             program: None,
-            last: (0.0, 1.0),
+            last: (0.0, 0.0, 1.0),
+            target_size: (width, height),
             width,
             height,
         })
     }
 
-    fn last_position(&self) -> (f32, f32) {
+    fn last_position(&self) -> (f32, f32, f32) {
         self.last
+    }
+
+    /// Re-upload both textures with `target`'s stand-in frames.
+    fn set_target(&mut self, target: Target) {
+        let (tw, th) = target.size(self.width, self.height);
+        self.target_size = (tw, th);
+        let (current, previous) = test_frames(tw, th, target);
+        for (texture, pixels) in [(self.tex_current, &current), (self.tex_previous, &previous)] {
+            unsafe {
+                self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                self.gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    glow::RGBA as i32,
+                    tw as i32,
+                    th as i32,
+                    0,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(Some(pixels)),
+                );
+            }
+        }
     }
 
     /// Compile user code exactly as umbriel assembles it. On success the
@@ -393,13 +468,19 @@ impl PreviewState {
     }
 
     /// Render one frame and read it back (flipped, premultiplied).
-    fn render(&mut self, progress: f32, direction: f32) -> Result<(u32, u32, Vec<u8>), String> {
+    fn render(
+        &mut self,
+        linear: f32,
+        eased: f32,
+        direction: f32,
+    ) -> Result<(u32, u32, Vec<u8>), String> {
         let linked = self
             .program
             .as_ref()
             .ok_or_else(|| "nothing compiled yet".to_owned())?;
-        self.last = (progress, direction);
-        let (w, h) = (self.width as i32, self.height as i32);
+        self.last = (linear, eased, direction);
+        let (tw, th) = self.target_size;
+        let (w, h) = (tw as i32, th as i32);
         unsafe {
             let gl = &self.gl;
             gl.viewport(0, 0, w, h);
@@ -412,10 +493,10 @@ impl PreviewState {
             gl.active_texture(glow::TEXTURE1);
             gl.bind_texture(glow::TEXTURE_2D, Some(self.tex_previous));
             gl.uniform_1_i32(linked.previous_texture.as_ref(), 1);
-            gl.uniform_1_f32(linked.progress.as_ref(), progress);
-            gl.uniform_1_f32(linked.linear_progress.as_ref(), progress);
+            gl.uniform_1_f32(linked.progress.as_ref(), eased);
+            gl.uniform_1_f32(linked.linear_progress.as_ref(), linear);
             gl.uniform_1_f32(linked.direction.as_ref(), direction);
-            gl.uniform_2_f32(linked.size.as_ref(), self.width as f32, self.height as f32);
+            gl.uniform_2_f32(linked.size.as_ref(), tw as f32, th as f32);
             gl.uniform_4_f32(
                 linked.random_seed.as_ref(),
                 RANDOM_SEED[0],
@@ -438,7 +519,7 @@ impl PreviewState {
             gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 8, 0);
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
         }
-        let mut pixels = vec![0u8; (self.width * self.height * 4) as usize];
+        let mut pixels = vec![0u8; (tw * th * 4) as usize];
         unsafe {
             self.gl.read_pixels(
                 0,
@@ -450,11 +531,7 @@ impl PreviewState {
                 glow::PixelPackData::Slice(Some(&mut pixels)),
             );
         }
-        Ok((
-            self.width,
-            self.height,
-            finalize_readback(pixels, self.width as usize, self.height as usize),
-        ))
+        Ok((tw, th, finalize_readback(pixels, tw as usize, th as usize)))
     }
 }
 
@@ -570,7 +647,18 @@ fn summarize_log(log: &str) -> String {
 /// text lines, and an accent block, so motion (slide, scale, shatter)
 /// and fades are all legible. The previous frame is a visibly different
 /// variant, making crossfades and `umbriel_sample_previous` readable.
-pub fn test_frames(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
+pub fn test_frames(width: u32, height: u32, target: Target) -> (Vec<u8>, Vec<u8>) {
+    match target {
+        Target::Window => window_frames(width, height),
+        Target::Workspace => workspace_frames(width, height),
+        Target::Overview => overview_frames(width, height),
+        Target::Scratchpad => scratchpad_frames(width, height),
+        Target::Layer => layer_frames(width, height),
+        Target::Border => border_frames(width, height),
+    }
+}
+
+fn window_frames(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
     let mut current = vec![0u8; (width * height * 4) as usize];
     let mut previous = vec![0u8; (width * height * 4) as usize];
     let w = width as i32;
@@ -655,6 +743,255 @@ pub fn test_frames(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
     (current, previous)
 }
 
+/// A small window drawn into `rect`: body, titlebar with dots, text
+/// lines and an accent block, `tint` scaling its brightness.
+fn draw_window(buf: &mut [u8], w: i32, h: i32, rect: Rect, accent: [u8; 3], tint: f32) {
+    let shade = |rgb: [u8; 3]| {
+        [
+            (rgb[0] as f32 * tint) as u8,
+            (rgb[1] as f32 * tint) as u8,
+            (rgb[2] as f32 * tint) as u8,
+            255,
+        ]
+    };
+    let Rect { x0, y0, x1, y1 } = rect;
+    fill_rect(buf, w, h, r(x0, y0, x1, y1), shade([36, 39, 48]));
+    fill_rect(buf, w, h, r(x0, y0, x1, y0 + 14), shade([48, 52, 64]));
+    for (i, dot) in [[224, 108, 117], [229, 181, 103], [152, 195, 121]]
+        .iter()
+        .enumerate()
+    {
+        let x = x0 + 6 + i as i32 * 9;
+        fill_rect(buf, w, h, r(x, y0 + 5, x + 5, y0 + 10), shade(*dot));
+    }
+    let inner = (x1 - x0 - 16).max(4);
+    for (i, fraction) in [0.7, 0.5, 0.8, 0.45].iter().enumerate() {
+        let y = y0 + 22 + i as i32 * 10;
+        if y + 5 < y1 - 4 {
+            fill_rect(
+                buf,
+                w,
+                h,
+                r(x0 + 8, y, x0 + 8 + (inner as f32 * fraction) as i32, y + 5),
+                shade([154, 160, 174]),
+            );
+        }
+    }
+    let (ax, ay) = (x0 + (x1 - x0) * 3 / 5, y0 + (y1 - y0) * 3 / 5);
+    fill_rect(buf, w, h, r(ax, ay, x1 - 8, y1 - 8), shade(accent));
+}
+
+/// Three tiled windows with gaps on a transparent background: the
+/// window tree a workspace switch shades (the wallpaper is a layer of
+/// its own). The previous frame is the other workspace's layout.
+fn workspace_frames(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
+    let (w, h) = (width as i32, height as i32);
+    let gap = 8;
+    let mut current = vec![0u8; (width * height * 4) as usize];
+    let split = w * 11 / 20;
+    draw_window(
+        &mut current,
+        w,
+        h,
+        r(gap, gap, split - gap / 2, h - gap),
+        [124, 154, 255],
+        1.0,
+    );
+    draw_window(
+        &mut current,
+        w,
+        h,
+        r(split + gap / 2, gap, w - gap, h / 2 - gap / 2),
+        [229, 181, 103],
+        1.0,
+    );
+    draw_window(
+        &mut current,
+        w,
+        h,
+        r(split + gap / 2, h / 2 + gap / 2, w - gap, h - gap),
+        [152, 195, 121],
+        1.0,
+    );
+    let mut previous = vec![0u8; (width * height * 4) as usize];
+    draw_window(
+        &mut previous,
+        w,
+        h,
+        r(gap, gap, w - gap, h - gap),
+        [224, 108, 117],
+        0.9,
+    );
+    (current, previous)
+}
+
+/// A mini workspace for an overview card: its wallpaper (umbriel shows
+/// it per card by default) under its windows.
+fn draw_card(
+    buf: &mut [u8],
+    w: i32,
+    h: i32,
+    rect: Rect,
+    top: [u8; 3],
+    bottom: [u8; 3],
+    accent: [u8; 3],
+) {
+    let Rect { x0, y0, x1, y1 } = rect;
+    for y in y0..y1 {
+        let t = (y - y0) as f32 / (y1 - y0).max(1) as f32;
+        let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
+        fill_rect(
+            buf,
+            w,
+            h,
+            r(x0, y, x1, y + 1),
+            [
+                mix(top[0], bottom[0]),
+                mix(top[1], bottom[1]),
+                mix(top[2], bottom[2]),
+                255,
+            ],
+        );
+    }
+    let gap = ((x1 - x0) / 24).max(2);
+    let split = x0 + (x1 - x0) * 11 / 20;
+    draw_window(
+        buf,
+        w,
+        h,
+        r(x0 + gap, y0 + gap, split - gap / 2, y1 - gap),
+        accent,
+        1.0,
+    );
+    draw_window(
+        buf,
+        w,
+        h,
+        r(split + gap / 2, y0 + gap, x1 - gap, y1 - gap),
+        [229, 181, 103],
+        1.0,
+    );
+}
+
+/// The overview: a dark backdrop with the filmstrip of workspace cards
+/// zoomed out (0.5 by default), the current one centred and outlined,
+/// its neighbours cut off at the edges.
+fn overview_frames(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
+    let (w, h) = (width as i32, height as i32);
+    let (cw, ch) = (w / 2, h / 2);
+    let step = cw + w / 16;
+    let filmstrip = |current_index: i32| {
+        let mut buf = vec![0u8; (width * height * 4) as usize];
+        fill_rect(&mut buf, w, h, r(0, 0, w, h), [18, 19, 24, 255]);
+        let wallpapers = [
+            ([58, 44, 92], [22, 60, 88]),
+            ([30, 70, 60], [70, 40, 50]),
+            ([80, 60, 30], [30, 40, 80]),
+        ];
+        for (i, (top, bottom)) in wallpapers.iter().enumerate() {
+            let x = (w - cw) / 2 + (i as i32 - current_index) * step;
+            let y = (h - ch) / 2;
+            if i as i32 == current_index {
+                fill_rect(
+                    &mut buf,
+                    w,
+                    h,
+                    r(x - 3, y - 3, x + cw + 3, y + ch + 3),
+                    [124, 154, 255, 255],
+                );
+            }
+            draw_card(
+                &mut buf,
+                w,
+                h,
+                r(x, y, x + cw, y + ch),
+                *top,
+                *bottom,
+                [124, 154, 255],
+            );
+        }
+        buf
+    };
+    (filmstrip(1), filmstrip(0))
+}
+
+/// A scratchpad window centred over the dim backdrop umbriel draws
+/// behind it (`dim = 0.8` by default); both take the shader.
+fn scratchpad_frames(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
+    let (w, h) = (width as i32, height as i32);
+    let mut current = vec![0u8; (width * height * 4) as usize];
+    // Premultiplied black at 80%: the backdrop darkens what's beneath.
+    fill_rect(&mut current, w, h, r(0, 0, w, h), [0, 0, 0, 204]);
+    let (mw, mh) = (w / 5, h / 6);
+    draw_window(
+        &mut current,
+        w,
+        h,
+        r(mw, mh, w - mw, h - mh),
+        [124, 154, 255],
+        1.0,
+    );
+    let mut previous = vec![0u8; (width * height * 4) as usize];
+    fill_rect(&mut previous, w, h, r(0, 0, w, h), [0, 0, 0, 204]);
+    (current, previous)
+}
+
+/// A layer surface as a bar (workspace dots, a clock, tray icons); the
+/// target is the bar itself, so it fills the whole (bar-shaped) frame.
+fn layer_frames(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
+    let (w, h) = (width as i32, height as i32);
+    let unit = (h / 3).max(2);
+    let bar = |active: usize, clock: [u8; 4]| {
+        let mut buf = vec![0u8; (width * height * 4) as usize];
+        fill_rect(&mut buf, w, h, r(0, 0, w, h), [30, 32, 40, 255]);
+        for i in 0..5 {
+            let x = unit + i as i32 * unit * 2;
+            let rgba = if i == active {
+                [124, 154, 255, 255]
+            } else {
+                [90, 96, 112, 255]
+            };
+            fill_rect(&mut buf, w, h, r(x, unit, x + unit, h - unit), rgba);
+        }
+        fill_rect(
+            &mut buf,
+            w,
+            h,
+            r(w / 2 - unit * 3, unit, w / 2 + unit * 3, h - unit),
+            clock,
+        );
+        for i in 0..3 {
+            let x = w - unit * 2 - i * unit * 2;
+            fill_rect(
+                &mut buf,
+                w,
+                h,
+                r(x, unit, x + unit, h - unit),
+                [154, 160, 174, 255],
+            );
+        }
+        buf
+    };
+    (bar(1, [232, 232, 234, 255]), bar(3, [150, 150, 156, 255]))
+}
+
+/// A window's border ring on its own, transparent inside: the border
+/// is its own shader target. Accent while focused (current frame),
+/// grey when not (previous), so colour fades show.
+fn border_frames(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
+    let (w, h) = (width as i32, height as i32);
+    let ring = |rgba: [u8; 4]| {
+        let mut buf = vec![0u8; (width * height * 4) as usize];
+        let t = 6;
+        fill_rect(&mut buf, w, h, r(0, 0, w, t), rgba);
+        fill_rect(&mut buf, w, h, r(0, h - t, w, h), rgba);
+        fill_rect(&mut buf, w, h, r(0, 0, t, h), rgba);
+        fill_rect(&mut buf, w, h, r(w - t, 0, w, h), rgba);
+        buf
+    };
+    (ring([124, 154, 255, 255]), ring([80, 84, 96, 255]))
+}
+
 /// Pixel rectangle, exclusive at x1/y1.
 struct Rect {
     x0: i32,
@@ -714,10 +1051,10 @@ mod tests {
 
     #[test]
     fn test_frames_are_window_like_and_distinct() {
-        let (current, previous) = test_frames(PREVIEW_WIDTH, PREVIEW_HEIGHT);
+        let (current, previous) = test_frames(PREVIEW_WIDTH, PREVIEW_HEIGHT, Target::Window);
         assert_eq!(current.len(), (PREVIEW_WIDTH * PREVIEW_HEIGHT * 4) as usize);
         // Deterministic: the same call draws the same pixels.
-        let (current2, _) = test_frames(PREVIEW_WIDTH, PREVIEW_HEIGHT);
+        let (current2, _) = test_frames(PREVIEW_WIDTH, PREVIEW_HEIGHT, Target::Window);
         assert_eq!(current, current2);
         // Titlebar dot region is red-ish in the current frame.
         let dot = pixel(&current, PREVIEW_WIDTH, 22, 22);
@@ -802,12 +1139,12 @@ mod tests {
         state
             .compile("vec4 animation(vec2 uv) { return umbriel_sample(uv); }")
             .unwrap();
-        let (_, _, plain) = state.render(1.0, 1.0).unwrap();
+        let (_, _, plain) = state.render(1.0, 1.0, 1.0).unwrap();
         for def in builder::STEP_DEFS {
             state
                 .compile(&builder::generate_stack(&[def.default_step()]))
                 .unwrap();
-            let (_, _, end) = state.render(1.0, 1.0).unwrap();
+            let (_, _, end) = state.render(1.0, 1.0, 1.0).unwrap();
             let worst = end.iter().zip(&plain).map(|(a, b)| a.abs_diff(*b)).max();
             assert!(
                 worst <= Some(2),
@@ -827,7 +1164,7 @@ mod tests {
         state
             .compile("vec4 animation(vec2 uv) { return umbriel_sample(uv); }")
             .expect("valid shader compiles");
-        let (w, h, pixels) = state.render(0.5, 1.0).expect("render");
+        let (w, h, pixels) = state.render(0.5, 0.5, 1.0).expect("render");
         assert_eq!((w, h), (64, 48));
         assert_eq!(pixels.len(), 64 * 48 * 4);
         assert!(pixels.iter().any(|&byte| byte != 0));
@@ -836,6 +1173,17 @@ mod tests {
             .expect_err("broken shader must fail");
         assert!(!err.is_empty());
         // The last good program survives a failed compile.
-        assert!(state.render(0.0, -1.0).is_ok());
+        assert!(state.render(0.0, 0.0, -1.0).is_ok());
+        // Switching the stand-in re-uploads the frames at the target's
+        // own size: a layer renders bar-shaped, a border ring is
+        // transparent inside.
+        state.set_target(Target::Layer);
+        let (w, h, _) = state.render(1.0, 1.0, 1.0).expect("render");
+        assert_eq!((w, h), Target::Layer.size(64, 48));
+        state.set_target(Target::Border);
+        let (w, h, pixels) = state.render(1.0, 1.0, 1.0).expect("render");
+        let alpha = |x: u32, y: u32| pixels[((y * w + x) * 4 + 3) as usize];
+        assert_eq!(alpha(1, h / 2), 255);
+        assert_eq!(alpha(w / 2, h / 2), 0);
     }
 }

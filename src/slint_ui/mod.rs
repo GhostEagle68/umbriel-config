@@ -99,6 +99,10 @@ struct Shell {
     // init failure it stays off until the next app run (best-effort).
     shader_preview: Option<shader_preview::PreviewHandle>,
     shader_preview_failed: bool,
+    // The event the preview plays as, and that event's timing (curve
+    // and length) from the config.
+    shader_preview_event: usize,
+    shader_preview_timeline: umbriel_config::config::curves::Timeline,
 }
 
 impl Shell {
@@ -159,6 +163,11 @@ impl Shell {
             builder_steps: Vec::new(),
             shader_preview: None,
             shader_preview_failed: false,
+            shader_preview_event: 0,
+            shader_preview_timeline: umbriel_config::config::curves::Timeline {
+                curve: umbriel_config::config::curves::EASE_OUT,
+                duration_ms: 250,
+            },
         };
         shell.reset_saved();
         shell
@@ -292,6 +301,12 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             .map(|def| slint::SharedString::from(def.label))
             .collect();
         app.set_shader_step_kinds(Rc::new(VecModel::from(kinds)).into());
+        // The events the preview can play as, in umbriel's order.
+        let events: Vec<slint::SharedString> = shaders::EVENTS
+            .iter()
+            .map(|event| slint::SharedString::from(common::prettify(event)))
+            .collect();
+        app.set_shader_preview_events(Rc::new(VecModel::from(events)).into());
     }
 
     // What's new: the bundled changelog section for the running version,

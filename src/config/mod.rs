@@ -1,4 +1,5 @@
 pub mod backups;
+pub mod curves;
 pub mod discovery;
 pub mod document;
 pub mod includes;

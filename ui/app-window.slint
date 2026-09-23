@@ -189,6 +189,12 @@ export component AppWindow inherits Window {
     in property <bool> shader-preview-ready;
     in property <string> shader-preview-note;
     callback shader-preview-scrub(float);
+    // "Preview as": the events (labels, umbriel order), the chosen one,
+    // and how long that event runs as configured.
+    in property <[string]> shader-preview-events;
+    in-out property <int> shader-preview-event;
+    in property <int> shader-preview-length-ms: 250;
+    callback shader-preview-event-picked(int);
     callback shader-preview-direction-toggled();
     in-out property <string> kb-draft-chord;
     in-out property <bool> kb-draft-use-mod;
@@ -1325,6 +1331,10 @@ export component AppWindow inherits Window {
                             note: root.shader-preview-note;
                             direction-in: root.shader-preview-direction > 0;
                             progress <=> root.shader-preview-progress;
+                            events: root.shader-preview-events;
+                            event-index <=> root.shader-preview-event;
+                            configured-ms: root.shader-preview-length-ms;
+                            event-picked(i) => { root.shader-preview-event-picked(i); }
                             scrub(v) => { root.shader-preview-scrub(v); }
                             toggle-direction() => { root.shader-preview-direction-toggled(); }
                         }

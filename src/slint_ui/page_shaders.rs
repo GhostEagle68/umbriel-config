@@ -453,14 +453,77 @@ fn show_editor(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
 fn kick_shader_preview(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     const START: f32 = 0.5;
     app.set_shader_preview_progress(START);
-    app.set_shader_preview_direction(1.0);
     app.set_shader_preview_note(String::new().into());
     let text = app.get_shader_editor_text().to_string();
+    shell
+        .borrow_mut()
+        .preview_command(shader_preview::PreviewCommand::SetSource(text));
+    // Preview as the event the shader is assigned to (the first, when
+    // several), else Windows in.
+    let event = {
+        let shell = shell.borrow();
+        shell
+            .shader_editing
+            .as_deref()
+            .and_then(|path| {
+                assignments_of(&shell, path)
+                    .first()
+                    .map(|(event, _)| *event)
+            })
+            .and_then(|event| shaders::EVENTS.iter().position(|e| *e == event))
+            .unwrap_or(0)
+    };
+    set_preview_event(app, shell, event);
+}
+
+/// What an event's shader animates, for the stand-in frame.
+fn preview_target(event: &str) -> shader_preview::Target {
+    use shader_preview::Target;
+    match event {
+        "workspaces" => Target::Workspace,
+        "overview" => Target::Overview,
+        "scratchpad" => Target::Scratchpad,
+        "layers" => Target::Layer,
+        "border" => Target::Border,
+        _ => Target::Window,
+    }
+}
+
+/// Switch the preview to play as `index` (into `shaders::EVENTS`): its
+/// stand-in, its timing from the config, and its natural direction.
+fn set_preview_event(app: &AppWindow, shell: &Rc<RefCell<Shell>>, index: usize) {
+    let Some(event) = shaders::EVENTS.get(index) else {
+        return;
+    };
+    let timeline =
+        umbriel_config::config::curves::event_timeline(&chain_docs(&shell.borrow()), event);
+    {
+        let mut shell = shell.borrow_mut();
+        shell.shader_preview_event = index;
+        shell.shader_preview_timeline = timeline;
+        shell.preview_command(shader_preview::PreviewCommand::SetTarget(preview_target(
+            event,
+        )));
+    }
+    app.set_shader_preview_event(index as i32);
+    app.set_shader_preview_length_ms(timeline.length_ms() as i32);
+    // Closing is the only event umbriel runs purely outward.
+    app.set_shader_preview_direction(if *event == "windows_out" { -1.0 } else { 1.0 });
+    render_preview_at(app, shell, app.get_shader_preview_progress());
+}
+
+/// Render at timeline position `linear`, eased by the event's curve.
+fn render_preview_at(app: &AppWindow, shell: &Rc<RefCell<Shell>>, linear: f32) {
+    let linear = linear.clamp(0.0, 1.0);
     let mut shell = shell.borrow_mut();
-    shell.preview_command(shader_preview::PreviewCommand::SetSource(text));
+    let eased = umbriel_config::config::curves::ease(
+        shell.shader_preview_timeline.curve,
+        f64::from(linear),
+    ) as f32;
     shell.preview_command(shader_preview::PreviewCommand::Render {
-        progress: START,
-        direction: 1.0,
+        linear,
+        eased,
+        direction: app.get_shader_preview_direction(),
     });
 }
 
@@ -1031,12 +1094,15 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_preview_scrub(move |progress| {
             let Some(app) = weak.upgrade() else { return };
-            shell
-                .borrow_mut()
-                .preview_command(shader_preview::PreviewCommand::Render {
-                    progress: progress.clamp(0.0, 1.0),
-                    direction: app.get_shader_preview_direction(),
-                });
+            render_preview_at(&app, &shell, progress);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(shell);
+        app.on_shader_preview_event_picked(move |index| {
+            let Some(app) = weak.upgrade() else { return };
+            set_preview_event(&app, &shell, index.max(0) as usize);
         });
     }
     {
@@ -1050,12 +1116,7 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                 1.0
             };
             app.set_shader_preview_direction(flipped);
-            shell
-                .borrow_mut()
-                .preview_command(shader_preview::PreviewCommand::Render {
-                    progress: app.get_shader_preview_progress().clamp(0.0, 1.0),
-                    direction: flipped,
-                });
+            render_preview_at(&app, &shell, app.get_shader_preview_progress());
         });
     }
 }

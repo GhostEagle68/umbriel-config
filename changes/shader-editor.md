@@ -12,3 +12,6 @@
   or 1.2 seconds, instead of only being scrubbed by hand.
 - **Rename.** Your own shaders can be renamed from the editor, and every
   event using the shader follows it to the new name.
+- **Preview as any event.** Pick which event the preview plays as: it
+  shows a fitting stand-in (a window, a workspace, a bar, a focus border)
+  and plays with that event's own curve and timing from your config.

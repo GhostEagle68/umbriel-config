@@ -534,6 +534,12 @@ export component ShaderPreviewRow inherits Rectangle {
     in property <string> note;
     in property <bool> direction-in;
     in-out property <float> progress;
+    in property <[string]> events;
+    in-out property <int> event-index;
+    // The chosen event's own length (a spring's settle time, else its
+    // duration_ms): the "As set" playback speed.
+    in property <int> configured-ms;
+    callback event-picked(int);
     callback scrub(float);
     callback toggle-direction();
 
@@ -541,9 +547,9 @@ export component ShaderPreviewRow inherits Rectangle {
     // length, holds briefly on the last frame, then loops. Dragging the
     // scrubber takes over and pauses.
     property <bool> playing: false;
-    property <[string]> lengths: ["0.3 s", "0.6 s", "1.2 s"];
-    property <int> length-index: 1;
-    property <float> length-ms: root.length-index == 0 ? 300 : root.length-index == 1 ? 600 : 1200;
+    property <[string]> lengths: ["As set (" + root.configured-ms + " ms)", "0.3 s", "0.6 s", "1.2 s"];
+    property <int> length-index: 0;
+    property <float> length-ms: root.length-index == 0 ? max(1, root.configured-ms) : root.length-index == 1 ? 300 : root.length-index == 2 ? 600 : 1200;
     property <float> hold-ms: 0;
 
     horizontal-stretch: 1;
@@ -620,10 +626,28 @@ export component ShaderPreviewRow inherits Rectangle {
             }
 
             Text {
-                text: "Scrub or play the animation on a stand-in window. Typing re-renders at this position; the frame is a fake window, assign the shader to an event to see it for real.";
+                text: "Scrub or play the animation on a stand-in for the chosen event, with that event's curve and timing from your config. Assign the shader to an event to see it for real.";
                 color: Theme.text-2;
                 font-size: Theme.font-small;
                 wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+
+                Text {
+                    text: "Preview as";
+                    color: Theme.text-2;
+                    vertical-alignment: center;
+                }
+
+                ComboBox {
+                    width: 170px;
+                    model: root.events;
+                    current-index <=> root.event-index;
+                    selected => { root.event-picked(self.current-index); }
+                }
             }
 
             HorizontalLayout {
@@ -654,7 +678,7 @@ export component ShaderPreviewRow inherits Rectangle {
                 }
 
                 ComboBox {
-                    width: 90px;
+                    width: 160px;
                     model: root.lengths;
                     current-index <=> root.length-index;
                 }
