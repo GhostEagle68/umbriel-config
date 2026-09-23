@@ -378,11 +378,30 @@ pub fn lint_source(code: &str) -> Vec<String> {
     if !problems.is_empty() {
         return problems;
     }
-    if !code.contains("vec4 animation(") {
+    if !declares_animation(code) {
         problems
             .push("missing \"vec4 animation(vec2 uv)\" — umbriel calls that function".to_owned());
     }
     problems
+}
+
+/// Whether the code declares `vec4 animation(`, spaced any way GLSL
+/// allows (`vec4  animation (`, a line break between, ...).
+fn declares_animation(code: &str) -> bool {
+    let ident = |ch: char| ch.is_ascii_alphanumeric() || ch == '_';
+    code.match_indices("vec4").any(|(at, _)| {
+        if code[..at].chars().next_back().is_some_and(ident) {
+            return false;
+        }
+        let rest = &code[at + "vec4".len()..];
+        let after_type = rest.trim_start();
+        if after_type.len() == rest.len() {
+            return false; // "vec4animation" is one identifier
+        }
+        after_type
+            .strip_prefix("animation")
+            .is_some_and(|rest| rest.trim_start().starts_with('('))
+    })
 }
 
 /// Write shader source atomically to an exact path, creating parent
@@ -1044,6 +1063,19 @@ mod tests {
         // The missing signature is a single warning, not a blocker.
         assert_eq!(lint_source("float x = 1.0;\n").len(), 1);
         assert_eq!(lint_source("   \n\t"), vec!["shader is empty"]);
+        // Any GLSL spacing counts; lookalike names don't.
+        for spaced in [
+            "vec4  animation (vec2 uv) { return vec4(0.0); }",
+            "vec4\nanimation(vec2 uv) { return vec4(0.0); }",
+        ] {
+            assert!(lint_source(spaced).is_empty(), "{spaced:?}");
+        }
+        for wrong in [
+            "vec4 animations(vec2 uv) {}",
+            "myvec4 animation(vec2 uv) {}",
+        ] {
+            assert_eq!(lint_source(wrong).len(), 1, "{wrong:?}");
+        }
     }
 
     #[test]
