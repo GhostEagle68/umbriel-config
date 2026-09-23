@@ -123,6 +123,8 @@ export struct ShaderInfo {
     // the editor opens for in-place editing and deletion.
     path: string,
     is-own: bool,
+    // Events assigned this shader ("Windows out, Overview"), or "".
+    used-by: string,
 }
 
 // A code-editor key's result: the new text and the selection to restore

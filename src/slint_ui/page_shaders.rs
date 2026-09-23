@@ -274,6 +274,7 @@ fn open_shader_editor(
     };
     shell.borrow_mut().shader_editing = editing.then(|| PathBuf::from(path));
     app.set_shader_editor_editing(editing);
+    app.set_shader_editor_used_by(used_by(&shell.borrow(), Path::new(path)).into());
     app.set_shader_editor_name(name.into());
     sync_builder_from_code(app, shell, &text);
     app.set_shader_editor_text(text.into());
@@ -293,9 +294,36 @@ fn new_home(shell: &Shell) -> usize {
     shaders::new_assignment_home(&chain_docs(shell), &names)
 }
 
+/// Every event whose assignment resolves to `shader`, with the chain
+/// index of the document holding it.
+fn assignments_of(shell: &Shell, shader: &Path) -> Vec<(&'static str, usize)> {
+    let docs = chain_docs(shell);
+    let paths = chain_paths(shell);
+    shaders::EVENTS
+        .iter()
+        .filter_map(|event| {
+            let (value, doc) = shaders::current_assignment(&docs, event)?;
+            shaders::same_file(&shaders::resolve(&value, &paths[doc]), shader)
+                .then_some((*event, doc))
+        })
+        .collect()
+}
+
+/// "Windows out, Overview" for the events assigned `shader`.
+fn used_by(shell: &Shell, shader: &Path) -> String {
+    assignments_of(shell, shader)
+        .iter()
+        .map(|(event, _)| prettify(event))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Delete one of the user's own shaders, then rescan. An editor open on
-/// that same file closes with it.
+/// that same file closes with it, and assignments pointing at it are
+/// cleared (unsaved) so no event is left on a missing file.
 fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &Path) {
+    // Found before the delete: matching needs the file on disk.
+    let assigned = assignments_of(&shell.borrow(), path);
     let result = shell
         .borrow()
         .path
@@ -311,11 +339,26 @@ fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &Path) {
                     shell.shader_editing = None;
                     app.set_shader_editor_open(false);
                 }
+                for (event, doc) in &assigned {
+                    doc_at_mut(&mut shell, *doc).remove_leaf(&["animation", event, "shader"]);
+                }
                 scan_shaders(&mut shell);
             }
             let shell = shell.borrow();
+            app.set_dirty(shell.any_modified());
             rebuild_shaders(app, &shell);
-            app.set_status(format!("Deleted {}.", path.display()).into());
+            let status = if assigned.is_empty() {
+                format!("Deleted {}.", path.display())
+            } else {
+                let events: Vec<String> =
+                    assigned.iter().map(|(event, _)| prettify(event)).collect();
+                format!(
+                    "Deleted {} and cleared it from {}. Save to apply.",
+                    path.display(),
+                    events.join(", ")
+                )
+            };
+            app.set_status(status.into());
         }
         Err(err) if app.get_shader_editor_open() => app.set_shader_editor_note(err.into()),
         Err(err) => app.set_status(err.into()),
@@ -419,6 +462,7 @@ pub(super) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
             invalid: entry.invalid.clone().unwrap_or_default().into(),
             path: entry.path.display().to_string().into(),
             is_own: entry.source == shaders::Source::ConfigDir,
+            used_by: used_by(shell, &entry.path).into(),
         })
         .collect();
     app.set_shaders(Rc::new(VecModel::from(infos)).into());

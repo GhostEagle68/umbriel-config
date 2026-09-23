@@ -153,6 +153,8 @@ export component AppWindow inherits Window {
     // Shader editor overlay.
     in-out property <bool> shader-editor-open;
     in property <bool> shader-editor-editing;
+    // Events assigned the shader being edited, for the delete confirm.
+    in property <string> shader-editor-used-by;
     in-out property <string> shader-editor-name;
     in-out property <string> shader-editor-text;
     in property <string> shader-editor-note;
@@ -1403,7 +1405,7 @@ export component AppWindow inherits Window {
 
                     if !root.shader-editor-confirm-close && root.shader-editor-editing: ActionButton {
                         property <bool> confirming: false;
-                        text: self.confirming ? "Really delete?" : "Delete";
+                        text: !self.confirming ? "Delete" : root.shader-editor-used-by == "" ? "Really delete?" : "Delete? Used by " + root.shader-editor-used-by;
                         clicked => {
                             if (self.confirming) {
                                 root.shader-editor-delete();
