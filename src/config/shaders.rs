@@ -706,6 +706,119 @@ vec4 animation(vec2 uv) {
 ";
 }
 
+/// Code-editor keys the plain text box doesn't handle: Tab indents,
+/// Shift+Tab outdents, Enter keeps the line's indentation. Offsets are
+/// UTF-8 byte offsets (what Slint's text input reports); every result
+/// is `(text, anchor, cursor)` with the selection to restore.
+pub mod code_edit {
+    const INDENT: usize = 4;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Key {
+        Indent,
+        Outdent,
+        Newline,
+    }
+
+    pub fn apply(text: &str, anchor: usize, cursor: usize, key: Key) -> (String, usize, usize) {
+        let anchor = boundary(text, anchor);
+        let cursor = boundary(text, cursor);
+        let (start, end) = (anchor.min(cursor), anchor.max(cursor));
+        let multi_line = text[start..end].contains('\n');
+        match key {
+            Key::Newline => {
+                let indent: String = text[line_start(text, start)..]
+                    .chars()
+                    .take_while(|ch| *ch == ' ' || *ch == '\t')
+                    .collect();
+                replace(text, start, end, &format!("\n{indent}"))
+            }
+            // A caret or a selection inside one line: pad to the next
+            // tab stop, replacing any selected text.
+            Key::Indent if !multi_line => {
+                let column = text[line_start(text, start)..start].chars().count();
+                replace(text, start, end, &" ".repeat(INDENT - column % INDENT))
+            }
+            Key::Indent | Key::Outdent => shift_lines(text, anchor, cursor, key == Key::Indent),
+        }
+    }
+
+    fn replace(text: &str, start: usize, end: usize, with: &str) -> (String, usize, usize) {
+        let out = format!("{}{with}{}", &text[..start], &text[end..]);
+        let caret = start + with.len();
+        (out, caret, caret)
+    }
+
+    /// Indent or outdent every line the selection touches. A selection
+    /// ending at column 0 leaves that last line alone, like editors do.
+    fn shift_lines(
+        text: &str,
+        anchor: usize,
+        cursor: usize,
+        indent: bool,
+    ) -> (String, usize, usize) {
+        let (start, end) = (anchor.min(cursor), anchor.max(cursor));
+        let first = line_start(text, start);
+        let last_end = if end > start && end == line_start(text, end) {
+            end - 1
+        } else {
+            end
+        };
+        // (line start in the old text, bytes added, bytes removed)
+        let mut edits: Vec<(usize, usize, usize)> = Vec::new();
+        let mut at = first;
+        loop {
+            let line_end = text[at..].find('\n').map_or(text.len(), |i| at + i);
+            if indent {
+                edits.push((at, INDENT, 0));
+            } else {
+                let line = &text[at..line_end];
+                let removed = if line.starts_with('\t') {
+                    1
+                } else {
+                    line.bytes().take(INDENT).take_while(|b| *b == b' ').count()
+                };
+                edits.push((at, 0, removed));
+            }
+            if line_end >= last_end || line_end == text.len() {
+                break;
+            }
+            at = line_end + 1;
+        }
+        let mut out = String::with_capacity(text.len() + edits.len() * INDENT);
+        let mut copied = 0;
+        for &(line, added, removed) in &edits {
+            out.push_str(&text[copied..line]);
+            out.push_str(&" ".repeat(added));
+            copied = line + removed;
+        }
+        out.push_str(&text[copied..]);
+        // Shift an old offset by every edit at or before it; a position
+        // inside removed whitespace lands at its line's new start.
+        let map = |pos: usize| {
+            let shift: isize = edits
+                .iter()
+                .filter(|(line, _, _)| *line <= pos)
+                .map(|&(line, added, removed)| added as isize - (pos - line).min(removed) as isize)
+                .sum();
+            (pos as isize + shift) as usize
+        };
+        (out, map(anchor), map(cursor))
+    }
+
+    fn line_start(text: &str, pos: usize) -> usize {
+        text[..pos].rfind('\n').map_or(0, |i| i + 1)
+    }
+
+    fn boundary(text: &str, pos: usize) -> usize {
+        let mut pos = pos.min(text.len());
+        while !text.is_char_boundary(pos) {
+            pos -= 1;
+        }
+        pos
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1060,6 +1173,51 @@ mod tests {
             new_assignment_home(&[&keybinds, &main], &["keybinds.toml", "config.toml"]),
             1
         );
+    }
+
+    #[test]
+    fn tab_pads_to_the_next_tab_stop() {
+        use code_edit::{Key, apply};
+        // Caret at column 0 and column 2 of "ab".
+        assert_eq!(apply("ab", 0, 0, Key::Indent), ("    ab".into(), 4, 4));
+        assert_eq!(apply("ab", 2, 2, Key::Indent), ("ab  ".into(), 4, 4));
+        // A one-line selection is replaced by the padding.
+        assert_eq!(apply("abcd", 1, 3, Key::Indent), ("a   d".into(), 4, 4));
+    }
+
+    #[test]
+    fn tab_and_shift_tab_shift_every_selected_line() {
+        use code_edit::{Key, apply};
+        let text = "a\n  b\nc";
+        // Select from inside line 1 to inside line 2.
+        let (out, anchor, cursor) = apply(text, 0, 4, Key::Indent);
+        assert_eq!(out, "    a\n      b\nc");
+        assert_eq!((anchor, cursor), (4, 12));
+        let (back, anchor, cursor) = apply(&out, anchor, cursor, Key::Outdent);
+        assert_eq!(back, "a\n  b\nc");
+        assert_eq!((anchor, cursor), (0, 4));
+        // A selection ending at column 0 leaves that line alone.
+        let (out, _, _) = apply("a\nb\n", 0, 2, Key::Indent);
+        assert_eq!(out, "    a\nb\n");
+        // Shift+Tab on a caret outdents its line; a tab counts as one step.
+        assert_eq!(apply("      x", 7, 7, Key::Outdent), ("  x".into(), 3, 3));
+        assert_eq!(apply("\tx", 1, 1, Key::Outdent), ("x".into(), 0, 0));
+        // A caret inside the removed spaces lands at the line start.
+        assert_eq!(apply("    x", 2, 2, Key::Outdent), ("x".into(), 0, 0));
+    }
+
+    #[test]
+    fn enter_keeps_the_line_indentation() {
+        use code_edit::{Key, apply};
+        assert_eq!(
+            apply("    a = 1;", 10, 10, Key::Newline),
+            ("    a = 1;\n    ".into(), 15, 15)
+        );
+        // Non-ASCII before the caret: offsets stay on char boundaries.
+        let text = "  é";
+        let (out, caret, _) = apply(text, text.len(), text.len(), Key::Newline);
+        assert_eq!(out, "  é\n  ");
+        assert_eq!(caret, out.len());
     }
 
     #[test]

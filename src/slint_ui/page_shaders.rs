@@ -690,6 +690,22 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                 .preview_command(shader_preview::PreviewCommand::SetSource(text.to_string()));
         });
     }
+    // Code-editor keys: pure text surgery, see shaders::code_edit.
+    app.on_shader_code_key(|text, anchor, cursor, kind| {
+        let key = match kind.as_str() {
+            "outdent" => shaders::code_edit::Key::Outdent,
+            "newline" => shaders::code_edit::Key::Newline,
+            _ => shaders::code_edit::Key::Indent,
+        };
+        let offset = |value: i32| usize::try_from(value).unwrap_or(0);
+        let (text, anchor, cursor) =
+            shaders::code_edit::apply(&text, offset(anchor), offset(cursor), key);
+        CodeEdit {
+            text: text.into(),
+            anchor: anchor as i32,
+            cursor: cursor as i32,
+        }
+    });
     {
         let weak = app.as_weak();
         let shell = Rc::clone(shell);

@@ -125,6 +125,14 @@ export struct ShaderInfo {
     is-own: bool,
 }
 
+// A code-editor key's result: the new text and the selection to restore
+// (UTF-8 byte offsets, as TextInput reports them).
+export struct CodeEdit {
+    text: string,
+    anchor: int,
+    cursor: int,
+}
+
 // One effect-builder step with its (up to three) parameters, padded
 // into a fixed shape for the model.
 export struct ShaderStep {

@@ -31,6 +31,7 @@ import {
     SectionNav,
     SectionRow,
     SettingsCard,
+    CodeEdit,
     ShaderAssignment,
     ShaderInfo,
     ShaderStep,
@@ -43,6 +44,7 @@ import { OutputsPage } from "pages/outputs.slint";
 import { RulePage } from "pages/rules.slint";
 import {
     ShaderBuilderPanel,
+    ShaderCodeEditor,
     ShaderPreviewRow,
     ShadersPage,
 } from "pages/shaders.slint";
@@ -170,6 +172,8 @@ export component AppWindow inherits Window {
     callback shader-editor-close();
     in-out property <bool> shader-editor-confirm-close;
     callback shader-editor-text-changed(string);
+    // Editor keys (Tab/Shift+Tab/Enter) done in Rust; see ShaderCodeEditor.
+    callback shader-code-key(string, int, int, string) -> CodeEdit;
     callback shader-step-add(string);
     callback shader-builder-reset();
     callback shader-step-remove(int);
@@ -1322,28 +1326,39 @@ export component AppWindow inherits Window {
                             toggle-direction() => { root.shader-preview-direction-toggled(); }
                         }
 
-                        // TextEdit reports no useful preferred size: pin its
-                        // surface to the pane so it fills the space the
-                        // window gives and scrolls only when that runs out.
-                        code-scroll := ScrollView {
+                        VerticalLayout {
                             vertical-stretch: 1;
-                            min-height: 200px;
-                            viewport-width: editor-edit.width;
-                            viewport-height: editor-edit.height;
+                            spacing: Theme.space-xs;
 
-                            editor-edit := TextEdit {
-                                x: 0;
-                                y: 0;
-                                width: max(360px, code-scroll.visible-width);
-                                // Fixed working surface: the pane below the
-                                // box stays plain background instead of the
-                                // box stretching into dead space.
-                                height: 560px;
-                                wrap: no-wrap;
-                                font-family: Theme.font-mono;
-                                font-size: Theme.font-small;
+                            // The editor's keys, where people look for them.
+                            HorizontalLayout {
+                                spacing: Theme.space-m;
+
+                                Text {
+                                    text: "Code";
+                                    color: Theme.text-2;
+                                    font-size: Theme.font-small;
+                                    font-weight: 700;
+                                }
+
+                                Text {
+                                    text: "Tab indents · Shift+Tab outdents · Enter keeps the indent · right-click to cut, copy or paste";
+                                    color: Theme.text-2;
+                                    font-size: Theme.font-small;
+                                    horizontal-alignment: right;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                            }
+
+                            ShaderCodeEditor {
+                                vertical-stretch: 1;
+                                min-height: 200px;
                                 text <=> root.shader-editor-text;
                                 edited(text) => { root.shader-editor-text-changed(text); }
+                                code-key(text, anchor, cursor, kind) => {
+                                    root.shader-code-key(text, anchor, cursor, kind)
+                                }
                             }
                         }
                     }

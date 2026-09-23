@@ -4,7 +4,12 @@
 
 import { ComboBox, ScrollView, Slider } from "std-widgets.slint";
 import { ActionButton } from "../widgets.slint";
-import { ShaderAssignment, ShaderInfo, ShaderStep } from "../types.slint";
+import {
+    CodeEdit,
+    ShaderAssignment,
+    ShaderInfo,
+    ShaderStep,
+} from "../types.slint";
 import { Theme } from "../theme.slint";
 
 // Shaders page: the library plus the per-event assignment rows.
@@ -579,6 +584,107 @@ export component ShaderPreviewRow inherits Rectangle {
                 color: Theme.warning;
                 font-size: Theme.font-small;
                 wrap: word-wrap;
+            }
+        }
+    }
+}
+
+// The shader code pane: a plain TextInput (std TextEdit hides the
+// cursor offsets) so code keys work like an editor. Tab indents,
+// Shift+Tab outdents, Enter keeps the indentation; Rust does the text
+// surgery through `code-key` ("indent" / "outdent" / "newline").
+export component ShaderCodeEditor inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    callback edited(string);
+    callback code-key(string, int, int, string) -> CodeEdit;
+
+    background: Theme.bg-0;
+    border-radius: Theme.radius-s;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.border;
+    forward-focus: input;
+
+    function apply(kind: string) {
+        let result = root.code-key(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, kind);
+        input.text = result.text;
+        input.set-selection-offsets(result.anchor, result.cursor);
+        // Read back from the input: reusing result.text after the
+        // assignment trips a move bug in Slint 1.16's Rust codegen.
+        root.edited(input.text);
+    }
+
+    ContextMenuArea {
+        Menu {
+            MenuItem {
+                title: "Cut";
+                activated => { input.cut(); }
+            }
+
+            MenuItem {
+                title: "Copy";
+                activated => { input.copy(); }
+            }
+
+            MenuItem {
+                title: "Paste";
+                activated => { input.paste(); }
+            }
+
+            MenuItem {
+                title: "Select All";
+                activated => { input.select-all(); }
+            }
+        }
+
+        scroll := ScrollView {
+            viewport-width: max(self.visible-width, input.preferred-width + 2 * Theme.space-s);
+            viewport-height: max(self.visible-height, input.preferred-height + 2 * Theme.space-s);
+
+            input := TextInput {
+                x: Theme.space-s;
+                y: Theme.space-s;
+                width: max(scroll.visible-width, self.preferred-width + 2 * Theme.space-s) - 2 * Theme.space-s;
+                height: max(scroll.visible-height, self.preferred-height + 2 * Theme.space-s) - 2 * Theme.space-s;
+                single-line: false;
+                wrap: no-wrap;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-small;
+                color: Theme.text-1;
+
+                edited => { root.edited(self.text); }
+
+                key-pressed(event) => {
+                    if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+                        return reject;
+                    }
+                    if (event.text == Key.Backtab || (event.text == Key.Tab && event.modifiers.shift)) {
+                        root.apply("outdent");
+                        return accept;
+                    }
+                    if (event.text == Key.Tab) {
+                        root.apply("indent");
+                        return accept;
+                    }
+                    if (event.text == Key.Return && !event.modifiers.shift) {
+                        root.apply("newline");
+                        return accept;
+                    }
+                    return reject;
+                }
+
+                // Keep the caret in view, as std TextEdit does.
+                cursor-position-changed(cpos) => {
+                    if (cpos.x + scroll.viewport-x < 12px) {
+                        scroll.viewport-x = min(0px, max(scroll.visible-width - scroll.viewport-width, -cpos.x + 12px));
+                    } else if (cpos.x + scroll.viewport-x > scroll.visible-width - 12px) {
+                        scroll.viewport-x = min(0px, max(scroll.visible-width - scroll.viewport-width, scroll.visible-width - cpos.x - 12px));
+                    }
+                    if (cpos.y + scroll.viewport-y < 12px) {
+                        scroll.viewport-y = min(0px, max(scroll.visible-height - scroll.viewport-height, -cpos.y + 12px));
+                    } else if (cpos.y + scroll.viewport-y > scroll.visible-height - 32px) {
+                        scroll.viewport-y = min(0px, max(scroll.visible-height - scroll.viewport-height, scroll.visible-height - cpos.y - 32px));
+                    }
+                }
             }
         }
     }
