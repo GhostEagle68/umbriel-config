@@ -33,7 +33,7 @@ export component CategoryPage inherits Rectangle {
         spacing: Theme.space-l;
         alignment: start;
 
-        Text {
+        if root.title != "": Text {
             text: root.title;
             color: Theme.text-1;
             font-size: Theme.font-title;
@@ -49,7 +49,7 @@ export component CategoryPage inherits Rectangle {
         for card in root.cards: VerticalLayout {
             spacing: Theme.space-xs;
 
-            CardHeader {
+            if card.title != "": CardHeader {
                 title: card.title;
                 expanded: card.expanded;
                 toggle => { root.toggle-card(card.key); }

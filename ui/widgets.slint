@@ -281,7 +281,7 @@ export component SettingRowView inherits Rectangle {
             }
             if setting.kind == ValueKind.integer || setting.kind == ValueKind.float: HorizontalLayout {
                 spacing: Theme.space-s;
-                alignment: start;
+                alignment: end;
 
                 if setting.max > setting.min && !setting.available: Slider {
                     width: 160px;
@@ -309,7 +309,7 @@ export component SettingRowView inherits Rectangle {
             }
             if setting.kind == ValueKind.color: HorizontalLayout {
                 spacing: Theme.space-s;
-                alignment: start;
+                alignment: end;
 
                 // Click opens the picker popup for this key; the
                 // app-window hosts the overlay, the swatch only aims it.
@@ -369,7 +369,7 @@ export component SettingRowView inherits Rectangle {
             // there is only ever one value, shown two ways.
             if setting.kind == ValueKind.open-choice: HorizontalLayout {
                 spacing: Theme.space-s;
-                alignment: start;
+                alignment: end;
 
                 ComboBox {
                     // Wide: Slint's ComboBox popup width follows the

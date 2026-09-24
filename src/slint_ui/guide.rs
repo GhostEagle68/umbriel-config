@@ -314,6 +314,10 @@ fn guide_cards(shell: &Shell, metas: &[&'static GuideKey]) -> Vec<SettingsCard> 
                 row.label = meta.label.into();
                 row.hint = meta.description.into();
             }
+            // A first-time walk has no use for the "new key" and owning-file
+            // badges; every row would carry them.
+            row.is_new = false;
+            row.home = -1;
             row
         })
         .collect();
@@ -364,6 +368,9 @@ pub(super) fn install_guide(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &d
                 return;
             }
             guide_show_step(&app, &shell.borrow());
+            // First run: the config was just created, so there is nothing
+            // to go back to.
+            app.set_guide_cancellable(false);
             app.set_show_guide(true);
         });
     }
@@ -403,7 +410,27 @@ pub(super) fn install_guide(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &d
                 return;
             }
             guide_show_step(&app, &shell.borrow());
+            app.set_guide_cancellable(true);
             app.set_show_guide(true);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(shell);
+        app.on_guide_cancel(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let mut shell = shell.borrow_mut();
+            // Drop the filled-in suggestions and restore the on-disk
+            // baseline that start_guide replaced.
+            shell.doc.discard();
+            for inc in &mut shell.includes.docs {
+                inc.doc.discard();
+            }
+            shell.reset_saved();
+            shell.guide = None;
+            app.set_show_guide(false);
+            super::sections::refresh_shown_page(&app, &shell);
+            app.set_status("Guided setup cancelled.".into());
         });
     }
     {

@@ -292,7 +292,10 @@ export component AppWindow inherits Window {
     in property <string> guide-title;
     in property <bool> guide-first: false;
     in property <bool> guide-last: false;
+    // Off on first run: the config was just created, nothing to return to.
+    in property <bool> guide-cancellable: false;
     callback guide-back();
+    callback guide-cancel();
     callback guide-next();
     callback guide-relaunch();
 
@@ -886,6 +889,11 @@ export component AppWindow inherits Window {
                 HorizontalLayout {
                     alignment: end;
                     spacing: Theme.space-s;
+
+                    if root.guide-cancellable: ActionButton {
+                        text: "Cancel";
+                        clicked => { root.guide-cancel(); }
+                    }
 
                     ActionButton {
                         text: "Back";
