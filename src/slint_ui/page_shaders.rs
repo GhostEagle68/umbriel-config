@@ -154,50 +154,73 @@ fn download_community_shaders(target: &Path) -> Result<String, String> {
     })
 }
 
+/// One step card's data. Fixed-shape struct: up to three parameter
+/// slots, padded.
+fn step_row(index: usize, step: &shaders::builder::BuilderStep) -> Option<ShaderStep> {
+    let def = shaders::builder::step_def(step.kind)?;
+    // Fixed-shape struct: up to three parameter slots, padded.
+    let mut labels: [SharedString; 3] = std::array::from_fn(|_| SharedString::new());
+    let mut values = [0.0f32; 3];
+    let mut mins = [0.0f32; 3];
+    let mut maxs = [0.0f32; 3];
+    let mut decimals = [0i32; 3];
+    for (slot, param) in def.params.iter().enumerate() {
+        labels[slot] = param.label.into();
+        values[slot] = step.params[slot] as f32;
+        mins[slot] = param.min as f32;
+        maxs[slot] = param.max as f32;
+        decimals[slot] = param.decimals as i32;
+    }
+    Some(ShaderStep {
+        index: index as i32,
+        label: def.label.into(),
+        p1_label: labels[0].clone(),
+        p1_value: values[0],
+        p1_min: mins[0],
+        p1_max: maxs[0],
+        p1_decimals: decimals[0],
+        p2_label: labels[1].clone(),
+        p2_value: values[1],
+        p2_min: mins[1],
+        p2_max: maxs[1],
+        p2_decimals: decimals[1],
+        p3_label: labels[2].clone(),
+        p3_value: values[2],
+        p3_min: mins[2],
+        p3_max: maxs[2],
+        p3_decimals: decimals[2],
+        p_count: def.params.len() as i32,
+    })
+}
+
 /// Show the builder stack as step cards. Rows only: the code pane is
 /// the caller's business.
 fn push_builder_rows(app: &AppWindow, steps: &[shaders::builder::BuilderStep]) {
     let rows: Vec<ShaderStep> = steps
         .iter()
         .enumerate()
-        .filter_map(|(index, step)| {
-            let def = shaders::builder::step_def(step.kind)?;
-            // Fixed-shape struct: up to three parameter slots, padded.
-            let mut labels: [SharedString; 3] = std::array::from_fn(|_| SharedString::new());
-            let mut values = [0.0f32; 3];
-            let mut mins = [0.0f32; 3];
-            let mut maxs = [0.0f32; 3];
-            let mut decimals = [0i32; 3];
-            for (slot, param) in def.params.iter().enumerate() {
-                labels[slot] = param.label.into();
-                values[slot] = step.params[slot] as f32;
-                mins[slot] = param.min as f32;
-                maxs[slot] = param.max as f32;
-                decimals[slot] = param.decimals as i32;
-            }
-            Some(ShaderStep {
-                index: index as i32,
-                label: def.label.into(),
-                p1_label: labels[0].clone(),
-                p1_value: values[0],
-                p1_min: mins[0],
-                p1_max: maxs[0],
-                p1_decimals: decimals[0],
-                p2_label: labels[1].clone(),
-                p2_value: values[1],
-                p2_min: mins[1],
-                p2_max: maxs[1],
-                p2_decimals: decimals[1],
-                p3_label: labels[2].clone(),
-                p3_value: values[2],
-                p3_min: mins[2],
-                p3_max: maxs[2],
-                p3_decimals: decimals[2],
-                p_count: def.params.len() as i32,
-            })
-        })
+        .filter_map(|(index, step)| step_row(index, step))
         .collect();
     app.set_shader_steps(Rc::new(VecModel::from(rows)).into());
+}
+
+/// Refresh one step card's data in place. Unlike replacing the model,
+/// this keeps the card's widgets, so a focused slider stays focused.
+fn refresh_step_row(app: &AppWindow, shell: &Rc<RefCell<Shell>>, index: usize) {
+    let Some(row) = shell
+        .borrow()
+        .builder_steps
+        .get(index)
+        .and_then(|step| step_row(index, step))
+    else {
+        return;
+    };
+    let model = app.get_shader_steps();
+    if let Some(rows) = model.as_any().downcast_ref::<VecModel<ShaderStep>>()
+        && index < rows.row_count()
+    {
+        rows.set_row_data(index, row);
+    }
 }
 
 /// Push the builder stack into the step panel and regenerate the code
@@ -1195,11 +1218,16 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(shell);
+        // Slider released (mouse up, or an arrow key's release): the
+        // live path already regenerated the code, so settle the value and
+        // refresh just this card; rebuilding every card would destroy the
+        // slider and its keyboard focus after each arrow press.
         app.on_shader_step_param(move |index, param, value| {
             let Some(app) = weak.upgrade() else { return };
             settle_now(&app, &shell);
             if !app.get_shader_builder_locked() && set_step_param(&shell, index, param, value) {
-                regen_builder(&app, &shell);
+                regen_code(&app, &shell);
+                refresh_step_row(&app, &shell, index as usize);
             }
         });
     }
