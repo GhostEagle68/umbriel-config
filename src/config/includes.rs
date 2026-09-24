@@ -1,6 +1,7 @@
 //! The `[include]` chain of a config: umbriel parses included files
 //! first, in list order (later files override earlier ones), then the
-//! main file overrides all of them. Missing or broken files are
+//! `[include.optional]` files the same way, then the main file overrides
+//! all of them. Missing or broken files are
 //! non-fatal warnings, exactly like the compositor's own loader.
 
 use std::path::{Path, PathBuf};
@@ -34,10 +35,16 @@ pub fn load_chain(main: &ConfigDocument, main_path: &Path) -> IncludeChain {
         return chain;
     };
     let home = std::env::var("HOME").ok().map(PathBuf::from);
-    let Some(files) = main.get_strings(&["include", "files"]) else {
-        return chain;
-    };
-    for raw in files {
+    // Umbriel merges `[include] files`, then `[include.optional] files`.
+    let required = main.get_strings(&["include", "files"]).unwrap_or_default();
+    let optional = main
+        .get_strings(&["include", "optional", "files"])
+        .unwrap_or_default();
+    let files = required
+        .into_iter()
+        .map(|raw| (raw, false))
+        .chain(optional.into_iter().map(|raw| (raw, true)));
+    for (raw, optional) in files {
         let path = expand_path(&raw, base_dir, home.as_deref());
         let label = path
             .file_name()
@@ -51,6 +58,8 @@ pub fn load_chain(main: &ConfigDocument, main_path: &Path) -> IncludeChain {
         }
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
+            // A missing optional include is expected, like in umbriel.
+            Err(err) if optional && err.kind() == std::io::ErrorKind::NotFound => continue,
             Err(_) => {
                 chain
                     .notes
@@ -67,7 +76,9 @@ pub fn load_chain(main: &ConfigDocument, main_path: &Path) -> IncludeChain {
                 continue;
             }
         };
-        if doc.get_strings(&["include", "files"]).is_some() {
+        if doc.get_strings(&["include", "files"]).is_some()
+            || doc.get_strings(&["include", "optional", "files"]).is_some()
+        {
             chain.notes.push(format!(
                 "nested includes are not loaded: {}",
                 path.display()
@@ -149,6 +160,26 @@ fn expand_path(raw: &str, base_dir: &Path, home: Option<&Path>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_chain_loads_optional_includes_after_regular_ones() {
+        let dir = std::env::temp_dir().join(format!("umbriel-includes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.toml"), "x = 1\n").unwrap();
+        std::fs::write(dir.join("theme.toml"), "x = 2\n").unwrap();
+        let main = ConfigDocument::from_str(
+            "[include]\nfiles = [\"a.toml\"]\n\n[include.optional]\nfiles = [\"theme.toml\", \"later.toml\"]\n",
+        )
+        .unwrap();
+
+        let chain = load_chain(&main, &dir.join("config.toml"));
+        let labels: Vec<&str> = chain.docs.iter().map(|doc| doc.label.as_str()).collect();
+        assert_eq!(labels, vec!["a.toml", "theme.toml"]);
+        // The missing optional file is not a problem worth a note.
+        assert!(chain.notes.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn listed_paths_covers_regular_and_optional_includes() {

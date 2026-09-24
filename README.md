@@ -28,7 +28,8 @@ Zcode GLM 5.3 and Claude Opus 5.5 models are used to help plan, review code, fix
 - **Keybinds editor** — one merged list of built-in defaults and your binds,
   chord capture (press the keys), searchable pickers for keys and actions,
   submap scopes, and conflict warnings with a safe replace.
-- **Understands split configs** — follows your `[include]` chain
+- **Understands split configs** — follows your `[include]` and
+  `[include.optional]` chain
 - **Changes you can audit** — every unsaved edit is one row: what changed,
   before vs after, with a per-option reset, including keybinds and rules.
   Discard anything before saving.
