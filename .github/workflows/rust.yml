@@ -29,8 +29,14 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
 
+      # Prebuilt formatter from Slint's release, pinned to the version the
+      # .slint files are formatted with (local: slint-lsp --version);
+      # building it from source took ~8 minutes.
       - name: Install slint-lsp
-        run: cargo install slint-lsp
+        run: |
+          curl -fsSL https://github.com/slint-ui/slint/releases/download/v1.17.1/slint-lsp-linux.tar.gz \
+            | tar xz -C "$HOME"
+          echo "$HOME/slint-lsp" >> "$GITHUB_PATH"
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
