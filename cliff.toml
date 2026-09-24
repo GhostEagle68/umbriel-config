@@ -39,7 +39,7 @@ commit_parsers = [
   { footer = "skip", skip = true },
   { message = "^chore\\(release\\)", skip = true },
   { message = "^[a-z]+\\(deps\\)", skip = true },
-  { message = "^(chore|ci|docs|refactor|test|build|style)", skip = true },
+  { message = "^(chore|ci|docs|refactor|test|style)", skip = true },
   # The release/CI plumbing is ours, never the user's.
   { message = "^[a-z]+\\((release|ci)\\)", skip = true },
   # Breaking and security come before the plain feat/fix rules, which
@@ -52,5 +52,6 @@ commit_parsers = [
   { message = "^fix", group = "<!-- 3 -->🐛 Fixed" },
   { message = "^perf", group = "<!-- 4 -->⚡ Performance" },
   { message = "^revert", group = "<!-- 5 -->🔁 Changed" },
-  { message = ".*", group = "<!-- 6 -->📦 Other" },
+  { message = "^build", group = "<!-- 6 -->🛠 Build" },
+  { message = ".*", group = "<!-- 7 -->📦 Other" },
 ]
