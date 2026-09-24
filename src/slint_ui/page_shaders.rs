@@ -97,11 +97,18 @@ fn download_community_shaders(target: &Path) -> Result<String, String> {
     std::fs::create_dir_all(&staging)
         .map_err(|err| format!("Could not create {}: {err}", staging.display()))?;
 
-    let archive_path = std::env::temp_dir().join(format!(
-        "umbriel-community-shaders-{}.tar.gz",
-        std::process::id()
-    ));
-    if let Err(err) = std::fs::write(&archive_path, &archive) {
+    // Beside the staging folder in the user's own config dir, not a
+    // guessable shared /tmp name, and created fresh (never through a
+    // pre-existing file or symlink).
+    let archive_path = target.with_file_name(".community-download.tar.gz");
+    let _ = std::fs::remove_file(&archive_path);
+    let stored = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&archive_path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, &archive));
+    if let Err(err) = stored {
+        let _ = std::fs::remove_file(&archive_path);
         let _ = std::fs::remove_dir_all(&staging);
         return Err(format!("Could not store the download: {err}"));
     }
