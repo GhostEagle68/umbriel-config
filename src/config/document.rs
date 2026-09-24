@@ -128,7 +128,16 @@ impl ConfigDocument {
 
     /// Atomically write the document to `path`, leaving a one-time backup at
     /// `<path>.bak` holding the pre-GUI content from the first-ever save.
+    /// A symlinked `path` (a dotfiles checkout) is written through to the
+    /// file it points at, so the link stays a link; the `.bak` still sits
+    /// next to the link, out of the dotfiles repo.
     pub fn save(&mut self, path: &Path) -> Result<(), ConfigError> {
+        let backup = backup_path(path);
+        let linked = path
+            .is_symlink()
+            .then(|| fs::canonicalize(path).ok())
+            .flatten();
+        let path = linked.as_deref().unwrap_or(path);
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
@@ -137,7 +146,6 @@ impl ConfigDocument {
                 source,
             })?;
         }
-        let backup = backup_path(path);
         if !backup.exists() && path.exists() {
             fs::copy(path, &backup).map_err(|source| ConfigError::Save {
                 path: backup.clone(),
@@ -1058,6 +1066,31 @@ curve = \"easeout\"
         doc.discard();
         assert!(!doc.is_modified());
         assert_eq!(doc.text(), SAMPLE);
+    }
+
+    #[test]
+    fn save_writes_through_a_symlink() {
+        let dir = std::env::temp_dir().join(format!("umbriel-symlink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("dotfiles")).unwrap();
+        let real = dir.join("dotfiles/config.toml");
+        let link = dir.join("config.toml");
+        fs::write(&real, SAMPLE).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let mut doc = ConfigDocument::load(&link).unwrap();
+        doc.set_bool(&["general", "xwayland"], false);
+        doc.save(&link).unwrap();
+
+        assert!(link.is_symlink());
+        assert!(dir.join("config.toml.bak").exists());
+        assert!(!dir.join("dotfiles/config.toml.bak").exists());
+        assert!(
+            fs::read_to_string(&real)
+                .unwrap()
+                .contains("xwayland = false")
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

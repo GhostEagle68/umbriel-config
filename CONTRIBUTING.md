@@ -26,7 +26,9 @@ Two layers, strictly separated:
 - The user's config is edited only through `toml_edit` documents; never
   round-trip via serde. Comments and layout must survive every save.
 - Saving is atomic (write a temp file, rename over the target) and leaves a
-  one-time `.bak` next to the config before the first modification.
+  one-time `.bak` next to the config before the first modification. A
+  symlinked config is written through to the file it points at, so the
+  link survives; the `.bak` stays next to the link.
 - Edit the user's own config: `$XDG_CONFIG_HOME/umbriel/config.toml` (else
   `~/.config/umbriel/config.toml`), even when it doesn't exist yet. Umbriel's
   fallbacks (`$XDG_CONFIG_DIRS`, the packaged `share/umbriel/config.toml`) are

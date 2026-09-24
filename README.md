@@ -41,8 +41,9 @@ Zcode GLM 5.3 and Claude Opus 5.5 models are used to help plan, review code, fix
   live monitor scanning and add-output; collapsible cards keep long
   lists readable.
 - **Your file stays yours** — lossless TOML editing keeps every comment and
-  piece of formatting; saves are atomic with a one-time `.bak` backup, and
-  `umbriel validate` runs on every save.
+  piece of formatting; saves are atomic with a one-time `.bak` backup,
+  a symlinked config (dotfiles) stays a symlink, and `umbriel validate`
+  runs on every save.
 
 ## Install
 
