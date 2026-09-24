@@ -1105,7 +1105,9 @@ follows_mouse_max_scroll = 0.5
 ```
 
 `follows_mouse = true` focuses the window under the pointer when pointer motion
-or a layout change places a different window there.
+or a layout change places a different window there. This follows the actual
+seat focus across tiled, floating, and pinned windows, including pinned windows
+whose owning workspace is inactive.
 
 `follows_mouse_max_scroll` limits how far Umbriel may scroll a layout to reveal
 that window, measured in viewport widths. `0.0` allows only fully visible
@@ -1254,7 +1256,9 @@ start-umbriel
 The launcher loads the login profile for supported shells such as bash, zsh,
 and fish. Environment variables from that profile are available to Umbriel and
 applications started in the session. Interactive shell files such as
-`~/.zshrc` are not loaded.
+`~/.zshrc` are not loaded. In a systemd-managed session, `PATH` remains the
+value supplied by the user manager, including `environment.d`; the direct
+fallback inherits `PATH` from the login profile like the other variables.
 
 In a managed native session, Umbriel places startup, autostart, event, and
 `spawn:` commands in scopes bound to the compositor service, so they are
@@ -1764,6 +1768,10 @@ settings affects new columns only.
 When focus moves to a hidden column, Umbriel scrolls just far enough to reveal
 it. Dragged windows show an insertion preview and can be dropped into a new or
 existing column.
+
+Closing a focused column moves focus to the nearest surviving column. When that
+column contains stacked windows, Umbriel restores its most recently focused
+member instead of always selecting its first row.
 
 ## Vertical strips
 

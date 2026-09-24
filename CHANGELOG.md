@@ -1,6 +1,56 @@
 # Changelog
 
 
+## [0.3.0-beta.3] — 2026-09-24
+
+### 🐛 Fixed
+
+#### Guide
+
+- Clean up guided setup and add Cancel
+  - Guided setup: drop the empty heading and lone card toggle, hide the
+    NEW and owning-file badges on its rows, and add Cancel when re-run
+    from Settings (discards the filled-in suggestions; first run has none).
+  - Setting rows: number, color and open-choice editors now line up on
+    the right edge like the other editors.
+
+#### Packaging
+
+- Launch from the app menu in sessions with a minimal PATH
+  The desktop entry ran umbriel-config by bare name. Umbriel starts apps
+  with PATH=/usr/local/bin:/usr/bin, so a ~/.local install never opened
+  from the launcher (it did on Plasma, which reads the login profile).
+  install.sh now writes the absolute binary path into the installed entry.
+
+#### Settings
+
+- Restart after an in-app update
+  "Restart now" failed with "No such file or directory" once an update
+  had installed. The installer replaces the running binary, after which
+  /proc/self/exe points at the deleted old file. The executable path is
+  now read at startup, before any update can replace it.
+
+#### General
+
+- Fix(settings): close the save dialog after saving; guard double install
+
+### 🛠 Build
+
+#### Changelog
+
+- List build and packaging changes in release notes
+
+#### General
+
+- Cut CI and release build times
+  - CI: install slint-lsp 1.17.1 from Slint's prebuilt release instead
+    of compiling it (was ~8 of the 10 minutes).
+  - Release: publish with --no-verify; the build job has already built
+    the tagged commit, so the verify rebuild (~11 min) was a duplicate.
+  - Dev profile: line-tables-only debug info; incremental rebuilds drop
+    from ~7.7 s to ~3.3 s.
+
+
 ## [0.3.0-beta.2] — 2026-09-23
 
 ### 🐛 Fixed
