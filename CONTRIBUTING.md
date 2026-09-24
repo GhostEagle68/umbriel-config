@@ -27,10 +27,12 @@ Two layers, strictly separated:
   round-trip via serde. Comments and layout must survive every save.
 - Saving is atomic (write a temp file, rename over the target) and leaves a
   one-time `.bak` next to the config before the first modification.
-- Mirror umbriel's config lookup exactly: `$XDG_CONFIG_HOME/umbriel/config.toml`,
-  then `$XDG_CONFIG_DIRS` (default `/etc/xdg`), then the packaged
-  `share/umbriel/config.toml`. `UMBRIEL_CONFIG` is harness-only; a user-pinned
-  path (like `umbriel -c`) is a GUI feature, not part of env lookup.
+- Edit the user's own config: `$XDG_CONFIG_HOME/umbriel/config.toml` (else
+  `~/.config/umbriel/config.toml`), even when it doesn't exist yet. Umbriel's
+  fallbacks (`$XDG_CONFIG_DIRS`, the packaged `share/umbriel/config.toml`) are
+  read-only system files, so a missing user config means first-run setup.
+  `UMBRIEL_CONFIG` is harness-only; a user-pinned path (like `umbriel -c`) is
+  a GUI feature, not part of env lookup.
 - Config key names, action names, and file paths must match umbriel's canonical
   naming (see its `examples/config.toml`) — never invent variants.
 

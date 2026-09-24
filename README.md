@@ -166,7 +166,7 @@ Uninstalling only removes the app. Your Umbriel config files. And the
 ## Usage
 
 ```sh
-umbriel-config                # GUI on your config (same lookup as umbriel)
+umbriel-config                # GUI on your config (~/.config/umbriel/config.toml)
 umbriel-config --config PATH  # open a specific config file
 umbriel-config path           # print which config would be opened
 umbriel-config get|set ...    # debug CLI for single keys

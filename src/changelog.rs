@@ -217,7 +217,6 @@ mod tests {
     fn whatsnew_stamp_suppresses_until_the_version_changes() {
         let env = discovery::Env {
             xdg_config_home: None,
-            xdg_config_dirs: None,
             xdg_data_dirs: None,
             xdg_state_home: Some(
                 std::env::temp_dir()
