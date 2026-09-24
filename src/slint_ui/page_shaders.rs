@@ -663,7 +663,8 @@ pub(super) fn poll_shader_preview(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                     .map(|chunk| slint::Rgba8Pixel::new(chunk[0], chunk[1], chunk[2], chunk[3]))
                     .collect();
                 buffer.make_mut_slice().copy_from_slice(&rgba);
-                app.set_shader_preview_image(slint::Image::from_rgba8(buffer));
+                // Premultiplied, as umbriel shaders return it.
+                app.set_shader_preview_image(slint::Image::from_rgba8_premultiplied(buffer));
             }
         }
     }

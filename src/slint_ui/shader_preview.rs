@@ -593,8 +593,11 @@ fn upload_texture(
     Ok(texture)
 }
 
-/// glReadPixels returns bottom-up rows with straight alpha; Slint images
-/// are top-down premultiplied — flip and scale RGB by A in one pass.
+/// glReadPixels returns bottom-up rows; flip them top-down. The pixels
+/// are already premultiplied (umbriel's contract: `animation()` returns
+/// premultiplied RGBA, and blending is off), so colour is only clamped
+/// to alpha, which keeps a shader that breaks the contract from handing
+/// Slint an invalid premultiplied pixel.
 pub fn finalize_readback(pixels: Vec<u8>, width: usize, height: usize) -> Vec<u8> {
     let stride = width * 4;
     let mut out = vec![0u8; pixels.len()];
@@ -608,11 +611,11 @@ pub fn finalize_readback(pixels: Vec<u8>, width: usize, height: usize) -> Vec<u8
             .iter_mut()
             .zip(src.as_chunks::<4>().0.iter())
         {
-            let alpha = src[3] as u16;
-            dst[0] = ((src[0] as u16 * alpha + 127) / 255) as u8;
-            dst[1] = ((src[1] as u16 * alpha + 127) / 255) as u8;
-            dst[2] = ((src[2] as u16 * alpha + 127) / 255) as u8;
-            dst[3] = src[3];
+            let alpha = src[3];
+            dst[0] = src[0].min(alpha);
+            dst[1] = src[1].min(alpha);
+            dst[2] = src[2].min(alpha);
+            dst[3] = alpha;
         }
     }
     out
@@ -1085,15 +1088,17 @@ mod tests {
     }
 
     #[test]
-    fn finalize_readback_flips_and_premultiplies() {
+    fn finalize_readback_flips_and_keeps_premultiplied_colour() {
         // 1×2 image: readback bottom row first (half-alpha), top row
         // second (opaque) — output starts with the flipped opaque row.
-        let pixels = vec![255, 100, 200, 50, 10, 20, 30, 255];
+        let pixels = vec![20, 10, 30, 50, 10, 20, 30, 255];
         let out = finalize_readback(pixels, 1, 2);
         assert_eq!(out[0..4], [10, 20, 30, 255]);
-        // RGB scaled by a=50: 255→50, 100→20, 200→39 (with rounding).
-        assert_eq!(out[4..7], [50, 20, 39]);
-        assert_eq!(out[7], 50);
+        // Already premultiplied: not scaled by alpha a second time.
+        assert_eq!(out[4..8], [20, 10, 30, 50]);
+        // Colour above alpha (not premultiplied) is clamped to it.
+        let bad = finalize_readback(vec![200, 40, 90, 60], 1, 1);
+        assert_eq!(bad, [60, 40, 60, 60]);
     }
 
     #[test]
