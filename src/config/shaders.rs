@@ -257,6 +257,12 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// A comparable identity for a path: the real path when it exists,
+/// else the lexically normalized one. Compute once, compare many times.
+pub fn file_key(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| normalize(path))
+}
+
 /// Whether two paths name the same file: through symlinks when both
 /// exist, lexically otherwise.
 pub fn same_file(a: &Path, b: &Path) -> bool {

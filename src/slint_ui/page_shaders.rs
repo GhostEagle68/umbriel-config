@@ -690,10 +690,31 @@ pub(super) fn scan_shaders(shell: &mut Shell) {
 }
 
 pub(super) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
+    // Resolve each event's assignment and each library file once; the
+    // cards and rows below only compare these (no per-pair filesystem
+    // lookups).
+    let docs = chain_docs(shell);
+    let paths = chain_paths(shell);
+    let assigned: Vec<Option<(String, PathBuf, PathBuf)>> = shaders::EVENTS
+        .iter()
+        .map(|event| {
+            shaders::current_assignment(&docs, event).map(|(value, doc)| {
+                let resolved = shaders::resolve(&value, &paths[doc]);
+                let key = shaders::file_key(&resolved);
+                (value, resolved, key)
+            })
+        })
+        .collect();
+    let entry_keys: Vec<PathBuf> = shell
+        .shaders
+        .iter()
+        .map(|entry| shaders::file_key(&entry.path))
+        .collect();
     let infos: Vec<ShaderInfo> = shell
         .shaders
         .iter()
-        .map(|entry| ShaderInfo {
+        .zip(&entry_keys)
+        .map(|(entry, entry_key)| ShaderInfo {
             name: entry.name.clone().into(),
             value: entry.value.clone().into(),
             source: entry.source.label().into(),
@@ -701,41 +722,41 @@ pub(super) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
             invalid: entry.invalid.clone().unwrap_or_default().into(),
             path: entry.path.display().to_string().into(),
             is_own: entry.source == shaders::Source::ConfigDir,
-            used_by: used_by(shell, &entry.path).into(),
+            used_by: shaders::EVENTS
+                .iter()
+                .zip(&assigned)
+                .filter(|(_, current)| current.as_ref().is_some_and(|(_, _, key)| key == entry_key))
+                .map(|(event, _)| prettify(event))
+                .collect::<Vec<_>>()
+                .join(", ")
+                .into(),
         })
         .collect();
     app.set_shaders(Rc::new(VecModel::from(infos)).into());
 
-    let docs = chain_docs(shell);
-    let paths = chain_paths(shell);
     let rows: Vec<ShaderAssignment> = shaders::EVENTS
         .iter()
-        .map(|event| {
+        .zip(assigned)
+        .map(|(event, current)| {
             let mut choices: Vec<SharedString> = vec!["(no shader)".into()];
             choices.extend(shell.shaders.iter().map(|entry| entry.label.clone().into()));
-            let current = shaders::current_assignment(&docs, event);
             // Match by the file umbriel would actually read, so
             // "./shaders/x.glsl" and an absolute path both find x.glsl.
-            let resolved = current
+            let index = current
                 .as_ref()
-                .map(|(value, doc)| shaders::resolve(value, &paths[*doc]));
-            let index = resolved.as_ref().and_then(|resolved| {
-                shell
-                    .shaders
-                    .iter()
-                    .position(|entry| shaders::same_file(&entry.path, resolved))
-            });
-            let warning = match (&current, &resolved) {
-                (Some((value, _)), Some(resolved)) => {
+                .and_then(|(_, _, key)| entry_keys.iter().position(|entry_key| entry_key == key));
+            let warning = match &current {
+                Some((value, resolved, _)) => {
                     shaders::assignment_problem(value, resolved).unwrap_or_default()
                 }
-                _ => "",
+                None => "",
             };
+            let current = current.map(|(value, _, _)| value);
             // A value outside the library gets its own trailing entry, so
             // the dropdown shows it and "(no shader)" is a real change.
             let current_index = match (index, &current) {
                 (Some(position), _) => position + 1,
-                (None, Some((value, _))) => {
+                (None, Some(value)) => {
                     let label = if warning.is_empty() {
                         format!("{value} (outside the library)")
                     } else {
@@ -751,7 +772,7 @@ pub(super) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
                 label: prettify(event).into(),
                 choices: Rc::new(VecModel::from(choices)).into(),
                 current: current_index as i32,
-                current_value: current.map(|(value, _)| value).unwrap_or_default().into(),
+                current_value: current.unwrap_or_default().into(),
                 warning: warning.into(),
             }
         })
