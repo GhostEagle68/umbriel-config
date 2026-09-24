@@ -193,7 +193,7 @@ pub fn install(version: &str) -> Result<(), String> {
     let published = get_bytes(&format!("{asset}.sha256"))?;
     let published = String::from_utf8_lossy(&published);
     let published = published.split_whitespace().next().unwrap_or_default();
-    let actual = format!("{:x}", Sha256::digest(&tarball));
+    let actual = sha256_hex(&tarball);
     if !actual.eq_ignore_ascii_case(published) {
         return Err("checksum mismatch — nothing was installed".to_owned());
     }
@@ -204,6 +204,14 @@ pub fn install(version: &str) -> Result<(), String> {
         let _ = std::fs::remove_file(&staged);
         format!("could not replace {}: {err}", exe.display())
     })
+}
+
+/// Lowercase hex SHA-256, the form published in `<asset>.sha256`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
@@ -309,6 +317,14 @@ pub fn mark_checked(env: &discovery::Env) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sha256_hex_matches_the_published_form() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 
     #[test]
     fn compare_orders_semver_and_strips_v() {
