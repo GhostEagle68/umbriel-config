@@ -3,6 +3,8 @@
 
 use super::common::*;
 use super::*;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Download umbriel's docs on a worker thread, then hand the result to
 /// `schema-source-updated` (an empty string means it worked).
@@ -131,17 +133,21 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
     }
     {
         let weak = app.as_weak();
+        // Two installs at once would race on the same staged file.
+        let installing = Arc::new(AtomicBool::new(false));
         app.on_install_update(move || {
             let Some(app) = weak.upgrade() else { return };
             let version = app.get_update_version().to_string();
-            if version.is_empty() {
+            if version.is_empty() || installing.swap(true, Ordering::Relaxed) {
                 return;
             }
             app.set_update_note("Installing…".into());
             let weak = app.as_weak();
+            let installing = Arc::clone(&installing);
             std::thread::spawn(move || {
                 let result = update::install(&version);
                 let _ = slint::invoke_from_event_loop(move || {
+                    installing.store(false, Ordering::Relaxed);
                     let Some(app) = weak.upgrade() else { return };
                     match result {
                         Ok(()) => {

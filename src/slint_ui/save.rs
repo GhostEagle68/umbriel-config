@@ -277,6 +277,7 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
 
             if save_all_and_validate(&app, &mut shell, &env) {
                 super::sections::refresh_shown_page(&app, &shell);
+                app.set_show_save_popup(false);
             }
         });
     }
