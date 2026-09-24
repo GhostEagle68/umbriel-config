@@ -140,7 +140,7 @@ jobs:
             echo "Or install it in one command:"
             echo ""
             echo '```sh'
-            echo "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/packaging/get.sh | sh"
+            echo "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/dev/packaging/get.sh | sh"
             echo '```'
             echo ""
             echo "Already have umbriel-config? It updates itself: **Settings → Updates**."
