@@ -976,7 +976,7 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(shell);
-        app.on_shader_editor_save(move || {
+        app.on_shader_editor_save(move |apply_use| {
             let Some(app) = weak.upgrade() else { return };
             let text = app.get_shader_editor_text().to_string();
             // Every successful save closes the editor; creating only
@@ -1028,7 +1028,11 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                         if let Err(err) = write_assignments(&mut shell, &repoints) {
                             app.set_status(err.into());
                         }
-                        let changes = apply_use_for(&mut shell, &app, &path);
+                        let changes = if apply_use {
+                            apply_use_for(&mut shell, &app, &path)
+                        } else {
+                            Vec::new()
+                        };
                         scan_shaders(&mut shell);
                         changes
                     };

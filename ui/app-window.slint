@@ -176,7 +176,8 @@ export component AppWindow inherits Window {
     // Save asks which events use the shader first: request fills the
     // checklist and opens it, save does the work.
     callback shader-editor-save-request();
-    callback shader-editor-save();
+    // true: apply the "Use for" ticks; false: save the file only.
+    callback shader-editor-save(bool);
     in-out property <[ShaderUse]> shader-use-for;
     in-out property <bool> shader-use-open;
     callback shader-editor-delete();
@@ -1484,7 +1485,7 @@ export component AppWindow inherits Window {
                 }
 
                 Text {
-                    text: "Ticked events switch to this shader and unticked ones stop using it, as changes you save with the main Save button.";
+                    text: "Ticked events switch to this shader and unticked ones stop using it, as changes you save with the main Save button. Save only keeps the file and changes no assignments.";
                     color: Theme.text-2;
                     font-size: Theme.font-small;
                     wrap: word-wrap;
@@ -1520,12 +1521,21 @@ export component AppWindow inherits Window {
                         clicked => { root.shader-use-open = false; }
                     }
 
+                    // Keep the file, leave every assignment as it is.
+                    ActionButton {
+                        text: "Save only";
+                        clicked => {
+                            root.shader-use-open = false;
+                            root.shader-editor-save(false);
+                        }
+                    }
+
                     ActionButton {
                         text: "Save";
                         primary: true;
                         clicked => {
                             root.shader-use-open = false;
-                            root.shader-editor-save();
+                            root.shader-editor-save(true);
                         }
                     }
                 }
