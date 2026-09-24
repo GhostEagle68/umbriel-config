@@ -159,6 +159,9 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
     {
         let weak = app.as_weak();
         let env = env.clone();
+        // Read before an update replaces the binary: afterwards /proc/self/exe
+        // points at the "(deleted)" old inode, which can't be launched.
+        let exe = std::env::current_exe();
         app.on_restart_app(move || {
             let Some(app) = weak.upgrade() else { return };
             // The new binary is already on disk; unsaved edits would be
@@ -167,7 +170,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
                 app.set_update_note("Save or discard your changes first.".into());
                 return;
             }
-            let Ok(exe) = std::env::current_exe() else {
+            let Ok(exe) = &exe else {
                 app.set_update_note("Restart manually to use the new version.".into());
                 return;
             };
