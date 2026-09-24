@@ -10,17 +10,6 @@ pub struct Action {
     pub summary: &'static str,
 }
 
-impl Action {
-    /// Dropdown label, e.g. `spawn <cmd>`.
-    pub fn label(&self) -> String {
-        if self.param.is_empty() {
-            self.name.to_owned()
-        } else {
-            format!("{} {}", self.name, self.param)
-        }
-    }
-}
-
 pub const ACTIONS: &[Action] = &[
     Action {
         name: "cheatsheet-close",
@@ -211,6 +200,11 @@ pub const ACTIONS: &[Action] = &[
         name: "session-quit",
         param: "[skip-confirmation]",
         summary: "Quit the session, confirming first unless told to skip",
+    },
+    Action {
+        name: "shortcuts-inhibit-toggle",
+        param: "",
+        summary: "Toggle shortcuts inhibition for the focused surface",
     },
     Action {
         name: "spawn",
@@ -634,9 +628,48 @@ pub const DEFAULT_BINDS: &[(&str, &str)] = &[
     ("Mod+WheelDown", "window-focus-right"),
 ];
 
-/// Keysyms for special/media keys, for the chord picker: (keysym, label).
-/// Any other keysym can be typed by hand — this list is the common ones.
+/// Named keys for the chord picker beyond letters and digits:
+/// (keysym, label). Any other keysym can be typed by hand.
 pub const COMMON_KEYS: &[(&str, &str)] = &[
+    ("Return", "Enter"),
+    ("Escape", "Esc"),
+    ("Tab", "Tab"),
+    ("space", "Space"),
+    ("BackSpace", "Backspace"),
+    ("Delete", "Delete"),
+    ("Insert", "Insert"),
+    ("Home", "Home"),
+    ("End", "End"),
+    ("Page_Up", "Page Up"),
+    ("Page_Down", "Page Down"),
+    ("Left", "Left arrow"),
+    ("Right", "Right arrow"),
+    ("Up", "Up arrow"),
+    ("Down", "Down arrow"),
+    ("F1", "F1"),
+    ("F2", "F2"),
+    ("F3", "F3"),
+    ("F4", "F4"),
+    ("F5", "F5"),
+    ("F6", "F6"),
+    ("F7", "F7"),
+    ("F8", "F8"),
+    ("F9", "F9"),
+    ("F10", "F10"),
+    ("F11", "F11"),
+    ("F12", "F12"),
+    // Punctuation, by the keysym names chords use.
+    ("minus", "-"),
+    ("equal", "="),
+    ("bracketleft", "["),
+    ("bracketright", "]"),
+    ("backslash", "\\"),
+    ("semicolon", ";"),
+    ("apostrophe", "'"),
+    ("comma", ","),
+    ("period", "."),
+    ("slash", "/"),
+    ("grave", "`"),
     ("XF86AudioRaiseVolume", "Volume up"),
     ("XF86AudioLowerVolume", "Volume down"),
     ("XF86AudioMute", "Mute audio"),
@@ -651,15 +684,6 @@ pub const COMMON_KEYS: &[(&str, &str)] = &[
     ("XF86MonBrightnessDown", "Screen brightness down"),
     ("XF86KbdBrightnessUp", "Keyboard brightness up"),
     ("XF86KbdBrightnessDown", "Keyboard brightness down"),
-    ("XF86Eject", "Eject"),
-    ("XF86Calculator", "Calculator"),
-    ("XF86Mail", "Mail"),
-    ("XF86Search", "Search"),
-    ("XF86HomePage", "Home page"),
-    ("XF86Favorites", "Favorites"),
-    ("XF86Refresh", "Refresh"),
-    ("XF86Tools", "Tools"),
-    ("XF86Launch1", "Launch 1"),
     ("Print", "Print screen"),
     ("Pause", "Pause"),
     ("Scroll_Lock", "Scroll lock"),
@@ -712,6 +736,7 @@ pub fn action_group(action: &str) -> &'static str {
         || name.starts_with("window-modify")
         || name.starts_with("window-cycle")
         || name == "window-center"
+        || name == "window-close"
     {
         "Window state & size"
     } else if name.starts_with("workspace") {
@@ -730,7 +755,12 @@ pub fn action_group(action: &str) -> &'static str {
         "Launch apps"
     } else if matches!(
         name,
-        "dpms-off" | "dpms-on" | "session-quit" | "config-reload" | "keyboard-layout-next"
+        "dpms-off"
+            | "dpms-on"
+            | "session-quit"
+            | "config-reload"
+            | "keyboard-layout-next"
+            | "shortcuts-inhibit-toggle"
     ) {
         "Session & system"
     } else if name == "submap" {
@@ -740,10 +770,117 @@ pub fn action_group(action: &str) -> &'static str {
     }
 }
 
+/// A bind's page section: its action's group, except that commands on
+/// media and hardware keys (volume, playback, brightness) get their own
+/// section instead of crowding "Launch apps".
+pub fn bind_group(chord: &str, action: &str) -> &'static str {
+    let group = action_group(action);
+    let key = chord.rsplit(['+', ',']).next().unwrap_or(chord);
+    if group == "Launch apps" && key.starts_with("XF86") {
+        "Media keys"
+    } else {
+        group
+    }
+}
+
+/// Every key the chord picker offers, as (keysym, label): letters and
+/// digits first, then the named keys.
+pub fn key_choices() -> Vec<(String, String)> {
+    ('A'..='Z')
+        .chain('0'..='9')
+        .map(|ch| (ch.to_string(), ch.to_string()))
+        .chain(
+            COMMON_KEYS
+                .iter()
+                .map(|(key, label)| ((*key).to_owned(), (*label).to_owned())),
+        )
+        .collect()
+}
+
+/// The chord spelling of a typed character: letters upper-cased, and
+/// symbols as their keysym names on the unshifted key (US layout), since
+/// umbriel binds keys, not characters — Shift+1 is "Shift+1", not "!".
+pub fn key_name(ch: char) -> String {
+    const SHIFTED: &str = "!@#$%^&*()_+{}|:\"<>?~";
+    const UNSHIFTED: &str = "1234567890-=[]\\;',./`";
+    let ch = SHIFTED
+        .find(ch)
+        .and_then(|i| UNSHIFTED.chars().nth(SHIFTED[..i].chars().count()))
+        .unwrap_or(ch);
+    let symbol = COMMON_KEYS
+        .iter()
+        .find(|(key, label)| key.len() > 1 && label.chars().eq([ch]));
+    match symbol {
+        Some((key, _)) => (*key).to_owned(),
+        None if ch == ' ' => "space".to_owned(),
+        None => ch.to_uppercase().collect(),
+    }
+}
+
+/// Usual commands for media and hardware keys: (key prefix, label,
+/// command). The editor offers the ones matching the bind's key.
+pub const COMMAND_PRESETS: &[(&str, &str, &str)] = &[
+    (
+        "XF86Audio",
+        "Volume up",
+        "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+",
+    ),
+    (
+        "XF86Audio",
+        "Volume down",
+        "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-",
+    ),
+    (
+        "XF86Audio",
+        "Mute speakers",
+        "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+    ),
+    (
+        "XF86Audio",
+        "Mute microphone",
+        "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle",
+    ),
+    ("XF86Audio", "Play / pause", "playerctl play-pause"),
+    ("XF86Audio", "Next track", "playerctl next"),
+    ("XF86Audio", "Previous track", "playerctl previous"),
+    ("XF86Audio", "Stop playback", "playerctl stop"),
+    (
+        "XF86MonBrightness",
+        "Brightness up",
+        "brightnessctl set 5%+",
+    ),
+    (
+        "XF86MonBrightness",
+        "Brightness down",
+        "brightnessctl set 5%-",
+    ),
+    (
+        "XF86KbdBrightness",
+        "Keyboard backlight up",
+        "brightnessctl -d '*::kbd_backlight' set 1+",
+    ),
+    (
+        "XF86KbdBrightness",
+        "Keyboard backlight down",
+        "brightnessctl -d '*::kbd_backlight' set 1-",
+    ),
+];
+
+/// The presets for `chord`'s key, as (label, command).
+pub fn command_presets(chord: &str) -> Vec<(&'static str, &'static str)> {
+    let key = chord.rsplit(['+', ',']).next().unwrap_or(chord);
+    COMMAND_PRESETS
+        .iter()
+        .filter(|(prefix, _, _)| key.starts_with(prefix))
+        .map(|(_, label, command)| (*label, *command))
+        .collect()
+}
+
 /// Display order for the keybind page's groups; unknown groups land at
 /// the end via `Other`.
 pub const GROUP_ORDER: &[&str] = &[
     "Launch apps",
+    "Media keys",
     "Focus",
     "Move windows",
     "Window state & size",
@@ -808,77 +945,58 @@ pub fn actions_from_help(text: &str) -> Vec<LiveAction> {
     actions
 }
 
-/// Draft state for the single keybind editor. Nothing here reaches the
-/// document until the UI applies it, so intermediate typing is never
-/// written.
-#[derive(Debug, Clone, Default)]
-pub struct BindDraft {
-    /// Chord body without the submap scope; may already include "Mod+".
-    pub chord: String,
-    /// Prepend "Mod+" when composing. The compositor keeps the mod key
-    /// for itself while a GUI is focused, so capture adds it here.
-    pub use_mod: bool,
-    /// Optional `submap[name]` scope; scoped chords only fire in that layer.
-    pub scope: String,
-    pub action: String,
-    pub repeat: Option<bool>,
-    pub allow_when_locked: Option<bool>,
-    /// Post-action submap transition, or "reset" to exit the layer.
-    pub submap: Option<String>,
-}
-
-impl BindDraft {
-    /// The final `[keybinds]` key: `submap[scope],Mod+chord`. Never
-    /// double-prefixes Mod.
-    pub fn composed_chord(&self) -> String {
-        let body = self.chord.trim();
-        let has_mod =
-            body.eq_ignore_ascii_case("mod") || body.to_ascii_lowercase().starts_with("mod+");
-        let mut chord = if self.use_mod && !has_mod {
-            format!("Mod+{body}")
-        } else {
-            body.to_owned()
-        };
-        let scope = self.scope.trim();
-        if !scope.is_empty() {
-            chord = format!("submap[{scope}],{chord}");
-        }
-        chord
-    }
-
-    /// Rebuild draft parts from an existing `[keybinds]` entry.
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_parts(
-        chord: &str,
-        action: &str,
-        repeat: Option<bool>,
-        allow_when_locked: Option<bool>,
-        submap: Option<String>,
-    ) -> Self {
-        let (scope, body) = split_scope(chord);
-        let use_mod =
-            body.eq_ignore_ascii_case("mod") || body.to_ascii_lowercase().starts_with("mod+");
-        Self {
-            chord: body,
-            use_mod,
-            scope,
-            action: action.to_owned(),
-            repeat,
-            allow_when_locked,
-            submap,
-        }
+/// Split `submap[name],chord` into (name, chord); ("", chord) otherwise.
+pub fn split_scope(chord: &str) -> (&str, &str) {
+    match chord
+        .strip_prefix("submap[")
+        .and_then(|rest| rest.split_once(']'))
+    {
+        Some((scope, body)) => (scope, body.trim_start_matches(',')),
+        None => ("", chord),
     }
 }
 
-/// Split `submap[name],chord` into (name, chord); (empty, chord) otherwise.
-fn split_scope(chord: &str) -> (String, String) {
-    let Some(rest) = chord.strip_prefix("submap[") else {
-        return (String::new(), chord.to_owned());
+/// The `[keybinds]` key for `body` scoped to submap `scope` (if any).
+pub fn compose_chord(scope: &str, body: &str) -> String {
+    match (scope.trim(), body.trim()) {
+        ("", body) => body.to_owned(),
+        (scope, body) => format!("submap[{scope}],{body}"),
+    }
+}
+
+/// Whether a chord token is a modifier (Mod, Ctrl, …), in any case.
+pub fn is_modifier(token: &str) -> bool {
+    ["mod", "ctrl", "alt", "shift", "super", "logo", "win"]
+        .iter()
+        .any(|name| token.trim().eq_ignore_ascii_case(name))
+}
+
+/// Whether `bind` answers to the keys pressed in `pressed`: the same key
+/// with at least the pressed modifiers, so pressing P finds Mod+P and
+/// Mod+Shift+P, and Mod+P finds only binds holding Mod. A pressed
+/// modifier on its own finds every bind that holds it.
+pub fn chord_matches(bind: &str, pressed: &str) -> bool {
+    let tokens = |chord: &str| -> Vec<String> {
+        split_scope(chord)
+            .1
+            .split('+')
+            .map(|token| token.trim().to_lowercase())
+            .filter(|token| !token.is_empty())
+            .collect()
     };
-    let Some((scope, tail)) = rest.split_once(']') else {
-        return (String::new(), chord.to_owned());
+    let (bind, pressed) = (tokens(bind), tokens(pressed));
+    let Some(key) = pressed.last() else {
+        return false;
     };
-    (scope.to_owned(), tail.trim_start_matches(',').to_owned())
+    let wanted = if is_modifier(key) {
+        &pressed[..]
+    } else {
+        if bind.last() != Some(key) {
+            return false;
+        }
+        &pressed[..pressed.len() - 1]
+    };
+    wanted.iter().all(|modifier| bind.contains(modifier))
 }
 
 /// Whether another user bind already owns `chord` (umbriel matches chords
@@ -909,12 +1027,16 @@ pub fn find_conflict(
 /// earlier ones, case-insensitively per chord.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourcedBind {
-    pub chord: String,
-    pub action: String,
-    pub repeat: Option<bool>,
-    pub allow_when_locked: Option<bool>,
-    pub submap: Option<String>,
+    pub entry: super::document::KeybindEntry,
     pub source_file: usize,
+}
+
+impl std::ops::Deref for SourcedBind {
+    type Target = super::document::KeybindEntry;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entry
+    }
 }
 
 /// User binds across the include chain and the main file, in umbriel's
@@ -923,26 +1045,16 @@ pub fn merged_binds(docs: &[&super::document::ConfigDocument]) -> Vec<SourcedBin
     let mut merged: Vec<SourcedBind> = Vec::new();
     for (file, doc) in docs.iter().enumerate() {
         for bind in doc.keybinds() {
+            let sourced = SourcedBind {
+                entry: bind,
+                source_file: file,
+            };
             match merged
                 .iter_mut()
-                .find(|existing| existing.chord.eq_ignore_ascii_case(&bind.chord))
+                .find(|existing| existing.chord.eq_ignore_ascii_case(&sourced.chord))
             {
-                Some(existing) => {
-                    existing.chord = bind.chord.clone();
-                    existing.action = bind.action.clone();
-                    existing.repeat = bind.repeat;
-                    existing.allow_when_locked = bind.allow_when_locked;
-                    existing.submap = bind.submap.clone();
-                    existing.source_file = file;
-                }
-                None => merged.push(SourcedBind {
-                    chord: bind.chord.clone(),
-                    action: bind.action.clone(),
-                    repeat: bind.repeat,
-                    allow_when_locked: bind.allow_when_locked,
-                    submap: bind.submap.clone(),
-                    source_file: file,
-                }),
+                Some(existing) => *existing = sourced,
+                None => merged.push(sourced),
             }
         }
     }
@@ -965,10 +1077,114 @@ pub fn describe(action: &str, actions: &[LiveAction]) -> String {
     }
 }
 
+/// How the editor asks for an action's parameter, read from its spec.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParamKind {
+    None,
+    /// A shell command (`spawn`).
+    Command,
+    /// A fixed set; an optional parameter includes "" for none.
+    Choice(Vec<String>),
+    /// Free text with a placeholder hint.
+    Text(String),
+}
+
+pub fn param_kind(spec: &str) -> ParamKind {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return ParamKind::None;
+    }
+    if spec == "<cmd>" {
+        return ParamKind::Command;
+    }
+    let optional = spec.starts_with('[');
+    let inner = spec.trim_matches(['[', ']', '<', '>']);
+    // `<a|b|c>` lists every value; a bare `[word]` is an optional flag.
+    if inner.contains('|') || (optional && !spec.contains('<')) {
+        let mut choices: Vec<String> = optional.then(String::new).into_iter().collect();
+        choices.extend(inner.split('|').map(str::to_owned));
+        return ParamKind::Choice(choices);
+    }
+    let hint = match inner.split(['>', '[']).next().unwrap_or(inner) {
+        "workspace" => "workspace number or name, e.g. 3 or 3/DP-1",
+        "output" => "output name, e.g. DP-1",
+        "delta" => "signed fraction, e.g. +0.1 or -0.1",
+        "fraction" => "fraction from 0.1 to 1.0, e.g. 0.5",
+        "window-id" => "window id",
+        "name" => "submap name, or reset to leave one",
+        _ => spec,
+    };
+    ParamKind::Text(if optional {
+        format!("{hint} (optional)")
+    } else {
+        hint.to_owned()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn media_key_commands_get_their_own_group() {
+        assert_eq!(
+            bind_group("XF86AudioMute", "spawn:wpctl set-mute"),
+            "Media keys"
+        );
+        assert_eq!(
+            bind_group("Mod+XF86AudioNext", "spawn:playerctl next"),
+            "Media keys"
+        );
+        assert_eq!(bind_group("Mod+Return", "spawn:kitty"), "Launch apps");
+        assert_eq!(bind_group("Mod+Q", "window-close"), "Window state & size");
+    }
+
+    #[test]
+    fn typed_characters_become_keysyms() {
+        assert_eq!(key_name('h'), "H");
+        assert_eq!(key_name('!'), "1");
+        assert_eq!(key_name(','), "comma");
+        assert_eq!(key_name('<'), "comma");
+        assert_eq!(key_name('\\'), "backslash");
+        assert_eq!(key_name('|'), "backslash");
+        assert_eq!(key_name(' '), "space");
+    }
+
+    #[test]
+    fn presets_follow_the_key() {
+        assert_eq!(command_presets("Mod+XF86AudioMute").len(), 8);
+        assert_eq!(command_presets("XF86MonBrightnessUp").len(), 2);
+        assert!(command_presets("Mod+Return").is_empty());
+    }
+
+    #[test]
+    fn param_kinds_follow_the_spec() {
+        assert_eq!(param_kind(""), ParamKind::None);
+        assert_eq!(param_kind("<cmd>"), ParamKind::Command);
+        assert_eq!(
+            param_kind("<scrolling|dwindle|master|toggle>"),
+            ParamKind::Choice(vec![
+                "scrolling".into(),
+                "dwindle".into(),
+                "master".into(),
+                "toggle".into()
+            ])
+        );
+        assert_eq!(
+            param_kind("[skip-confirmation]"),
+            ParamKind::Choice(vec!["".into(), "skip-confirmation".into()])
+        );
+        assert_eq!(
+            param_kind("<workspace>[/<output>]"),
+            ParamKind::Text("workspace number or name, e.g. 3 or 3/DP-1".into())
+        );
+        assert_eq!(
+            param_kind("[<output>]"),
+            ParamKind::Text("output name, e.g. DP-1 (optional)".into())
+        );
+        assert_eq!(param_kind("<mystery>"), ParamKind::Text("<mystery>".into()));
+    }
 
     #[test]
     fn parses_msg_help_output() {
@@ -987,23 +1203,24 @@ mod tests {
     }
 
     #[test]
-    fn composed_chord_folds_scope_and_mod() {
-        let mut draft = BindDraft {
-            chord: "T".to_owned(),
-            use_mod: true,
-            ..Default::default()
-        };
-        assert_eq!(draft.composed_chord(), "Mod+T");
-        draft.scope = "resize".to_owned();
-        assert_eq!(draft.composed_chord(), "submap[resize],Mod+T");
-        // Mod is never double-prefixed, and a bare modifier chord survives.
-        draft.chord = "Mod+Shift+T".to_owned();
-        draft.use_mod = false;
-        assert_eq!(draft.composed_chord(), "submap[resize],Mod+Shift+T");
-        draft.chord = "Mod".to_owned();
-        draft.use_mod = true;
-        draft.scope.clear();
-        assert_eq!(draft.composed_chord(), "Mod");
+    fn scopes_split_and_compose() {
+        assert_eq!(
+            split_scope("submap[resize],Mod+Escape"),
+            ("resize", "Mod+Escape")
+        );
+        assert_eq!(split_scope("Mod+T"), ("", "Mod+T"));
+        assert_eq!(compose_chord("resize", "Mod+T"), "submap[resize],Mod+T");
+        assert_eq!(compose_chord(" ", "Mod"), "Mod");
+    }
+
+    #[test]
+    fn pressed_keys_find_binds_holding_them() {
+        assert!(chord_matches("Mod+P", "P"));
+        assert!(chord_matches("Mod+Shift+P", "Mod+P"));
+        assert!(!chord_matches("Mod+P", "Mod+Shift+P"));
+        assert!(!chord_matches("Mod+Page_Up", "P"));
+        assert!(chord_matches("Mod+Q", "Mod"));
+        assert!(chord_matches("submap[resize],Mod+Escape", "escape"));
     }
 
     #[test]
@@ -1048,20 +1265,5 @@ mod tests {
         assert_eq!(describe("spawn:kitty", &actions), "Run a command (kitty)");
         assert_eq!(describe("spawn", &actions), "Run a command");
         assert_eq!(describe("brand-new:thing", &actions), "brand-new:thing");
-    }
-
-    #[test]
-    fn draft_round_trips_scoped_chords() {
-        let draft = BindDraft::from_parts(
-            "submap[resize],Mod+Escape",
-            "submap:reset",
-            None,
-            None,
-            None,
-        );
-        assert_eq!(draft.scope, "resize");
-        assert_eq!(draft.chord, "Mod+Escape");
-        assert!(draft.use_mod);
-        assert_eq!(draft.composed_chord(), "submap[resize],Mod+Escape");
     }
 }

@@ -48,6 +48,7 @@ mod save;
 mod search;
 mod sections;
 mod shader_preview;
+mod shortcuts_inhibit;
 
 slint::include_modules!();
 
@@ -211,8 +212,9 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     let env = discovery::Env::from_process();
     let settings = app_settings::load(&env);
     let shell = Rc::new(RefCell::new(Shell::load(&path, &env)));
-    // Merged keybinds backing the Keybinds page rows; rebuilt with them.
-    let keybind_binds: Rc<RefCell<Vec<keybinds::SourcedBind>>> = Rc::new(RefCell::new(Vec::new()));
+    // Keybinds page state that lives outside the window: the merged binds
+    // behind its rows, collapsed groups, the bind being edited.
+    let keybind_view = Rc::new(RefCell::new(page_keybinds::KeybindView::default()));
     // Keybind action vocabulary: starts from the committed snapshot, then
     // refreshed from the installed `umbriel msg --help` on a worker thread.
     let kb_actions = Arc::new(Mutex::new(keybinds::builtin_actions()));
@@ -237,14 +239,6 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     app.set_backup_count_text(settings.backup_count.to_string().into());
     app.set_backup_dir_text(settings.backup_dir.clone().unwrap_or_default().into());
     {
-        let names: Vec<slint::SharedString> = {
-            let actions = kb_actions.lock().expect("kb actions");
-            actions.iter().map(|a| a.name.clone().into()).collect()
-        };
-        app.set_action_choices(Rc::new(VecModel::from(names)).into());
-    }
-    {
-        let weak = app.as_weak();
         let kb_actions = Arc::clone(&kb_actions);
         std::thread::spawn(move || {
             let live = std::process::Command::new("umbriel")
@@ -255,14 +249,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
                 .map(|out| keybinds::actions_from_help(&String::from_utf8_lossy(&out.stdout)))
                 .filter(|actions| !actions.is_empty());
             if let Some(actions) = live {
-                let _ = slint::invoke_from_event_loop(move || {
-                    let names: Vec<slint::SharedString> =
-                        actions.iter().map(|a| a.name.clone().into()).collect();
-                    if let Some(app) = weak.upgrade() {
-                        app.set_action_choices(Rc::new(VecModel::from(names)).into());
-                        *kb_actions.lock().expect("kb actions") = actions;
-                    }
-                });
+                *kb_actions.lock().expect("kb actions") = actions;
             }
         });
     }
@@ -358,15 +345,15 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     )));
 
     // Every feature registers its own callbacks.
-    sections::install_navigation(&app, &shell, &keybind_binds, &kb_actions);
-    search::install_search(&app, &shell, &kb_actions, &keybind_binds);
+    sections::install_navigation(&app, &shell, &keybind_view, &kb_actions);
+    search::install_search(&app, &shell, &kb_actions, &keybind_view);
     save::install_save(&app, &shell, &env);
     page_settings::install_settings(&app, &shell, &env);
     page_backups::install_backups(&app, &shell, &env, &backup_runs);
     page_outputs::install_outputs(&app, &shell);
     page_rules::install_rules(&app, &shell);
     page_shaders::install_shaders(&app, &shell);
-    page_keybinds::install_keybinds(&app, &shell, &kb_actions, &keybind_binds);
+    page_keybinds::install_keybinds(&app, &shell, &kb_actions, &keybind_view);
     guide::install_guide(&app, &shell, &env);
     rows::install_value_editing(&app, &shell);
     rows::install_color_math(&app);

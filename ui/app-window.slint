@@ -11,8 +11,9 @@ export {
     Theme,
 }
 // Re-exported for the Rust side too: rows.rs installs the ColorMath
-// handlers that the picker popup's bindings call.
-export { ColorMath }
+// handlers that the picker popup's bindings call; page_keybinds.rs drives
+// the Keybinds page through KeybindsState.
+export { ColorMath, KeybindsState }
 import {
     CheckBox,
     ComboBox,
@@ -29,7 +30,6 @@ import {
 } from "widgets.slint";
 import {
     ColorMath,
-    KeybindRow,
     MonitorCard,
     PickerState,
     RuleCard,
@@ -46,7 +46,7 @@ import {
 import { CategoryPage } from "pages/category.slint";
 import { SettingsPage } from "pages/settings.slint";
 import { BackupsPage } from "pages/backups.slint";
-import { KeybindsPage } from "pages/keybinds.slint";
+import { KeybindsPage, KeybindsState } from "pages/keybinds.slint";
 import { OutputsPage } from "pages/outputs.slint";
 import { RulePage } from "pages/rules.slint";
 import {
@@ -141,13 +141,6 @@ export component AppWindow inherits Window {
     callback view-changelog();
     callback view-update-notes();
 
-    // Keybinds page
-    in property <[KeybindRow]> keybind-rows;
-    in-out property <string> keybind-search;
-    in property <[string]> action-choices;
-    in-out property <bool> kb-editor-open;
-    in-out property <bool> kb-capturing;
-    in-out property <bool> keybind-editing;
     in property <[MonitorCard]> monitors;
     in property <string> outputs-live-note;
     in-out property <string> outputs-add-name;
@@ -213,22 +206,6 @@ export component AppWindow inherits Window {
     in property <int> shader-preview-length-ms: 250;
     callback shader-preview-event-picked(int);
     callback shader-preview-direction-toggled();
-    in-out property <string> kb-draft-chord;
-    in-out property <bool> kb-draft-use-mod;
-    in-out property <string> kb-draft-scope;
-    in-out property <int> kb-draft-action;
-    in-out property <string> kb-draft-param;
-    in-out property <bool> kb-draft-no-repeat;
-    in-out property <bool> kb-draft-locked;
-    in-out property <string> kb-draft-submap;
-    in property <string> kb-conflict-note;
-    in-out property <int> kb-original-index;
-    in-out property <string> kb-original-chord;
-    callback keybind-search-edited(string);
-    callback keybind-add();
-    callback keybind-edit(int);
-    callback keybind-remove(int);
-    callback keybind-apply();
 
     // Backups page
     in property <[string]> backup-choices;
@@ -468,26 +445,6 @@ export component AppWindow inherits Window {
                     keybinds-page := KeybindsPage {
                         width: min(1100px, kbv.visible-width);
                         x: (kbv.visible-width - self.width) / 2;
-                        rows: root.keybind-rows;
-                        search <=> root.keybind-search;
-                        action-choices: root.action-choices;
-                        editor-open <=> root.kb-editor-open;
-                        capturing <=> root.kb-capturing;
-                        editing <=> root.keybind-editing;
-                        draft-chord <=> root.kb-draft-chord;
-                        draft-use-mod <=> root.kb-draft-use-mod;
-                        draft-scope <=> root.kb-draft-scope;
-                        draft-action <=> root.kb-draft-action;
-                        draft-param <=> root.kb-draft-param;
-                        draft-no-repeat <=> root.kb-draft-no-repeat;
-                        draft-locked <=> root.kb-draft-locked;
-                        draft-submap <=> root.kb-draft-submap;
-                        conflict-note: root.kb-conflict-note;
-                        search-edited(t) => { root.keybind-search-edited(t); }
-                        add => { root.keybind-add(); }
-                        edit(i) => { root.keybind-edit(i); }
-                        remove(i) => { root.keybind-remove(i); }
-                        apply => { root.keybind-apply(); }
                     }
                 }
 

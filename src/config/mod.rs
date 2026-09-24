@@ -1,3 +1,4 @@
+pub mod apps;
 pub mod backups;
 pub mod curves;
 pub mod discovery;

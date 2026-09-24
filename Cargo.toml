@@ -22,12 +22,17 @@ semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.11"
 similar = "3"
-slint = "1"
+# raw-window-handle: the Keybinds page reaches the window's Wayland
+# surface to inhibit compositor shortcuts while recording keys.
+slint = { version = "1", features = ["raw-window-handle-06"] }
 tar = "0.4.46"
 thiserror = "2.0.20"
 toml_edit = "0.25.13"
 ureq = { version = "3", features = ["json"] }
+raw-window-handle = "0.6"
+wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 
 [build-dependencies]

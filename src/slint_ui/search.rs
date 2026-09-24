@@ -19,7 +19,7 @@ pub(super) fn install_search(
     app: &AppWindow,
     shell: &Rc<RefCell<Shell>>,
     kb_actions: &Arc<Mutex<Vec<keybinds::LiveAction>>>,
-    keybind_binds: &Rc<RefCell<Vec<keybinds::SourcedBind>>>,
+    keybind_view: &Rc<RefCell<super::page_keybinds::KeybindView>>,
 ) {
     {
         let weak = app.as_weak();
@@ -101,24 +101,19 @@ pub(super) fn install_search(
     }
     {
         let weak = app.as_weak();
-        let keybind_binds = Rc::clone(keybind_binds);
+        let keybind_view = Rc::clone(keybind_view);
         let kb_actions = Arc::clone(kb_actions);
         let shell = Rc::clone(shell);
         // A keybind search hit: land on the keybinds page with its
         // filter pre-filled so the chord is right there.
         app.on_keybinds_search_requested(move |filter| {
             let Some(app) = weak.upgrade() else { return };
-            app.set_keybind_search(filter.clone());
+            app.global::<KeybindsState>().set_search(filter);
+            keybind_view.borrow_mut().exact = false;
             app.set_current_section("keybinds".into());
             app.set_page(Page::Keybinds);
             let shell = shell.borrow();
-            super::page_keybinds::rebuild_keybind_rows(
-                &app,
-                &shell,
-                &kb_actions,
-                &filter,
-                &keybind_binds,
-            );
+            super::page_keybinds::rebuild_keybind_rows(&app, &shell, &kb_actions, &keybind_view);
         });
     }
 }

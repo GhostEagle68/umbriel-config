@@ -4508,6 +4508,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "pin-weak",
+ "raw-window-handle",
  "slint-macros",
  "unicode-segmentation",
  "vtable",
@@ -5175,6 +5176,7 @@ dependencies = [
  "flate2",
  "glow 0.18.0",
  "khronos-egl",
+ "raw-window-handle",
  "rfd",
  "semver",
  "serde",
@@ -5186,7 +5188,9 @@ dependencies = [
  "thiserror 2.0.20",
  "toml_edit",
  "ureq",
+ "wayland-backend",
  "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-wlr",
 ]
 

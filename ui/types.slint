@@ -79,6 +79,9 @@ export struct SettingsCard {
     rows: [SettingRow],
 }
 
+// One Keybinds list row. Header rows carry the group title in `chord`,
+// plus `expanded` and `count`; bind rows point at the merged user bind
+// (`index`, -1 for a compositor default).
 export struct KeybindRow {
     chord: string,
     summary: string,
@@ -87,8 +90,27 @@ export struct KeybindRow {
     is-header: bool,
     is-user: bool,
     shadowing: bool,
+    is-command: bool,
+    expanded: bool,
+    count: int,
     index: int,
 }
+
+// An action picker entry; `value` is what gets picked (spawn appears
+// twice: as "launch an app" and "run a shell command").
+export struct ActionChoice {
+    name: string,
+    summary: string,
+    value: string,
+}
+
+export struct AppChoice {
+    name: string,
+    command: string,
+}
+
+// How the keybind editor asks for an action's parameter.
+export enum ParamInput { none, app, command, choice, text }
 export struct MonitorCard {
     name: string,
     info: string,

@@ -52,12 +52,16 @@ pub struct ConfigDocument {
 /// One `[keybinds]` entry: a chord plus the action it runs. `None` extras
 /// mean the plain string form (`"Mod+Q" = "window-close"`); `Some` extras
 /// the inline-table form (`"Mod+R" = { action = "...", repeat = false }`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct KeybindEntry {
     pub chord: String,
     pub action: String,
     pub repeat: Option<bool>,
     pub allow_when_locked: Option<bool>,
+    /// Still fires while a client inhibits shortcuts (games, remote desktop).
+    pub allow_when_inhibited: Option<bool>,
+    /// Suppress repeats of the action for this long after it fires.
+    pub cooldown_ms: Option<i64>,
     pub submap: Option<String>,
 }
 
@@ -740,9 +744,7 @@ impl ConfigDocument {
                     return Some(KeybindEntry {
                         chord: chord.to_owned(),
                         action: action.to_owned(),
-                        repeat: None,
-                        allow_when_locked: None,
-                        submap: None,
+                        ..Default::default()
                     });
                 }
                 let inline = value.as_inline_table()?;
@@ -751,6 +753,10 @@ impl ConfigDocument {
                     action: inline.get("action")?.as_str()?.to_owned(),
                     repeat: inline.get("repeat").and_then(|v| v.as_bool()),
                     allow_when_locked: inline.get("allow_when_locked").and_then(|v| v.as_bool()),
+                    allow_when_inhibited: inline
+                        .get("allow_when_inhibited")
+                        .and_then(|v| v.as_bool()),
+                    cooldown_ms: inline.get("cooldown_ms").and_then(|v| v.as_integer()),
                     submap: inline
                         .get("submap")
                         .and_then(|v| v.as_str())
@@ -763,34 +769,30 @@ impl ConfigDocument {
     /// Write one bind under `chord`. `None` extras produce the plain string
     /// form; any `Some` extra the inline-table form. Rewriting an existing
     /// chord replaces it — umbriel's own per-chord override semantics.
-    pub fn set_keybind(
-        &mut self,
-        chord: &str,
-        action: &str,
-        repeat: Option<bool>,
-        allow_when_locked: Option<bool>,
-        submap: Option<&str>,
-    ) {
-        if repeat.is_none() && allow_when_locked.is_none() && submap.is_none() {
-            Self::set_value(&mut self.doc, &["keybinds", chord], action.into());
-            return;
-        }
+    pub fn set_keybind(&mut self, bind: &KeybindEntry) {
+        let path = ["keybinds", bind.chord.as_str()];
         let mut inline = InlineTable::new();
-        inline.insert("action", action.into());
-        if let Some(repeat) = repeat {
+        inline.insert("action", bind.action.as_str().into());
+        if let Some(repeat) = bind.repeat {
             inline.insert("repeat", repeat.into());
         }
-        if let Some(locked) = allow_when_locked {
+        if let Some(locked) = bind.allow_when_locked {
             inline.insert("allow_when_locked", locked.into());
         }
-        if let Some(submap) = submap {
-            inline.insert("submap", submap.into());
+        if let Some(inhibited) = bind.allow_when_inhibited {
+            inline.insert("allow_when_inhibited", inhibited.into());
         }
-        Self::set_value(
-            &mut self.doc,
-            &["keybinds", chord],
-            Value::InlineTable(inline),
-        );
+        if let Some(cooldown) = bind.cooldown_ms {
+            inline.insert("cooldown_ms", cooldown.into());
+        }
+        if let Some(submap) = &bind.submap {
+            inline.insert("submap", submap.as_str().into());
+        }
+        if inline.len() == 1 {
+            Self::set_value(&mut self.doc, &path, bind.action.as_str().into());
+        } else {
+            Self::set_value(&mut self.doc, &path, Value::InlineTable(inline));
+        }
     }
 
     /// Delete the bind whose stored key is exactly `chord` — the
@@ -1062,7 +1064,7 @@ curve = \"easeout\"
     fn discard_restores_the_saved_text() {
         let mut doc = ConfigDocument::from_str(SAMPLE).unwrap();
         doc.set_bool(&["general", "xwayland"], false);
-        doc.set_keybind("Super+T", "spawn", None, None, None);
+        doc.set_keybind(&bind("Super+T", "spawn"));
         doc.discard();
         assert!(!doc.is_modified());
         assert_eq!(doc.text(), SAMPLE);
@@ -1186,11 +1188,23 @@ curve = \"easeout\"
         assert!(!doc.rule_unset("window_rule", 0, "match.app_id"));
     }
 
+    fn bind(chord: &str, action: &str) -> KeybindEntry {
+        KeybindEntry {
+            chord: chord.to_owned(),
+            action: action.to_owned(),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn keybinds_round_trip_string_and_table_forms() {
         let mut doc = ConfigDocument::from_str(SAMPLE).unwrap();
-        doc.set_keybind("Mod+Q", "window-close", None, None, None);
-        doc.set_keybind("Mod+R", "submap:resize", Some(false), None, None);
+        doc.set_keybind(&bind("Mod+Q", "window-close"));
+        doc.set_keybind(&KeybindEntry {
+            repeat: Some(false),
+            cooldown_ms: Some(150),
+            ..bind("Mod+R", "submap:resize")
+        });
         let binds = doc.keybinds();
         assert_eq!(binds.len(), 2);
         assert_eq!(binds[0].chord, "Mod+Q");
@@ -1198,9 +1212,11 @@ curve = \"easeout\"
         assert_eq!(binds[0].repeat, None);
         assert_eq!(binds[1].repeat, Some(false));
         assert!(doc.text().contains("\"Mod+Q\" = \"window-close\""));
+        assert_eq!(binds[1].cooldown_ms, Some(150));
         assert!(doc.text().contains("repeat = false"));
+        assert!(doc.text().contains("cooldown_ms = 150"));
         // Rewriting without extras converts back to the string form.
-        doc.set_keybind("Mod+R", "config-reload", None, None, None);
+        doc.set_keybind(&bind("Mod+R", "config-reload"));
         assert_eq!(doc.keybinds()[1].action, "config-reload");
         assert!(!doc.text().contains("repeat = false"));
     }

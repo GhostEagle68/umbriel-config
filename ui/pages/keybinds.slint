@@ -1,38 +1,777 @@
 // Keybinds page: user binds strong, compositor defaults greyed, grouped
-// by family. The editor is an inline card in the page grammar (no dimmed
-// popup); chord capture is a listening state on the chord row — Esc or a
-// click anywhere cancels it.
+// by family into collapsible sections. Clicking a row expands the editor
+// inline under it (a default opens as an override). Chords record from a
+// page-wide key grab — Esc or a click anywhere cancels it.
+//
+// Page state and handlers live in the KeybindsState global so the Rust
+// side (page_keybinds.rs) drives it without plumbing through the window.
+// Every visual piece below is a small component on Theme tokens.
 
-import { CheckBox, ComboBox, LineEdit } from "std-widgets.slint";
-import { ActionButton } from "../widgets.slint";
-import { KeybindRow } from "../types.slint";
+import { CheckBox, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { ActionButton, CardHeader } from "../widgets.slint";
+import {
+    ActionChoice,
+    AppChoice,
+    KeybindRow,
+    ParamInput,
+} from "../types.slint";
 import { Theme } from "../theme.slint";
 
-export component KeybindsPage inherits Rectangle {
+export global KeybindsState {
+    // ── list ──
     in property <[KeybindRow]> rows;
     in-out property <string> search;
-    in property <[string]> action-choices;
+    // 0 all, 1 yours, 2 defaults
+    in-out property <int> filter;
+    in property <string> list-note;
+
+    // ── editor ──
     in-out property <bool> editor-open;
-    in-out property <bool> capturing;
-    in-out property <bool> editing;
+    // Chord of the row the editor expands under; "" puts it on top (new bind).
+    in property <string> editor-anchor;
+    in property <string> editor-title;
+    in property <string> chord-hint;
     in-out property <string> draft-chord;
-    in-out property <bool> draft-use-mod;
-    in-out property <string> draft-scope;
-    in-out property <int> draft-action;
+    in property <string> draft-action;
+    in property <string> draft-action-summary;
     in-out property <string> draft-param;
+    // Display name of the picked app (ParamInput.app).
+    in-out property <string> draft-app-name;
     in-out property <bool> draft-no-repeat;
     in-out property <bool> draft-locked;
+    in-out property <bool> draft-inhibited;
+    in-out property <string> draft-cooldown;
+    in-out property <string> draft-scope;
     in-out property <string> draft-submap;
+    in property <ParamInput> param-input;
+    in property <string> param-hint;
+    in property <[string]> param-choices;
+    in-out property <int> param-choice-index;
     in property <string> conflict-note;
+    in property <[ActionChoice]> action-matches;
+    in property <[AppChoice]> app-matches;
+    // "Add a key…" first, then named keys (Enter, arrows, media…) by label.
+    in property <[string]> special-keys;
+
+    // ── transient UI state (reset by Rust when the editor opens) ──
+    // 0 idle, 1 recording the draft chord, 2 recording a search
+    in-out property <int> recording;
+    in-out property <bool> typing-chord;
+    in-out property <bool> action-picker-open;
+    in-out property <bool> app-picker-open;
+    in-out property <bool> advanced-open;
+
     callback search-edited(string);
+    callback search-chord(string);
+    callback filter-changed();
+    callback toggle-group(string);
     callback add();
-    callback edit(int);
+    callback edit(int, string);
     callback remove(int);
     callback apply();
+    callback action-filter(string);
+    callback action-picked(string);
+    callback apps-filter(string);
+    callback special-key-picked(int);
+    // Recording started (true) or ended: ask Umbriel to pass shortcuts
+    // through so the keys reach this window instead of firing binds.
+    callback inhibit-shortcuts(bool);
+
+    // Chord text → one entry per key, for keycaps.
+    pure callback chord-keys(string) -> [string];
+    // A key event as chord text (key, meta, ctrl, alt, shift, released);
+    // "" while only modifiers are held.
+    pure callback key-chord(string, bool, bool, bool, bool, bool) -> string;
+    pure callback command-found(string) -> bool;
+    // Common commands for the chord's key ("Common commands…" first) and
+    // the command behind the n-th one.
+    pure callback command-presets(string) -> [string];
+    pure callback preset-command(string, int) -> string;
+}
+
+component Keycaps inherits HorizontalLayout {
+    in property <[string]> keys;
+    in property <bool> dim;
+    spacing: 4px;
+    alignment: start;
+
+    for key in root.keys: Rectangle {
+        height: 22px;
+        width: cap.preferred-width + 12px;
+        border-radius: Theme.radius-s;
+        background: Theme.bg-2;
+        border-width: 1px;
+        border-color: Theme.border;
+
+        cap := Text {
+            text: key;
+            color: root.dim ? Theme.text-2 : Theme.text-1;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// All · Yours · Defaults.
+component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> selected;
+    callback changed();
+    height: 28px;
+    border-radius: Theme.radius-s;
+    background: Theme.bg-2;
+
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+
+        for option[i] in root.options: Rectangle {
+            width: label.preferred-width + 20px;
+            border-radius: Theme.radius-s;
+            background: i == root.selected ? Theme.bg-0 : ta.has-hover ? Theme.border : transparent;
+
+            label := Text {
+                text: option;
+                color: i == root.selected ? Theme.text-1 : Theme.text-2;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+
+            ta := TouchArea {
+                clicked => {
+                    root.selected = i;
+                    root.changed();
+                }
+            }
+        }
+    }
+}
+
+component FieldLabel inherits Text {
+    width: 110px;
+    color: Theme.text-2;
+    font-size: Theme.font-small;
+    vertical-alignment: center;
+}
+
+// A filter box over a short scrolling list, shared by the action and
+// app pickers; the rows come from @children.
+component PickerList inherits Rectangle {
+    in property <string> placeholder;
+    callback filter(string);
+    callback close();
+
+    // Focus the filter once the picker is laid out: focusing from `init`
+    // re-enters the layout pass and Slint 1.16 panics ("Recursion
+    // detected").
+    Timer {
+        interval: 1ms;
+        running: true;
+        triggered => {
+            self.running = false;
+            filter-edit.focus();
+        }
+    }
+
+    VerticalLayout {
+        spacing: Theme.space-xs;
+
+        HorizontalLayout {
+            spacing: Theme.space-s;
+
+            filter-edit := LineEdit {
+                placeholder-text: root.placeholder;
+                horizontal-stretch: 1;
+                edited(t) => { root.filter(t); }
+            }
+
+            ActionButton {
+                text: "Close";
+                clicked => { root.close(); }
+            }
+        }
+
+        Rectangle {
+            height: 220px;
+            border-radius: Theme.radius-s;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            ScrollView {
+                VerticalLayout {
+                    alignment: start;
+                    @children
+                }
+            }
+        }
+    }
+}
+
+component PickerRow inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    callback picked();
+    height: 44px;
+    background: ta.has-hover ? Theme.bg-2 : transparent;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+
+    VerticalLayout {
+        padding-left: Theme.space-m;
+        padding-right: Theme.space-m;
+        alignment: center;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.detail;
+            color: Theme.text-2;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-small;
+            overflow: elide;
+        }
+    }
+}
+
+component KeybindEditor inherits Rectangle {
+    background: Theme.bg-0;
+    border-radius: Theme.radius-m;
+    border-width: 1px;
+    border-color: Theme.accent;
+
+    VerticalLayout {
+        padding: Theme.space-m;
+        spacing: Theme.space-s;
+
+        Text {
+            text: KeybindsState.editor-title;
+            color: Theme.text-1;
+            font-weight: 700;
+        }
+
+        // ── keys ──
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "Keys";
+            }
+
+            if !KeybindsState.typing-chord: Rectangle {
+                height: 32px;
+                horizontal-stretch: 1;
+                border-radius: Theme.radius-s;
+                background: KeybindsState.recording == 1 ? Theme.accent-soft : keys-ta.has-hover ? Theme.border : Theme.bg-2;
+                border-width: 1px;
+                border-color: KeybindsState.recording == 1 ? Theme.accent : transparent;
+
+                keys-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { KeybindsState.recording = 1; }
+                }
+
+                HorizontalLayout {
+                    padding-left: Theme.space-s;
+                    alignment: start;
+
+                    if KeybindsState.recording == 1: Text {
+                        text: "Press the keys… Esc cancels; stops after 5 s without a key.";
+                        color: Theme.text-1;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    if KeybindsState.recording != 1 && KeybindsState.draft-chord == "": Text {
+                        text: "Click to record a key combination";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                    }
+                    if KeybindsState.recording != 1 && KeybindsState.draft-chord != "": VerticalLayout {
+                        alignment: center;
+
+                        Keycaps {
+                            keys: KeybindsState.chord-keys(KeybindsState.draft-chord);
+                        }
+                    }
+                }
+            }
+
+            if KeybindsState.typing-chord: LineEdit {
+                horizontal-stretch: 1;
+                text <=> KeybindsState.draft-chord;
+                placeholder-text: "e.g. Mod+Shift+Return";
+            }
+
+            if KeybindsState.typing-chord: ComboBox {
+                model: KeybindsState.special-keys;
+                current-index: 0;
+                selected => {
+                    if (self.current-index > 0) {
+                        KeybindsState.special-key-picked(self.current-index - 1);
+                    }
+                    self.current-index = 0;
+                }
+            }
+
+            ActionButton {
+                text: KeybindsState.typing-chord ? "Record" : "Type";
+                clicked => {
+                    KeybindsState.recording = 0;
+                    KeybindsState.typing-chord = !KeybindsState.typing-chord;
+                }
+            }
+        }
+
+        if KeybindsState.typing-chord: HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "";
+            }
+
+            Text {
+                text: KeybindsState.chord-hint;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+        }
+
+        // ── action ──
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "Action";
+                vertical-alignment: top;
+                height: 32px;
+            }
+
+            if !KeybindsState.action-picker-open: Rectangle {
+                height: 44px;
+                horizontal-stretch: 1;
+                border-radius: Theme.radius-s;
+                background: action-ta.has-hover ? Theme.border : Theme.bg-2;
+
+                action-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        KeybindsState.app-picker-open = false;
+                        KeybindsState.action-picker-open = true;
+                        KeybindsState.action-filter("");
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: Theme.space-m;
+                    padding-right: Theme.space-m;
+                    spacing: Theme.space-m;
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: KeybindsState.draft-action == "" ? "Choose an action" : KeybindsState.draft-action-summary;
+                            color: KeybindsState.draft-action == "" ? Theme.text-2 : Theme.text-1;
+                            overflow: elide;
+                        }
+
+                        if KeybindsState.draft-action != "": Text {
+                            text: KeybindsState.draft-action;
+                            color: Theme.text-2;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                        }
+                    }
+
+                    Text {
+                        text: "▾";
+                        color: Theme.text-2;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            if KeybindsState.action-picker-open: PickerList {
+                horizontal-stretch: 1;
+                placeholder: "Search actions";
+                filter(t) => { KeybindsState.action-filter(t); }
+                close => { KeybindsState.action-picker-open = false; }
+
+                for choice in KeybindsState.action-matches: PickerRow {
+                    title: choice.summary;
+                    detail: choice.name;
+                    picked => { KeybindsState.action-picked(choice.value); }
+                }
+            }
+        }
+
+        // ── parameter, shaped by the action ──
+        // Launching an app: pick one of the installed apps, nothing else.
+        if KeybindsState.param-input == ParamInput.app && !KeybindsState.app-picker-open: HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "App";
+            }
+
+            Rectangle {
+                height: 44px;
+                horizontal-stretch: 1;
+                border-radius: Theme.radius-s;
+                background: app-ta.has-hover ? Theme.border : Theme.bg-2;
+
+                app-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        KeybindsState.action-picker-open = false;
+                        KeybindsState.app-picker-open = true;
+                        KeybindsState.apps-filter("");
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: Theme.space-m;
+                    padding-right: Theme.space-m;
+                    spacing: Theme.space-m;
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: KeybindsState.draft-param == "" ? "Choose an app" : KeybindsState.draft-app-name;
+                            color: KeybindsState.draft-param == "" ? Theme.text-2 : Theme.text-1;
+                            overflow: elide;
+                        }
+
+                        if KeybindsState.draft-param != "": Text {
+                            text: KeybindsState.draft-param;
+                            color: Theme.text-2;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            overflow: elide;
+                        }
+                    }
+
+                    Text {
+                        text: "▾";
+                        color: Theme.text-2;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        if KeybindsState.param-input == ParamInput.app && KeybindsState.app-picker-open: HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "App";
+                vertical-alignment: top;
+                height: 32px;
+            }
+
+            PickerList {
+                horizontal-stretch: 1;
+                placeholder: "Search installed apps";
+                filter(t) => { KeybindsState.apps-filter(t); }
+                close => { KeybindsState.app-picker-open = false; }
+
+                for app in KeybindsState.app-matches: PickerRow {
+                    title: app.name;
+                    detail: app.command;
+                    picked => {
+                        KeybindsState.draft-param = app.command;
+                        KeybindsState.draft-app-name = app.name;
+                        KeybindsState.app-picker-open = false;
+                    }
+                }
+            }
+        }
+
+        // Running a command: free text, plus the usual commands when the
+        // key is a media or brightness key.
+        if KeybindsState.param-input == ParamInput.command: HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "Command";
+            }
+
+            LineEdit {
+                horizontal-stretch: 1;
+                text <=> KeybindsState.draft-param;
+                placeholder-text: "e.g. noctalia msg panel-toggle launcher";
+            }
+
+            if KeybindsState.command-presets(KeybindsState.draft-chord).length > 1: ComboBox {
+                model: KeybindsState.command-presets(KeybindsState.draft-chord);
+                current-index: 0;
+                selected => {
+                    if (self.current-index > 0) {
+                        KeybindsState.draft-param = KeybindsState.preset-command(KeybindsState.draft-chord, self.current-index - 1);
+                    }
+                    self.current-index = 0;
+                }
+            }
+        }
+
+        if KeybindsState.param-input == ParamInput.command
+            && KeybindsState.draft-param != ""
+            && !KeybindsState.command-found(KeybindsState.draft-param): HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "";
+            }
+
+            Text {
+                text: "This command isn't on your PATH, so Umbriel may not find it. To start an installed app, choose the Launch an app action instead.";
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+        }
+
+        if KeybindsState.param-input == ParamInput.choice: HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "Option";
+            }
+
+            ComboBox {
+                horizontal-stretch: 1;
+                model: KeybindsState.param-choices;
+                current-index <=> KeybindsState.param-choice-index;
+                selected(v) => { KeybindsState.draft-param = v == "none" ? "" : v; }
+            }
+        }
+
+        if KeybindsState.param-input == ParamInput.text: HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "Value";
+            }
+
+            LineEdit {
+                horizontal-stretch: 1;
+                text <=> KeybindsState.draft-param;
+                placeholder-text: KeybindsState.param-hint;
+            }
+        }
+
+        // ── behavior ──
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "Options";
+            }
+
+            CheckBox {
+                text: "Fire once (no repeat)";
+                checked <=> KeybindsState.draft-no-repeat;
+            }
+
+            CheckBox {
+                text: "Allow when locked";
+                checked <=> KeybindsState.draft-locked;
+            }
+
+            CheckBox {
+                text: "Allow when shortcuts are inhibited";
+                checked <=> KeybindsState.draft-inhibited;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "";
+            }
+
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { KeybindsState.advanced-open = !KeybindsState.advanced-open; }
+
+                Text {
+                    text: (KeybindsState.advanced-open ? "▾" : "▸") + " Advanced";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+
+        if KeybindsState.advanced-open: HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "Only in submap";
+            }
+
+            LineEdit {
+                horizontal-stretch: 1;
+                text <=> KeybindsState.draft-scope;
+                placeholder-text: "submap name; empty = always active";
+            }
+        }
+
+        if KeybindsState.advanced-open: HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "Then switch to";
+            }
+
+            LineEdit {
+                horizontal-stretch: 1;
+                text <=> KeybindsState.draft-submap;
+                placeholder-text: "submap name, or reset to leave; optional";
+            }
+        }
+
+        if KeybindsState.advanced-open: HorizontalLayout {
+            spacing: Theme.space-m;
+
+            FieldLabel {
+                text: "Cooldown (ms)";
+            }
+
+            LineEdit {
+                horizontal-stretch: 1;
+                input-type: number;
+                text <=> KeybindsState.draft-cooldown;
+                placeholder-text: "ignore repeats for this long, e.g. 150 for wheel binds; optional";
+            }
+        }
+
+        if KeybindsState.conflict-note != "": Text {
+            text: KeybindsState.conflict-note;
+            color: Theme.warning;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-m;
+            alignment: end;
+
+            ActionButton {
+                text: "Cancel";
+                clicked => {
+                    KeybindsState.recording = 0;
+                    KeybindsState.editor-open = false;
+                }
+            }
+
+            ActionButton {
+                text: "Save";
+                primary: true;
+                clicked => { KeybindsState.apply(); }
+            }
+        }
+    }
+}
+
+component BindRow inherits Rectangle {
+    in property <KeybindRow> bind;
+    in property <bool> selected;
+    min-height: 36px;
+    border-radius: Theme.radius-s;
+    background: root.selected ? Theme.accent-soft : ta.has-hover ? Theme.bg-2 : transparent;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { KeybindsState.edit(root.bind.index, root.bind.chord); }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-s;
+        padding-right: Theme.space-s;
+        spacing: Theme.space-m;
+
+        VerticalLayout {
+            min-width: 210px;
+            alignment: center;
+
+            Keycaps {
+                keys: KeybindsState.chord-keys(root.bind.chord);
+                dim: !root.bind.is-user;
+            }
+        }
+
+        Text {
+            text: root.bind.summary;
+            color: root.bind.is-user ? Theme.text-1 : Theme.text-2;
+            font-family: root.bind.is-command ? Theme.font-mono : "";
+            font-size: root.bind.is-command ? Theme.font-small : Theme.font-body;
+            wrap: word-wrap;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+
+        if root.bind.extras != "": Text {
+            text: root.bind.extras;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+        }
+
+        if root.bind.source != "": Text {
+            text: root.bind.source;
+            color: Theme.text-2;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+        }
+
+        // Fixed slot so the controls line up on every row.
+        Rectangle {
+            width: 36px;
+
+            if root.bind.is-user: ActionButton {
+                text: root.bind.shadowing ? "↺" : "×";
+                clicked => { KeybindsState.remove(root.bind.index); }
+            }
+        }
+    }
+}
+
+export component KeybindsPage inherits Rectangle {
+    property <bool> grabbing: KeybindsState.recording != 0;
+    changed grabbing => {
+        KeybindsState.inhibit-shortcuts(self.grabbing);
+    }
 
     VerticalLayout {
         padding: Theme.space-l;
-        spacing: Theme.space-l;
+        spacing: Theme.space-m;
         alignment: start;
 
         Text {
@@ -46,19 +785,32 @@ export component KeybindsPage inherits Rectangle {
             text: "Your keys override the compositor defaults while they exist; removing one restores the default. Changes apply when you save.";
             color: Theme.text-2;
             font-size: Theme.font-small;
-            wrap: TextWrap.word-wrap;
+            wrap: word-wrap;
         }
 
+        // ── toolbar ──
         HorizontalLayout {
             spacing: Theme.space-m;
 
             LineEdit {
-                min-width: 130px;
-                max-width: 260px;
+                min-width: 160px;
+                max-width: 280px;
                 horizontal-stretch: 1;
                 placeholder-text: "Search keybinds";
-                text <=> root.search;
-                edited(t) => { root.search-edited(t); }
+                text <=> KeybindsState.search;
+                edited(t) => { KeybindsState.search-edited(t); }
+            }
+
+            ActionButton {
+                text: KeybindsState.recording == 2 ? "Press keys…" : "Find by keys";
+                primary: KeybindsState.recording == 2;
+                clicked => { KeybindsState.recording = KeybindsState.recording == 2 ? 0 : 2; }
+            }
+
+            Segmented {
+                options: ["All", "Yours", "Defaults"];
+                selected <=> KeybindsState.filter;
+                changed => { KeybindsState.filter-changed(); }
             }
 
             Rectangle {
@@ -68,344 +820,121 @@ export component KeybindsPage inherits Rectangle {
             ActionButton {
                 text: "Add keybind";
                 primary: true;
-                clicked => { root.add(); }
+                clicked => { KeybindsState.add(); }
             }
         }
 
-        // ── add / edit card ─────────────────────────────────
-        if root.editor-open: VerticalLayout {
-            spacing: Theme.space-xs;
-
-            Text {
-                text: root.editing ? "Edit keybind" : "Add keybind";
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                font-weight: 700;
-            }
-
-            Rectangle {
-                background: Theme.bg-1;
-                border-radius: Theme.radius-m;
-
-                VerticalLayout {
-                    padding: Theme.space-m;
-                    spacing: Theme.space-s;
-
-                    HorizontalLayout {
-                        min-height: 32px;
-                        spacing: Theme.space-m;
-
-                        Text {
-                            text: "Chord";
-                            min-width: 130px;
-                            max-width: 260px;
-                            horizontal-stretch: 1;
-                            vertical-alignment: center;
-                        }
-
-                        if root.capturing: Rectangle {
-                            height: 32px;
-                            horizontal-stretch: 1;
-                            background: Theme.accent-soft;
-                            border-radius: Theme.radius-m;
-                            border-width: 1px;
-                            border-color: Theme.accent;
-
-                            HorizontalLayout {
-                                padding-left: Theme.space-m;
-                                alignment: start;
-
-                                Text {
-                                    text: "Listening — press the key combination…";
-                                    color: Theme.text-1;
-                                    font-size: Theme.font-small;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-
-                        if !root.capturing: LineEdit {
-                            min-width: 100px;
-                            horizontal-stretch: 1;
-                            text <=> root.draft-chord;
-                            placeholder-text: "Return";
-                        }
-
-                        CheckBox {
-                            text: "Mod+";
-                            checked: root.draft-use-mod;
-                            toggled => { root.draft-use-mod = self.checked; }
-                        }
-
-                        ActionButton {
-                            text: "Capture";
-                            clicked => { root.capturing = true; }
-                        }
-                    }
-
-                    HorizontalLayout {
-                        min-height: 32px;
-                        spacing: Theme.space-m;
-
-                        Text {
-                            text: "Action";
-                            min-width: 130px;
-                            max-width: 260px;
-                            horizontal-stretch: 1;
-                            vertical-alignment: center;
-                        }
-
-                        ComboBox {
-                            horizontal-stretch: 1;
-                            model: root.action-choices;
-                            current-index <=> root.draft-action;
-                        }
-                    }
-
-                    HorizontalLayout {
-                        min-height: 32px;
-                        spacing: Theme.space-m;
-
-                        Text {
-                            text: "Parameter";
-                            min-width: 130px;
-                            max-width: 260px;
-                            horizontal-stretch: 1;
-                            vertical-alignment: center;
-                        }
-
-                        LineEdit {
-                            horizontal-stretch: 1;
-                            text <=> root.draft-param;
-                            placeholder-text: "parameter, if the action takes one (e.g. kitty)";
-                        }
-                    }
-
-                    HorizontalLayout {
-                        min-height: 32px;
-                        spacing: Theme.space-m;
-
-                        Text {
-                            text: "Behavior";
-                            min-width: 130px;
-                            max-width: 260px;
-                            horizontal-stretch: 1;
-                            vertical-alignment: center;
-                        }
-
-                        CheckBox {
-                            text: "Fire once (no repeat)";
-                            checked: root.draft-no-repeat;
-                            toggled => { root.draft-no-repeat = self.checked; }
-                        }
-
-                        CheckBox {
-                            text: "Allow when locked";
-                            checked: root.draft-locked;
-                            toggled => { root.draft-locked = self.checked; }
-                        }
-                    }
-
-                    HorizontalLayout {
-                        min-height: 32px;
-                        spacing: Theme.space-m;
-
-                        Text {
-                            text: "Submap";
-                            min-width: 130px;
-                            max-width: 260px;
-                            horizontal-stretch: 1;
-                            vertical-alignment: center;
-                        }
-
-                        LineEdit {
-                            horizontal-stretch: 1;
-                            text <=> root.draft-submap;
-                            placeholder-text: "submap scope, optional";
-                        }
-                    }
-
-                    Text {
-                        text: root.conflict-note;
-                        color: Theme.warning;
-                        font-size: Theme.font-small;
-                        wrap: TextWrap.word-wrap;
-                        visible: root.conflict-note != "";
-                    }
-
-                    HorizontalLayout {
-                        spacing: Theme.space-m;
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                        }
-
-                        ActionButton {
-                            text: "Cancel";
-                            clicked => {
-                                root.capturing = false;
-                                root.editor-open = false;
-                            }
-                        }
-
-                        ActionButton {
-                            text: "Apply";
-                            primary: true;
-                            clicked => { root.apply(); }
-                        }
-                    }
-                }
-            }
+        if KeybindsState.list-note != "": Text {
+            text: KeybindsState.list-note;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
         }
 
-        // ── the list ────────────────────────────────────────
-        VerticalLayout {
-            spacing: Theme.space-xs;
+        // ── the list ──
+        Rectangle {
+            background: Theme.bg-1;
+            border-radius: Theme.radius-m;
 
-            Text {
-                text: "Your keybinds";
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                font-weight: 700;
-            }
+            VerticalLayout {
+                padding: Theme.space-m;
+                spacing: 2px;
 
-            Rectangle {
-                background: Theme.bg-1;
-                border-radius: Theme.radius-m;
+                if KeybindsState.editor-open && KeybindsState.editor-anchor == "": KeybindEditor { }
 
-                VerticalLayout {
-                    padding: Theme.space-m;
+                for row[i] in KeybindsState.rows: VerticalLayout {
                     spacing: 2px;
+                    padding-top: row.is-header && i > 0 ? Theme.space-m : 0;
 
-                    for row in rows: VerticalLayout {
-                        if row.is-header: VerticalLayout {
-                            Text {
-                                text: row.chord;
-                                color: Theme.text-2;
-                                font-size: Theme.font-small;
-                                font-weight: 700;
-                            }
-                        }
-
-                        if !row.is-header: HorizontalLayout {
-                            min-height: 32px;
-                            spacing: Theme.space-m;
-
-                            Text {
-                                text: row.chord;
-                                width: 170px;
-                                color: row.is-user ? Theme.text-1 : Theme.text-2;
-                                font-family: Theme.font-mono;
-                                font-size: Theme.font-small;
-                                vertical-alignment: center;
-                                wrap: TextWrap.word-wrap;
-                            }
-
-                            Text {
-                                text: row.summary;
-                                color: row.is-user ? Theme.text-1 : Theme.text-2;
-                                wrap: TextWrap.word-wrap;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                            }
-
-                            Text {
-                                text: row.extras;
-                                color: Theme.text-2;
-                                font-size: Theme.font-small;
-                                vertical-alignment: center;
-                                visible: row.extras != "";
-                            }
-
-                            Text {
-                                text: row.source;
-                                color: Theme.text-2;
-                                font-family: Theme.font-mono;
-                                font-size: Theme.font-small;
-                                vertical-alignment: center;
-                                visible: row.source != "";
-                            }
-
-                            if row.shadowing: ActionButton {
-                                text: "↺";
-                                clicked => { root.remove(row.index); }
-                            }
-
-                            if row.is-user: ActionButton {
-                                text: "×";
-                                clicked => { root.remove(row.index); }
-                            }
-
-                            if row.is-user: TouchArea {
-                                min-width: 64px;
-                                HorizontalLayout {
-                                    alignment: center;
-                                    Text {
-                                        text: "Edit";
-                                        color: Theme.text-2;
-                                        font-size: Theme.font-small;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                clicked => { root.edit(row.index); }
-                            }
-                        }
+                    if row.is-header: CardHeader {
+                        title: row.chord;
+                        caption: row.count;
+                        expanded: row.expanded;
+                        toggle => { KeybindsState.toggle-group(row.chord); }
                     }
 
-                    Text {
-                        text: "No keybinds match.";
-                        color: Theme.text-2;
-                        font-size: Theme.font-small;
-                        visible: rows.length == 0;
+                    if !row.is-header: BindRow {
+                        bind: row;
+                        selected: KeybindsState.editor-open && KeybindsState.editor-anchor == row.chord;
                     }
+
+                    if !row.is-header && KeybindsState.editor-open && KeybindsState.editor-anchor == row.chord: KeybindEditor { }
+                }
+
+                if KeybindsState.rows.length == 0: Text {
+                    text: "No keybinds match.";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
                 }
             }
         }
     }
 
-    // ── chord capture: a transparent page-wide key grab ───
-    // No dimmed overlay: the chord row shows the listening state, and
-    // Esc or a click anywhere on the page cancels.
-    if root.capturing: FocusScope {
+    // ── key grab while recording ──
+    // No dimmed overlay: the keys field or the search button shows the
+    // listening state; Esc, a click anywhere, or 5 s without a key cancels.
+    if KeybindsState.recording != 0: grab := FocusScope {
+        // Seconds since the last key event; any key resets it.
+        property <int> idle-seconds: 0;
         width: 100%;
         height: 100%;
         init => { self.focus(); }
 
+        Timer {
+            interval: 1s;
+            running: true;
+            triggered => {
+                grab.idle-seconds += 1;
+                if (grab.idle-seconds >= 5) {
+                    KeybindsState.recording = 0;
+                }
+            }
+        }
+
+        // The grab outlives the capture until the next frame; later events
+        // of the same press (releasing Shift after Shift+P) must not
+        // overwrite the chord.
         key-pressed(e) => {
-            // No local vars in handlers: each branch maps its key.
-            if (e.text == "\u{1b}") {
-                root.capturing = false;
-            } else if (e.text == "\u{7f}" || e.text == "\u{8}") {
-                root.draft-chord = "";
-                root.capturing = false;
-            } else if (e.text == "\u{d}" || e.text == "\u{a}") {
-                root.draft-chord = (e.modifiers.meta ? "Mod+" : "")
-                    + (e.modifiers.control ? "Ctrl+" : "")
-                    + (e.modifiers.alt ? "Alt+" : "")
-                    + (e.modifiers.shift ? "Shift+" : "")
-                    + "Return";
-                root.capturing = false;
-            } else if (e.text == "\u{9}") {
-                root.draft-chord = (e.modifiers.meta ? "Mod+" : "")
-                    + (e.modifiers.control ? "Ctrl+" : "")
-                    + (e.modifiers.alt ? "Alt+" : "")
-                    + (e.modifiers.shift ? "Shift+" : "")
-                    + "Tab";
-                root.capturing = false;
-            } else if (e.text != "") {
-                root.draft-chord = (e.modifiers.meta ? "Mod+" : "")
-                    + (e.modifiers.control ? "Ctrl+" : "")
-                    + (e.modifiers.alt ? "Alt+" : "")
-                    + (e.modifiers.shift ? "Shift+" : "")
-                    + e.text.to-uppercase();
-                root.capturing = false;
+            if (KeybindsState.recording == 0) {
+                return accept;
+            }
+            self.idle-seconds = 0;
+            // Plain Esc cancels; with a modifier it's part of the chord.
+            if (e.text == Key.Escape && !e.modifiers.meta && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.shift) {
+                KeybindsState.recording = 0;
+            } else if (e.text == Key.Backspace && KeybindsState.recording == 1) {
+                KeybindsState.draft-chord = "";
+                KeybindsState.recording = 0;
+            } else if (KeybindsState.key-chord(e.text, e.modifiers.meta, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, false) != "") {
+                root.captured(KeybindsState.key-chord(e.text, e.modifiers.meta, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, false));
+            }
+            accept
+        }
+
+        // A modifier released on its own is a modifier-only bind ("Mod").
+        key-released(e) => {
+            if (KeybindsState.recording == 0) {
+                return accept;
+            }
+            self.idle-seconds = 0;
+            if (KeybindsState.key-chord(e.text, e.modifiers.meta, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, true) != "") {
+                root.captured(KeybindsState.key-chord(e.text, e.modifiers.meta, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, true));
             }
             accept
         }
 
         TouchArea {
-            clicked => { root.capturing = false; }
+            clicked => { KeybindsState.recording = 0; }
         }
+    }
+
+    function captured(chord: string) {
+        if (KeybindsState.recording == 2) {
+            KeybindsState.search = chord;
+            KeybindsState.search-chord(chord);
+        } else {
+            KeybindsState.draft-chord = chord;
+        }
+        KeybindsState.recording = 0;
     }
 }

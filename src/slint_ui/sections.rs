@@ -25,7 +25,8 @@ pub(super) fn refresh_shown_page(app: &AppWindow, shell: &Shell) {
             let weak = app.as_weak();
             slint::Timer::single_shot(std::time::Duration::ZERO, move || {
                 if let Some(app) = weak.upgrade() {
-                    app.invoke_keybind_search_edited(app.get_keybind_search());
+                    let state = app.global::<KeybindsState>();
+                    state.invoke_search_edited(state.get_search());
                 }
             });
         }
@@ -329,12 +330,12 @@ fn other_card(
 pub(super) fn install_navigation(
     app: &AppWindow,
     shell: &Rc<RefCell<Shell>>,
-    keybind_binds: &Rc<RefCell<Vec<keybinds::SourcedBind>>>,
+    keybind_view: &Rc<RefCell<super::page_keybinds::KeybindView>>,
     kb_actions: &Arc<Mutex<Vec<keybinds::LiveAction>>>,
 ) {
     {
         let weak = app.as_weak();
-        let keybind_binds = Rc::clone(keybind_binds);
+        let keybind_view = Rc::clone(keybind_view);
         let kb_actions = Arc::clone(kb_actions);
         let shell = Rc::clone(shell);
         app.on_section_selected(move |name| {
@@ -383,8 +384,7 @@ pub(super) fn install_navigation(
                     &app,
                     &shell,
                     &kb_actions,
-                    &app.get_keybind_search(),
-                    &keybind_binds,
+                    &keybind_view,
                 );
                 return;
             }
