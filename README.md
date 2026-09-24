@@ -86,7 +86,7 @@ Installed another way, the app tells you the command for it instead:
 
 ```sh
 # cargo (pre-releases need the version)
-cargo install umbriel-config@0.3.0-beta.1
+cargo install umbriel-config@0.3.0-beta.2
 # a clone of this repository
 git pull && cargo build --release
 ```
@@ -109,7 +109,7 @@ source $HOME/.cargo/env
 Then build and install umbriel-config, either from crates.io:
 
 ```sh
-cargo install umbriel-config@0.3.0-beta.1
+cargo install umbriel-config@0.3.0-beta.2
 ```
 
 While every release is a prerelease, the version must be named since cargo's

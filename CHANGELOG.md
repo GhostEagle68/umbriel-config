@@ -1,6 +1,22 @@
 # Changelog
 
 
+## [0.3.0-beta.2] — 2026-09-23
+
+### 🐛 Fixed
+
+#### Settings
+
+- Build setting pages from umbriel's docs
+  umbriel now installs a short starter config instead of its full
+  reference, so most setting pages showed their options as read-only
+  "other" rows. The pages are now built from umbriel's user docs, with
+  their ranges and value lists, plus anything only the installed config
+  has. A copy of the docs ships with the app; newer docs download at most
+  once a day when update checks are on, or right away with Sync schema.
+
+
+
 ## [0.3.0-beta.1] — 2026-09-23
 
 ### Highlights
