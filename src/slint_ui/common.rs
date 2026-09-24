@@ -55,14 +55,13 @@ pub(super) fn chain_path_sets(shell: &Shell) -> Vec<BTreeSet<String>> {
     sets
 }
 
-/// Effective home of a dotted path: main wins over includes, earlier
-/// includes win over later (merge order).
+/// Effective home of a dotted path: the last document in chain order
+/// that sets it. Umbriel applies includes in list order and the main
+/// file last, and "values are replaced by the last file that sets
+/// them" (docs/user/configuration.md), so main wins, then later
+/// includes over earlier ones.
 pub(super) fn entry_home(sets: &[BTreeSet<String>], dotted: &str) -> Option<usize> {
-    let main = sets.len() - 1;
-    if sets[main].contains(dotted) {
-        return Some(main);
-    }
-    sets.iter().position(|set| set.contains(dotted))
+    sets.iter().rposition(|set| set.contains(dotted))
 }
 
 /// Sidebar file labels: includes in chain order, main last (chain indexing
@@ -328,6 +327,30 @@ pub(super) fn github_latest_commit(url: &str) -> Option<(String, String, String)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn key_set(keys: &[&str]) -> BTreeSet<String> {
+        keys.iter().map(|key| (*key).to_owned()).collect()
+    }
+
+    #[test]
+    fn entry_home_is_the_last_file_that_sets_the_key() {
+        // Chain order: include a, include b, main.
+        let sets = [key_set(&["x", "y"]), key_set(&["x"]), key_set(&["z"])];
+        assert_eq!(
+            entry_home(&sets, "x"),
+            Some(1),
+            "later include beats earlier"
+        );
+        assert_eq!(entry_home(&sets, "y"), Some(0));
+        assert_eq!(entry_home(&sets, "z"), Some(2));
+        let everywhere = [key_set(&["x"]), key_set(&["x"]), key_set(&["x"])];
+        assert_eq!(
+            entry_home(&everywhere, "x"),
+            Some(2),
+            "main beats every include"
+        );
+        assert_eq!(entry_home(&sets, "missing"), None);
+    }
 
     #[test]
     fn diff_against_saved_includes_deletions() {
