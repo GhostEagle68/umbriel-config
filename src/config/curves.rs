@@ -428,7 +428,23 @@ fn spring_position(damping: f64, stiffness: f64, seconds: f64) -> (f64, f64) {
 
 /// Umbriel's `springDurationMs`: when the unit step's remaining energy
 /// drops under 1e-4, found by doubling then bisecting; 1..=10000 ms.
+/// Cached for the last spring asked about, as umbriel does: `ease`
+/// needs it on every preview frame and it never changes for a spring.
 pub fn spring_duration_ms(damping: f64, stiffness: f64) -> u32 {
+    thread_local! {
+        static LAST: std::cell::Cell<Option<((f64, f64), u32)>> = const { std::cell::Cell::new(None) };
+    }
+    if let Some((spring, ms)) = LAST.get()
+        && spring == (damping, stiffness)
+    {
+        return ms;
+    }
+    let ms = solve_spring_duration_ms(damping, stiffness);
+    LAST.set(Some(((damping, stiffness), ms)));
+    ms
+}
+
+fn solve_spring_duration_ms(damping: f64, stiffness: f64) -> u32 {
     const MAX_SECONDS: f64 = 10.0;
     const EPSILON: f64 = 1e-4;
     let stiffness = stiffness.max(1e-4);
