@@ -192,52 +192,37 @@ fn run_worker(cmd_rx: mpsc::Receiver<PreviewCommand>, evt_tx: mpsc::Sender<Previ
         let (mut target, mut source, mut render) = (None, None, None);
         for cmd in std::iter::once(first).chain(std::iter::from_fn(|| cmd_rx.try_recv().ok())) {
             match cmd {
-                cmd @ PreviewCommand::SetTarget(_) => target = Some(cmd),
-                cmd @ PreviewCommand::SetSource(_) => source = Some(cmd),
-                cmd @ PreviewCommand::Render { .. } => render = Some(cmd),
+                PreviewCommand::SetTarget(t) => target = Some(t),
+                PreviewCommand::SetSource(s) => source = Some(s),
+                PreviewCommand::Render {
+                    linear,
+                    eased,
+                    direction,
+                } => render = Some((linear, eased, direction)),
             }
         }
-        for cmd in [target, source, render].into_iter().flatten() {
-            apply(&mut state, &evt_tx, cmd);
-        }
-    }
-}
-
-fn apply(state: &mut PreviewState, evt_tx: &mpsc::Sender<PreviewEvent>, cmd: PreviewCommand) {
-    match cmd {
-        PreviewCommand::SetSource(source) => match state.compile(&source) {
-            Ok(()) => {
-                let _ = evt_tx.send(PreviewEvent::Compiled(None));
-                // Re-render at the last scrub position so typing and
-                // builder changes update the image without a scrub.
-                let (linear, eased, direction) = state.last_position();
-                match state.render(linear, eased, direction) {
-                    Ok((w, h, pixels)) => {
-                        let _ = evt_tx.send(PreviewEvent::Frame(w, h, pixels));
-                    }
-                    Err(err) => {
-                        let _ = evt_tx.send(PreviewEvent::Compiled(Some(err)));
-                    }
-                }
-            }
-            Err(err) => {
-                let _ = evt_tx.send(PreviewEvent::Compiled(Some(err)));
-            }
-        },
-        PreviewCommand::SetTarget(target) => {
+        // Swap frames and compile without drawing, then draw once: the
+        // burst's newest position, or the last one if it only changed
+        // the target or the source.
+        let changed = target.is_some() || source.is_some();
+        if let Some(target) = target {
             state.set_target(target);
-            let (linear, eased, direction) = state.last_position();
-            if let Ok((w, h, pixels)) = state.render(linear, eased, direction) {
-                let _ = evt_tx.send(PreviewEvent::Frame(w, h, pixels));
-            }
         }
-        PreviewCommand::Render {
-            linear,
-            eased,
-            direction,
-        } => {
-            if let Ok((w, h, pixels)) = state.render(linear, eased, direction) {
-                let _ = evt_tx.send(PreviewEvent::Frame(w, h, pixels));
+        if let Some(source) = source {
+            let result = state.compile(&source);
+            let _ = evt_tx.send(PreviewEvent::Compiled(result.err()));
+        }
+        let position = render.or_else(|| changed.then(|| state.last_position()));
+        if let Some((linear, eased, direction)) = position {
+            match state.render(linear, eased, direction) {
+                Ok((w, h, pixels)) => {
+                    let _ = evt_tx.send(PreviewEvent::Frame(w, h, pixels));
+                }
+                // Nothing compiled yet is not an error worth showing.
+                Err(err) if state.has_program() => {
+                    let _ = evt_tx.send(PreviewEvent::Compiled(Some(err)));
+                }
+                Err(_) => {}
             }
         }
     }
@@ -396,6 +381,10 @@ impl PreviewState {
             width,
             height,
         })
+    }
+
+    fn has_program(&self) -> bool {
+        self.program.is_some()
     }
 
     fn last_position(&self) -> (f32, f32, f32) {
