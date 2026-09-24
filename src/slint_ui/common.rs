@@ -154,10 +154,10 @@ pub(super) fn reset_key(shell: &mut Shell, key: &str) {
             doc.set_leaf_text(key, &repr);
         }
         None => {
-            // remove_leaf also drops the tables the edit created, so a
-            // reverted new key leaves the file exactly as it was.
+            // Drops the tables the edit created (keeping any already on
+            // disk), so a reverted new key leaves the file as it was.
             let parts: Vec<&str> = key.split('.').collect();
-            doc.remove_leaf(&parts);
+            doc.revert_leaf(&parts);
         }
     }
 }

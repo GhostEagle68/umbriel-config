@@ -661,14 +661,29 @@ impl ConfigDocument {
         let Some(table) = self.rule_table_mut(name, index) else {
             return false;
         };
-        remove_dotted(table, &parts)
+        remove_dotted(table, &parts, &|_| false)
     }
 
     /// Remove one leaf key by path (`["animation", "windows_in",
     /// "shader"]`), pruning parents left empty; returns whether anything
     /// was removed.
     pub fn remove_leaf(&mut self, path: &[&str]) -> bool {
-        remove_dotted(self.doc.as_table_mut(), path)
+        remove_dotted(self.doc.as_table_mut(), path, &|_| false)
+    }
+
+    /// Undo a leaf the user added: remove it and prune only the parent
+    /// tables that don't exist in the file as loaded, so a table that
+    /// was already there (even empty, like a bare `[animation]`) stays
+    /// and the text returns to what's on disk.
+    pub fn revert_leaf(&mut self, path: &[&str]) -> bool {
+        let original: Option<DocumentMut> = self.original.parse().ok();
+        let on_disk = |prefix: &[&str]| {
+            original
+                .as_ref()
+                .and_then(|doc| Self::item_at(doc, prefix))
+                .is_some()
+        };
+        remove_dotted(self.doc.as_table_mut(), path, &on_disk)
     }
 
     /// All `[keybinds]` entries in file order. Plain string actions have
@@ -749,24 +764,29 @@ impl ConfigDocument {
 
 /// Remove `parts` (dotted) from `table`, pruning parent tables that
 /// become empty — unsetting a rule field leaves no litter behind.
-fn remove_dotted(table: &mut Table, parts: &[&str]) -> bool {
-    let Some((first, rest)) = parts.split_first() else {
-        return false;
-    };
-    if rest.is_empty() {
-        return table.remove(first).is_some();
+/// Remove the leaf at `parts`, pruning parent tables it leaves empty
+/// unless `keep` says to (given the parent's full path).
+fn remove_dotted(table: &mut Table, parts: &[&str], keep: &dyn Fn(&[&str]) -> bool) -> bool {
+    fn walk(
+        table: &mut Table,
+        parts: &[&str],
+        depth: usize,
+        keep: &dyn Fn(&[&str]) -> bool,
+    ) -> bool {
+        let first = parts[depth];
+        if depth + 1 == parts.len() {
+            return table.remove(first).is_some();
+        }
+        let Some(child) = table.get_mut(first).and_then(Item::as_table_mut) else {
+            return false;
+        };
+        let removed = walk(child, parts, depth + 1, keep);
+        if removed && child.is_empty() && !keep(&parts[..=depth]) {
+            table.remove(first);
+        }
+        removed
     }
-    let Some(child) = table.get_mut(first) else {
-        return false;
-    };
-    let Some(child) = child.as_table_mut() else {
-        return false;
-    };
-    let removed = remove_dotted(child, rest);
-    if removed && child.is_empty() {
-        table.remove(first);
-    }
-    removed
+    !parts.is_empty() && walk(table, parts, 0, keep)
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -1114,6 +1134,24 @@ curve = \"easeout\"
             .unwrap();
         assert!(!clean.is_modified());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reverting_a_new_key_keeps_tables_already_on_disk() {
+        // A bare `[animation]` header on disk must survive the revert,
+        // or the file never stops counting as modified.
+        let text = "[general]\nxwayland = true\n\n[animation]\n";
+        let path = ["animation", "layers", "shader"];
+        let mut doc = ConfigDocument::from_str(text).unwrap();
+        doc.set_string(&path, "shaders/x.glsl");
+        assert!(doc.revert_leaf(&path));
+        assert_eq!(doc.text(), text);
+        assert!(!doc.is_modified());
+        // remove_leaf still prunes everything left empty.
+        let mut pruned = ConfigDocument::from_str(text).unwrap();
+        pruned.set_string(&path, "shaders/x.glsl");
+        pruned.remove_leaf(&path);
+        assert!(!pruned.text().contains("[animation]"));
     }
 
     #[test]
