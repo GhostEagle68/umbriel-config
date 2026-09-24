@@ -1,5 +1,6 @@
-//! Runtime schema assembly: derive editable entries from Umbriel's packaged
-//! default config so the GUI covers new keys without an app release. Sparse
+//! Runtime schema assembly: derive editable entries from umbriel's user docs
+//! and its packaged default config so the GUI covers new keys without an
+//! app release. Sparse
 //! maintainer refinements live in [`OVERLAY`]; a missing refinement degrades
 //! a key to its derived treatment, never loses it.
 //! Commented-out keys are mined from the raw text; their values are the
@@ -261,13 +262,81 @@ pub struct Overlay {
     pub labels: &'static [(&'static str, &'static str)],
     /// Keys whose changes require a compositor restart.
     pub restart: &'static [&'static str],
+    /// Slider bounds for numbers umbriel's docs leave unbounded, taken
+    /// from umbriel's last full example config. The docs win when they
+    /// give a range.
+    pub ranges: &'static [(&'static str, f64, f64)],
+    /// Vocabularies the docs give only in prose, same source and rule.
+    pub choices: &'static [(&'static str, &'static [&'static str])],
 }
 
 pub const OVERLAY: Overlay = Overlay {
     skip_sections: &["include", "keybinds"],
     labels: &[],
     restart: &["general.xwayland"],
+    ranges: &[
+        ("appearance.border_width", 0.0, 100.0),
+        ("appearance.outer_border_width", 0.0, 100.0),
+        ("appearance.corner_radius", 0.0, 100.0),
+        ("input.mouse.sensitivity", -1.0, 1.0),
+        // The docs give this one in prose: "accepts 1 to 1000".
+        ("input.mouse.scroll_wheel_step", 1.0, 1000.0),
+        ("layout.gap", 0.0, 500.0),
+        ("layout.struts.left", -65535.0, 65535.0),
+        ("layout.struts.right", -65535.0, 65535.0),
+        ("layout.struts.top", -65535.0, 65535.0),
+        ("layout.struts.bottom", -65535.0, 65535.0),
+        ("layout.master.default_width_fraction", 0.1, 0.9),
+        ("animation.duration_ms", 1.0, 10000.0),
+        ("animation.windows_in.scale", 0.1, 1.0),
+        ("animation.windows_out.scale", 0.1, 1.0),
+        ("animation.scratchpad.dim", 0.0, 1.0),
+        ("animation.scratchpad.scale", 0.0, 1.0),
+        ("animation.dim_unfocused.dim", 0.0, 1.0),
+        ("overview.scroll_factor_horizontal", 0.1, 10.0),
+        ("overview.scroll_factor_vertical", 0.1, 10.0),
+    ],
+    choices: &[
+        ("input.window_drag_toggle", &["none", "floating", "pinned"]),
+        ("layout.mode", &["scrolling", "dwindle", "master"]),
+        (
+            "animation.windows_in.style",
+            &["popin", "zoom", "slide", "fade", "none"],
+        ),
+        (
+            "animation.windows_out.style",
+            &["fade", "slide", "popin", "zoom"],
+        ),
+    ],
 };
+
+/// Give unbounded numbers and free-text keys the overlay's range or
+/// vocabulary, where the overlay has one.
+fn apply_overlay_kinds(entries: &mut [Entry]) {
+    for entry in entries {
+        let dotted = entry.dotted();
+        let range = OVERLAY
+            .ranges
+            .iter()
+            .find(|(path, _, _)| *path == dotted)
+            .map(|(_, min, max)| (*min, *max));
+        let choices = OVERLAY
+            .choices
+            .iter()
+            .find(|(path, _)| *path == dotted)
+            .map(|(_, values)| values.iter().map(|value| (*value).to_owned()).collect());
+        match (&mut entry.kind, range, choices) {
+            (Kind::Integer { min, max }, Some((low, high)), _) if min.is_none() => {
+                (*min, *max) = (Some(low as i64), Some(high as i64));
+            }
+            (Kind::Float { min, max }, Some((low, high)), _) if min.is_none() => {
+                (*min, *max) = (Some(low), Some(high));
+            }
+            (Kind::Text, _, Some(values)) => entry.kind = Kind::Choice(values),
+            _ => {}
+        }
+    }
+}
 
 /// Add entries for commented-out keys (`# key = value`), including keys
 /// under fully commented sections (`# [environment]`). Active keys always
@@ -358,23 +427,30 @@ fn is_skipped(section: &str) -> bool {
 /// Classify a raw assignment value: bool, integer, float, or quoted string
 /// (a trailing comment after the closing quote is ignored).
 fn classify_value(raw: &str) -> Option<(Kind, Value)> {
-    if let Ok(value) = raw.parse::<bool>() {
+    // An unquoted value may carry a trailing comment: the range, if any.
+    let (bare, range) = match raw.split_once(" #") {
+        Some((value, comment)) if !raw.starts_with(['"', '\'']) => {
+            (value.trim(), mine_range(&format!("#{comment}")))
+        }
+        _ => (raw, None),
+    };
+    if let Ok(value) = bare.parse::<bool>() {
         return Some((Kind::Bool, Value::Bool(value)));
     }
-    if let Ok(value) = raw.parse::<i64>() {
+    if let Ok(value) = bare.parse::<i64>() {
         return Some((
             Kind::Integer {
-                min: None,
-                max: None,
+                min: range.as_ref().map(|r| r.0 as i64),
+                max: range.as_ref().map(|r| r.1 as i64),
             },
             Value::Integer(value),
         ));
     }
-    if let Ok(value) = raw.parse::<f64>() {
+    if let Ok(value) = bare.parse::<f64>() {
         return Some((
             Kind::Float {
-                min: None,
-                max: None,
+                min: range.as_ref().map(|r| r.0),
+                max: range.as_ref().map(|r| r.1),
             },
             Value::Float(value),
         ));
@@ -399,6 +475,284 @@ pub fn assemble(packaged: &str) -> Vec<Entry> {
     mine_comments(packaged, &mut entries);
     share_vocabularies(&mut entries);
     entries
+}
+
+/// The settings pages' entries: everything umbriel's docs describe, plus
+/// any key only the installed packaged config has (an option newer than
+/// the docs copy). The docs win for a key both have: the packaged file is
+/// a starter config, so its values aren't the defaults.
+pub fn combined(docs: &str, packaged: Option<&str>) -> Vec<Entry> {
+    let mut entries = assemble_docs(docs);
+    let known = key_set(&entries);
+    if let Some(packaged) = packaged {
+        entries.extend(
+            assemble(packaged)
+                .into_iter()
+                .filter(|entry| !known.contains(&entry.dotted())),
+        );
+    }
+    entries
+}
+
+/// Derive entries from umbriel's user docs (every page, concatenated).
+/// Each ```toml block is read like a packaged config, with the "range or
+/// values" column of the key tables under it folded in as trailing
+/// comments, so ranges and vocabularies are mined the same way. The first
+/// block that mentions a key wins: a page's settings block comes before
+/// its examples. Loose fragments (no section) and example sections whose
+/// names aren't plain keys (`[output.DP-1]`) are not settings.
+pub fn assemble_docs(docs: &str) -> Vec<Entry> {
+    let mut entries: Vec<Entry> = Vec::new();
+    let mut known: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for block in docs_blocks(docs) {
+        let mut found = Vec::new();
+        walk_block(&block, &mut found);
+        for entry in found {
+            let plain = !entry.section.is_empty()
+                && entry
+                    .section
+                    .split('.')
+                    .all(|part| is_bare_key(part) && !part.chars().any(|c| c.is_ascii_uppercase()));
+            // Curve registries hold user-named entries, not settings.
+            let registry =
+                ["animation.beziers", "animation.springs"].contains(&entry.section.as_str());
+            if plain && !registry && known.insert(entry.dotted()) {
+                entries.push(entry);
+            }
+        }
+    }
+    apply_overlay_kinds(&mut entries);
+    fill_documented_siblings(&mut entries);
+    share_vocabularies(&mut entries);
+    entries
+}
+
+/// Two rules the docs state in prose rather than in a block: every
+/// animation event also accepts `enabled`, `duration_ms` and `curve`
+/// (the `[animation]` defaults), and hot corners come in four sections
+/// shaped like the documented `top_left`.
+fn fill_documented_siblings(entries: &mut Vec<Entry>) {
+    let mut added: Vec<Entry> = Vec::new();
+    let has = |entries: &[Entry], added: &[Entry], dotted: &str| {
+        entries
+            .iter()
+            .chain(added)
+            .any(|entry| entry.dotted() == dotted)
+    };
+    let events: BTreeSet<String> = entries
+        .iter()
+        .filter(|entry| entry.path.len() == 3 && entry.path[0] == "animation")
+        .map(|entry| entry.path[1].clone())
+        .collect();
+    for event in &events {
+        for key in ["enabled", "duration_ms", "curve"] {
+            let Some(template) = entries
+                .iter()
+                .find(|entry| entry.dotted() == format!("animation.{key}"))
+                .cloned()
+            else {
+                continue;
+            };
+            let dotted = format!("animation.{event}.{key}");
+            match entries.iter().position(|entry| entry.dotted() == dotted) {
+                // Documented without bounds: the shared default's apply.
+                Some(index) if unbounded(&entries[index].kind) => {
+                    entries[index].kind = template.kind.clone();
+                }
+                Some(_) => {}
+                None if !has(entries, &added, &dotted) => {
+                    added.push(moved(&template, &["animation", event], key));
+                }
+                None => {}
+            }
+        }
+    }
+    let corner: Vec<Entry> = entries
+        .iter()
+        .filter(|entry| entry.section == "hot_corners.top_left")
+        .cloned()
+        .collect();
+    for name in ["top_right", "bottom_left", "bottom_right"] {
+        for template in &corner {
+            let key = template.path.last().cloned().unwrap_or_default();
+            if !has(entries, &added, &format!("hot_corners.{name}.{key}")) {
+                added.push(moved(template, &["hot_corners", name], &key));
+            }
+        }
+    }
+    entries.extend(added);
+}
+
+fn unbounded(kind: &Kind) -> bool {
+    matches!(
+        kind,
+        Kind::Integer { min: None, .. } | Kind::Float { min: None, .. }
+    )
+}
+
+/// `template` re-homed under `section` as `key`.
+fn moved(template: &Entry, section: &[&str], key: &str) -> Entry {
+    let mut path: Vec<String> = section.iter().map(|part| (*part).to_owned()).collect();
+    path.push(key.to_owned());
+    let dotted = path.join(".");
+    Entry {
+        label: overlay_label(&dotted, key),
+        restart: OVERLAY.restart.contains(&dotted.as_str()),
+        section: section.join("."),
+        path,
+        ..template.clone()
+    }
+}
+
+/// `assemble` without the vocabulary sharing, which `assemble_docs` runs
+/// once over every block instead.
+fn walk_block(text: &str, out: &mut Vec<Entry>) {
+    let Ok(doc) = text.parse::<DocumentMut>() else {
+        return;
+    };
+    walk_table(doc.as_table(), &mut Vec::new(), out);
+    mine_comments(text, out);
+}
+
+/// One ```toml block of the docs and the key hints of the tables after it.
+#[derive(Default)]
+struct DocBlock {
+    lines: Vec<String>,
+    hints: Vec<(String, String)>,
+}
+
+/// Every ```toml block in the docs, with the range/values hints of the
+/// tables that follow it (up to the next block or heading) appended as
+/// trailing comments on the keys that have none.
+fn docs_blocks(docs: &str) -> Vec<String> {
+    let mut blocks: Vec<DocBlock> = Vec::new();
+    let mut in_toml = false;
+    let mut in_other_fence = false;
+    // Whether tables still describe the last block (no heading since).
+    let mut open_block = false;
+    let mut table: Vec<Vec<String>> = Vec::new();
+    for line in docs.lines().chain([""]) {
+        let trimmed = line.trim();
+        if in_toml {
+            if trimmed.starts_with("```") {
+                in_toml = false;
+                open_block = true;
+            } else if let Some(block) = blocks.last_mut() {
+                block.lines.push(line.to_owned());
+            }
+            continue;
+        }
+        if in_other_fence {
+            in_other_fence = !trimmed.starts_with("```");
+            continue;
+        }
+        if trimmed.starts_with('|') {
+            table.push(
+                trimmed
+                    .trim_matches('|')
+                    .split('|')
+                    .map(|cell| cell.trim().to_owned())
+                    .collect(),
+            );
+            continue;
+        }
+        // Any other line ends a table.
+        if open_block && let Some(block) = blocks.last_mut() {
+            block.hints.extend(table_hints(&table));
+        }
+        table.clear();
+        if trimmed == "```toml" {
+            in_toml = true;
+            blocks.push(DocBlock::default());
+        } else if trimmed.starts_with("```") {
+            in_other_fence = true;
+        } else if trimmed.starts_with('#') {
+            open_block = false;
+        }
+    }
+    blocks
+        .into_iter()
+        .map(|block| {
+            block
+                .lines
+                .iter()
+                .map(|line| with_hint(line, &block.hints))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect()
+}
+
+/// `(key, hint)` rows of a markdown table with a Key column: its range or
+/// values column, else what its description says in a machine-readable way.
+fn table_hints(table: &[Vec<String>]) -> Vec<(String, String)> {
+    let Some(header) = table.first() else {
+        return Vec::new();
+    };
+    let lower: Vec<String> = header.iter().map(|cell| cell.to_lowercase()).collect();
+    let Some(key_col) = lower.iter().position(|cell| cell == "key") else {
+        return Vec::new();
+    };
+    let hint_col = lower
+        .iter()
+        .position(|cell| cell.contains("range") || cell.contains("value"));
+    let description_col = lower.iter().position(|cell| cell == "description");
+    table
+        .iter()
+        .skip(1)
+        .filter_map(|row| {
+            let key = row.get(key_col)?.trim_matches('`');
+            let hint = match hint_col {
+                Some(col) => row.get(col)?.replace('`', ""),
+                None => description_hint(row.get(description_col?)?)?,
+            };
+            (is_bare_key(key) && !hint.is_empty()).then(|| (key.to_owned(), hint))
+        })
+        .collect()
+}
+
+/// The machine-readable part of a description cell: a range ("Blur
+/// passes from 0 to 8." gives `0 to 8`) or the quoted values it lists
+/// (`Use "never", "always", or "on_overflow"` gives those three).
+fn description_hint(description: &str) -> Option<String> {
+    if let Some((_, rest)) = description.rsplit_once(" from ")
+        && let Some((min, max)) = rest.split_once(" to ")
+    {
+        // "0.1 to 1.0. The packaged…": the number is the first word, with
+        // the sentence's full stop or comma trimmed off.
+        let number = |text: &str| {
+            let word = text.split_whitespace().next()?;
+            let word = word.trim_end_matches(['.', ',', ';']);
+            word.parse::<f64>().ok().map(|_| word.to_owned())
+        };
+        if let (Some(min), Some(max)) = (number(min), number(max)) {
+            return Some(format!("{min} to {max}"));
+        }
+    }
+    let quoted: Vec<&str> = description
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|piece| piece.len() > 2 && piece.starts_with('"') && piece.ends_with('"'))
+        .collect();
+    (quoted.len() >= 2).then(|| quoted.join(", "))
+}
+
+/// `key = value` (or `# key = value`) with its table hint appended as a
+/// comment, unless the line already has one.
+fn with_hint(line: &str, hints: &[(String, String)]) -> String {
+    let body = line.trim_start().trim_start_matches('#').trim_start();
+    let Some((key, value)) = body.split_once('=') else {
+        return line.to_owned();
+    };
+    let (key, value) = (key.trim(), value.trim());
+    let Some((_, hint)) = hints.iter().find(|(name, _)| name == key) else {
+        return line.to_owned();
+    };
+    if value.contains(" #") {
+        return line.to_owned();
+    }
+    format!("{line}  # {hint}")
 }
 
 /// The same key often appears in several sections with the vocabulary
@@ -752,6 +1106,69 @@ pub fn uncovered(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assemble_docs_reads_blocks_with_their_tables() {
+        let docs = r#"# Input
+
+```toml
+[input.keyboard]
+repeat_rate = 25
+track_layout = "global"
+# sensitivity = 0.5
+```
+
+| Key | Range or values | Description |
+| --- | --- | --- |
+| `repeat_rate` | 0 to 1000 Hz | Key repeats per second. |
+| `track_layout` | `"global"` or `"window"` | Layout tracking. |
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `sensitivity` | `0.0` | Pointer speed from -1.0 to 1.0. |
+
+An example, not the default:
+
+```toml
+[input.keyboard]
+repeat_rate = 50
+
+[output.DP-1]
+scale = 1.5
+
+loose = true
+```
+"#;
+        let entries = assemble_docs(docs);
+        let find = |key: &str| entries.iter().find(|entry| entry.dotted() == key);
+        let rate = find("input.keyboard.repeat_rate").expect("repeat_rate");
+        assert_eq!(
+            rate.kind,
+            Kind::Integer {
+                min: Some(0),
+                max: Some(1000)
+            }
+        );
+        // The first block (the settings) wins over the example.
+        assert_eq!(rate.default, Some(Value::Integer(25)));
+        assert_eq!(rate.unit.as_deref(), Some("Hz"));
+        assert_eq!(
+            find("input.keyboard.track_layout").map(|entry| &entry.kind),
+            Some(&Kind::Choice(vec![
+                "global".to_owned(),
+                "window".to_owned()
+            ]))
+        );
+        assert_eq!(
+            find("input.keyboard.sensitivity").map(|entry| &entry.kind),
+            Some(&Kind::Float {
+                min: Some(-1.0),
+                max: Some(1.0)
+            })
+        );
+        assert!(find("output.DP-1.scale").is_none());
+        assert!(find("loose").is_none());
+    }
     use std::str::FromStr;
 
     const FIXTURE: &str = r##"[general]

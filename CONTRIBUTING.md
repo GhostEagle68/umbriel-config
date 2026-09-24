@@ -36,7 +36,12 @@ Two layers, strictly separated:
   `UMBRIEL_CONFIG` is harness-only; a user-pinned path (like `umbriel -c`) is
   a GUI feature, not part of env lookup.
 - Config key names, action names, and file paths must match umbriel's canonical
-  naming (see its `examples/config.toml`) — never invent variants.
+  naming (see its `docs/user/`) — never invent variants.
+- Setting pages are built from umbriel's user docs (`docs/user/*.md`): each
+  TOML block is read like a config, with the key tables' range or values
+  column folded in. `assets/umbriel-docs.md` is the copy that ships; run
+  `just refresh-umbriel-docs` before a release to update it. Ranges the docs
+  don't give live in `OVERLAY` in `src/config/schema.rs`.
 
 ## Code style
 
@@ -60,7 +65,7 @@ Two layers, strictly separated:
 
 - `cargo test`. Tests live in-file under `#[cfg(test)]`; fixtures are
   inline `const` strings next to the tests that use them, copied from
-  umbriel's `examples/config.toml` where a realistic file is needed.
+  umbriel's docs or `examples/config.toml` where a realistic file is needed.
 - Discovery tests isolate `XDG_*` / `UMBRIEL_CONFIG` env vars.
 - Format preservation is a tested guarantee: editing one value must leave all
   unrelated bytes of the file unchanged.

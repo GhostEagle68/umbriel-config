@@ -83,6 +83,17 @@ pub fn resolve(env: &Env) -> PathBuf {
     user_config_path(env)
 }
 
+/// The app's own state directory: `$XDG_STATE_HOME` (else
+/// `$HOME/.local/state`) + `umbriel-config`.
+pub fn state_dir(env: &Env) -> PathBuf {
+    let base = match (&env.xdg_state_home, &env.home) {
+        (Some(state_home), _) => PathBuf::from(state_home),
+        (None, Some(home)) => Path::new(home).join(".local/state"),
+        (None, None) => PathBuf::from(".local/state"),
+    };
+    base.join("umbriel-config")
+}
+
 /// `resolve` against the real process environment.
 pub fn resolve_process() -> PathBuf {
     resolve(&Env::from_process())

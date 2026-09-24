@@ -43,5 +43,30 @@ format-slint-check:
 # Full local gate: formatting, lint, tests
 verify: format-check lint test
 
+# Refresh the bundled copy of umbriel's user docs, which the settings pages
+# are built from (the app also fetches them itself when checking for updates)
+refresh-umbriel-docs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    api="https://api.github.com/repos/noctalia-dev/umbriel/contents/docs/user?ref=main"
+    out="assets/umbriel-docs.md"
+    tmp="$(mktemp)"
+    trap 'rm -f "$tmp"' EXIT
+    curl -fsSL -H "User-Agent: umbriel-config" "$api" |
+        jq -r '.[] | select(.type == "file" and (.name | endswith(".md"))) | "\(.name) \(.download_url)"' |
+        LC_ALL=C sort | while read -r name url; do
+            printf '<!-- umbriel-config page: %s -->\n' "$name" >> "$tmp"
+            curl -fsSL -H "User-Agent: umbriel-config" "$url" >> "$tmp"
+            printf '\n' >> "$tmp"
+        done
+    [[ -s "$tmp" ]] || { echo "error: no docs downloaded" >&2; exit 1; }
+    mv "$tmp" "$out"
+    trap - EXIT
+    # umbriel is MIT-licensed: its notice travels with the copy.
+    curl -fsSL -H "User-Agent: umbriel-config" \
+        "https://raw.githubusercontent.com/noctalia-dev/umbriel/main/LICENSE" \
+        -o assets/LICENSE-umbriel-docs.txt
+    echo "Wrote $out ($(grep -c '^<!-- umbriel-config page:' "$out") pages)"
+
 # Owner-only workflow recipes (git-ignored; absent on other clones/CI)
 import? 'local.just'

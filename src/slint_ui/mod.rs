@@ -29,7 +29,7 @@ use slint::{
 };
 use umbriel_config::config::{
     backups, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema,
-    settings as app_settings, shaders, state, validate,
+    settings as app_settings, shaders, state, umbriel_docs, validate,
 };
 
 use umbriel_config::{changelog, live, update};
@@ -107,6 +107,14 @@ struct Shell {
     shader_preview_timeline: umbriel_config::config::curves::Timeline,
 }
 
+/// The settings pages' entries: umbriel's docs (downloaded, else
+/// bundled) plus anything only the installed packaged config has.
+fn load_schema(env: &discovery::Env) -> Vec<schema::Entry> {
+    let packaged =
+        discovery::packaged_default(env).and_then(|path| std::fs::read_to_string(path).ok());
+    schema::combined(&umbriel_docs::load(env), packaged.as_deref())
+}
+
 impl Shell {
     fn load(path: &Path, env: &discovery::Env) -> Self {
         let (doc, healthy, load_error) = match ConfigDocument::load(path) {
@@ -124,10 +132,7 @@ impl Shell {
                 )
             }
         };
-        let schema = discovery::packaged_default(env)
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .map(|text| schema::assemble(&text))
-            .unwrap_or_default();
+        let schema = load_schema(env);
         // Startup drift: keys added since the last snapshot get NEW badges.
         // No snapshot yet (first run) flags nothing.
         let seen = state::load(&state::snapshot_path(env));
@@ -414,6 +419,10 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
 
     if settings.check_updates_on_start && update::should_auto_check(&env) {
         page_settings::start_update_check(app.as_weak(), Some(env.clone()));
+    }
+    // New umbriel options come from its docs; refresh them at most daily.
+    if settings.check_updates_on_start && umbriel_docs::is_stale(&env) {
+        page_settings::start_docs_download(app.as_weak(), env.clone());
     }
 
     app.run()

@@ -4,6 +4,19 @@
 use super::common::*;
 use super::*;
 
+/// Download umbriel's docs on a worker thread, then hand the result to
+/// `schema-source-updated` (an empty string means it worked).
+pub(super) fn start_docs_download(weak: slint::Weak<AppWindow>, env: discovery::Env) {
+    std::thread::spawn(move || {
+        let error = umbriel_docs::refresh(&env).err().unwrap_or_default();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(app) = weak.upgrade() {
+                app.invoke_schema_source_updated(error.into());
+            }
+        });
+    });
+}
+
 /// The toggle is read from the live property so a change made on the
 /// Settings page survives exit.
 pub(super) fn store_window_settings(app: &AppWindow, env: &discovery::Env) {
@@ -233,38 +246,53 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
         });
     }
     {
+        // Sync: download umbriel's newest docs, then rebuild from them.
         let weak = app.as_weak();
-        let shell = Rc::clone(shell);
         let env = env.clone();
         app.on_sync_schema_requested(move || {
             let Some(app) = weak.upgrade() else { return };
-            // Re-read the packaged default, diff old vs fresh, store the
-            // fresh snapshot; the added keys get badges.
-            let fresh = discovery::packaged_default(&env)
-                .and_then(|path| std::fs::read_to_string(path).ok())
-                .map(|text| schema::assemble(&text))
-                .unwrap_or_default();
+            app.set_sync_note("Downloading umbriel's docs…".into());
+            app.set_sync_clean(true);
+            start_docs_download(app.as_weak(), env.clone());
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(shell);
+        let env = env.clone();
+        app.on_schema_source_updated(move |error| {
+            let Some(app) = weak.upgrade() else { return };
+            // Rebuild from the docs, diff old vs fresh, store the fresh
+            // snapshot; the added keys get badges.
+            let fresh = super::load_schema(&env);
             let fresh_set = schema::key_set(&fresh);
             let mut shell = shell.borrow_mut();
             let drift = schema::diff(&schema::key_set(&shell.schema), &fresh_set);
             let _ = state::store(&state::snapshot_path(&env), &fresh_set);
-            shell.new_keys = drift.added.iter().cloned().collect();
-            let empty = fresh.is_empty();
-            let (note, clean) = if empty {
+            shell.new_keys.extend(drift.added.iter().cloned());
+            let (note, clean) = if !error.is_empty() {
                 (
-                    "No packaged default found; install umbriel and sync again.".to_owned(),
+                    format!("Couldn't download umbriel's docs ({error}); using the saved copy."),
                     false,
                 )
             } else if drift.is_empty() {
-                ("Schema is up to date.".to_owned(), true)
+                (
+                    "Settings are up to date with umbriel's docs.".to_owned(),
+                    true,
+                )
             } else {
-                (format!("Synced from umbriel: {}.", drift.summary()), false)
+                (
+                    format!("Synced from umbriel's docs: {}.", drift.summary()),
+                    false,
+                )
             };
             shell.schema = fresh;
             app.set_sync_note(note.clone().into());
             app.set_sync_clean(clean);
-            app.set_status(note.into());
-            app.set_schema_empty(empty);
+            if !drift.is_empty() {
+                app.set_status(note.into());
+            }
+            app.set_schema_empty(shell.schema.is_empty());
             app.set_sections(Rc::new(VecModel::from(super::sections::section_nav(&shell))).into());
             let section = app.get_current_section().to_string();
             super::sections::refill_page(&app, &shell, &section);

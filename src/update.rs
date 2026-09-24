@@ -262,16 +262,7 @@ fn stamp_path(env: &discovery::Env) -> PathBuf {
 }
 
 fn state_path(env: &discovery::Env, name: &str) -> PathBuf {
-    let base = if let Some(state_home) = env.xdg_state_home.as_deref() {
-        PathBuf::from(state_home)
-    } else {
-        let home = env
-            .home
-            .as_deref()
-            .unwrap_or_else(|| std::ffi::OsStr::new(""));
-        Path::new(home).join(".local/state")
-    };
-    base.join("umbriel-config").join(name)
+    discovery::state_dir(env).join(name)
 }
 
 /// The channels/in-app-update notice shows once, ever: the first launch

@@ -21,10 +21,12 @@ Zcode GLM 5.3 and Claude Opus 5.5 models are used to help plan, review code, fix
 
 ## Features
 
-- **Always in sync with your umbriel** — setting pages are assembled at
-  runtime from umbriel's own packaged default config, and the keybind action
-  list is mined live from your installed compositor. New umbriel options and
-  actions appear on their own; no umbriel-config update required.
+- **Always in sync with your umbriel** — setting pages are built at runtime
+  from umbriel's own docs (a copy ships with the app; newer docs download at
+  most once a day when update checks are on, or with **Sync schema**), and
+  the keybind action list is mined live from your installed compositor. New
+  umbriel options and actions appear on their own; no umbriel-config update
+  required.
 - **Keybinds editor** — one merged list of built-in defaults and your binds,
   chord capture (press the keys), searchable pickers for keys and actions,
   submap scopes, and conflict warnings with a safe replace.

@@ -117,6 +117,8 @@ export component AppWindow inherits Window {
     callback discard-all();
     callback save-requested();
     callback sync-schema-requested();
+    // A docs download finished; the text is its error, empty on success.
+    callback schema-source-updated(string);
     callback exit-requested();
     callback outputs-refresh();
     callback output-add(string);
@@ -279,8 +281,8 @@ export component AppWindow inherits Window {
     // First-run onboarding (plain install) + missing-umbriel banner.
     in-out property <bool> show-onboarding: false;
     in-out property <bool> umbriel-missing: false;
-    // No schema source (umbriel not detected): the section page becomes
-    // an empty-state pointer instead of a blank page.
+    // No settings could be read from umbriel's docs: the section page
+    // becomes an empty-state pointer instead of a blank page.
     in property <bool> schema-empty: false;
     callback onboarding-create();
 
@@ -688,7 +690,7 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                // No schema source: an honest empty state instead of a
+                // No settings: an honest empty state instead of a
                 // blank page (plain install after create / continue).
                 if root.page == Page.section && root.schema-empty: Rectangle {
                     VerticalLayout {
@@ -705,7 +707,7 @@ export component AppWindow inherits Window {
                         }
 
                         Text {
-                            text: "Umbriel isn't detected, so there are no setting pages. The packaged default config is the schema source.";
+                            text: "No settings could be read from umbriel's docs. Sync from Settings to download them again.";
                             color: Theme.text-2;
                             wrap: TextWrap.word-wrap;
                             horizontal-alignment: center;
@@ -728,7 +730,7 @@ export component AppWindow inherits Window {
                         }
 
                         Text {
-                            text: "Install umbriel, then click \"Sync schema\". Its settings will appear here.";
+                            text: "Click \"Sync schema\" in Settings to download umbriel's docs. Its settings will appear here.";
                             color: Theme.text-2;
                             font-size: Theme.font-small;
                             wrap: TextWrap.word-wrap;
@@ -793,7 +795,7 @@ export component AppWindow inherits Window {
                 }
 
                 Text {
-                    text: "Without umbriel there are no schema-driven setting pages (the packaged default is the schema source), no defaults shown, and validation is unavailable.";
+                    text: "Without umbriel, saved changes can't be validated. The setting pages still work: they come from umbriel's docs.";
                     color: Theme.text-2;
                     font-size: Theme.font-small;
                     wrap: TextWrap.word-wrap;
