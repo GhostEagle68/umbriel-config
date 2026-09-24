@@ -341,7 +341,10 @@ fn assign_event(shell: &mut Shell, event: &str, shader: Option<&Path>) {
 }
 
 /// The "Use for" checklist: every event, what it uses now, ticked when
-/// it already uses the shader being saved or is the one being previewed.
+/// it already uses the shader being saved. A new or forked shader also
+/// has the previewed event ticked; editing never pre-ticks an event the
+/// shader doesn't already have, so a plain edit-and-save can't quietly
+/// take one over.
 fn use_for_rows(shell: &Shell) -> Vec<ShaderUse> {
     let docs = chain_docs(shell);
     let paths = chain_paths(shell);
@@ -371,7 +374,7 @@ fn use_for_rows(shell: &Shell) -> Vec<ShaderUse> {
             ShaderUse {
                 label: prettify(event).into(),
                 current: current.into(),
-                checked: uses_this || index == shell.shader_preview_event,
+                checked: uses_this || (this.is_none() && index == shell.shader_preview_event),
             }
         })
         .collect()
