@@ -19,6 +19,16 @@ pub(super) fn refresh_shown_page(app: &AppWindow, shell: &Shell) {
         Page::Shaders => super::page_shaders::rebuild_shaders(app, shell),
         Page::Outputs => super::page_outputs::rebuild_outputs(app, shell),
         Page::Rules => super::page_rules::rebuild_rule_page(app, shell),
+        Page::Keybinds => {
+            // Its rows live outside the shell; rerun the page's own search
+            // handler once the caller's borrow of the shell has ended.
+            let weak = app.as_weak();
+            slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+                if let Some(app) = weak.upgrade() {
+                    app.invoke_keybind_search_edited(app.get_keybind_search());
+                }
+            });
+        }
         _ => refill_page(app, shell, app.get_current_section().as_str()),
     }
     app.set_dirty(shell.any_modified());

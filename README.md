@@ -30,7 +30,8 @@ Zcode GLM 5.3 and Claude Opus 5.5 models are used to help plan, review code, fix
   submap scopes, and conflict warnings with a safe replace.
 - **Understands split configs** — follows your `[include]` chain
 - **Changes you can audit** — every unsaved edit is one row: what changed,
-  before vs after, with a per-option reset. Discard anything before saving.
+  before vs after, with a per-option reset, including keybinds and rules.
+  Discard anything before saving.
 - **Backups you can restore** — every save snapshots your config into
   dated backup runs with a keep-limit, restoring first backs up the
   current files, and the restore browser shows a per-file diff before

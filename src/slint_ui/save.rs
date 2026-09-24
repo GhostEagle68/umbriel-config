@@ -21,7 +21,12 @@ pub(super) fn build_save_entries(shell: &Shell) -> Vec<SaveEntry> {
                 .iter()
                 .find(|entry| entry.path.join(".") == key.as_str())
                 .map(|entry| entry.label.clone())
-                .unwrap_or_else(|| key.clone());
+                .unwrap_or_else(|| match key.strip_prefix("keybinds.") {
+                    Some(chord) => format!("Keybind {chord}"),
+                    // A top-level leaf is a rule list, like window_rule.
+                    None if !key.contains('.') => prettify(&key),
+                    None => key.clone(),
+                });
             // The popup's ComboBox indexes the main-first destinations
             // model, not the chain: 0 = main, include i = i + 1.
             let dest_index = if i == main { 0 } else { i + 1 };
@@ -182,18 +187,9 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
             let Some(app) = weak.upgrade() else { return };
             {
                 let mut shell = shell.borrow_mut();
-                let main = shell.includes.docs.len();
-                let mut changed: Vec<String> = Vec::new();
-                for i in 0..=main {
-                    let saved = shell.saved.get(i);
-                    let current: BTreeMap<String, String> =
-                        doc_at(&shell, i).leaf_values().into_iter().collect();
-                    for (key, _) in diff_against_saved(&current, saved) {
-                        changed.push(key);
-                    }
-                }
-                for key in &changed {
-                    reset_key(&mut shell, key);
+                shell.doc.discard();
+                for inc in &mut shell.includes.docs {
+                    inc.doc.discard();
                 }
             }
             let shell = shell.borrow();

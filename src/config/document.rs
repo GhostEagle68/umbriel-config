@@ -353,15 +353,12 @@ impl ConfigDocument {
         paths
     }
 
-    /// Every leaf outside `[keybinds]` as `(dotted path, raw TOML text)`;
-    /// binds count as whole entries, so their table is skipped here.
-    /// Array-of-tables count as one leaf with a summary.
+    /// Every leaf as `(dotted path, raw TOML text)`: each bind is one
+    /// `keybinds.<chord>` leaf, and an array-of-tables (a rule list) is
+    /// one leaf holding all its entries, so editing any rule field shows.
     pub fn leaf_values(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         for (key, item) in self.doc.as_table().iter() {
-            if key == "keybinds" {
-                continue;
-            }
             Self::collect_leaves(key, item, &mut out);
         }
         out
@@ -376,7 +373,20 @@ impl ConfigDocument {
             }
             Item::Value(value) => out.push((path.to_owned(), value.to_string().trim().to_owned())),
             Item::ArrayOfTables(array) => {
-                out.push((path.to_owned(), format!("{{ {} sections }}", array.len())))
+                // One line per rule, comments and blank lines dropped.
+                let entries: Vec<String> = array
+                    .iter()
+                    .map(|table| {
+                        let text = table.to_string();
+                        let fields: Vec<&str> = text
+                            .lines()
+                            .map(str::trim)
+                            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                            .collect();
+                        format!("{{ {} }}", fields.join(", "))
+                    })
+                    .collect();
+                out.push((path.to_owned(), format!("[{}]", entries.join(", "))))
             }
             Item::None => {}
         }
@@ -671,12 +681,26 @@ impl ConfigDocument {
         remove_dotted(self.doc.as_table_mut(), path, &|_| false)
     }
 
-    /// Undo a leaf the user added: remove it and prune only the parent
-    /// tables that don't exist in the file as loaded, so a table that
-    /// was already there (even empty, like a bare `[animation]`) stays
-    /// and the text returns to what's on disk.
+    /// Put one leaf back as it is on disk. A leaf the file has gets its
+    /// saved item back (a value, or a whole rule list); a leaf the user
+    /// added is removed, pruning only the parent tables that don't exist
+    /// in the file as loaded, so a table that was already there (even
+    /// empty, like a bare `[animation]`) stays.
     pub fn revert_leaf(&mut self, path: &[&str]) -> bool {
         let original: Option<DocumentMut> = self.original.parse().ok();
+        let saved = original
+            .as_ref()
+            .and_then(|doc| Self::item_at(doc, path))
+            .cloned();
+        if let (Some(saved), Some((last, parents))) = (saved, path.split_last()) {
+            return match Self::table_at_or_create(&mut self.doc, parents) {
+                Some(table) => {
+                    table.insert(last, saved);
+                    true
+                }
+                None => false,
+            };
+        }
         let on_disk = |prefix: &[&str]| {
             original
                 .as_ref()
@@ -684,6 +708,13 @@ impl ConfigDocument {
                 .is_some()
         };
         remove_dotted(self.doc.as_table_mut(), path, &on_disk)
+    }
+
+    /// Drop every unsaved edit: back to the text as loaded or last saved.
+    pub fn discard(&mut self) {
+        if let Ok(doc) = self.original.parse() {
+            self.doc = doc;
+        }
     }
 
     /// All `[keybinds]` entries in file order. Plain string actions have
@@ -991,6 +1022,42 @@ curve = \"easeout\"
         // `[output."DP-3"]` in an existing file parses to the same table and
         // is never rewritten.
         assert!(doc.text().contains("[output.DP-3]"));
+    }
+
+    #[test]
+    fn keybind_and_rule_edits_show_in_leaf_values_and_revert_exactly() {
+        let text = "[keybinds]\n\"Super+Q\" = \"close\"  # quit\n\n[[window_rule]]\n# kitty\nmatch.app_id = \"kitty\"\nfloat = true\n\n[[window_rule]]\nmatch.app_id = \"foot\"\n";
+        let mut doc = ConfigDocument::from_str(text).unwrap();
+        let before = doc.leaf_values();
+        assert!(before.contains(&(
+            "keybinds.Super+Q".to_owned(),
+            "\"close\"  # quit".to_owned()
+        )));
+        assert!(before.contains(&(
+            "window_rule".to_owned(),
+            "[{ match.app_id = \"kitty\", float = true }, { match.app_id = \"foot\" }]".to_owned()
+        )));
+
+        doc.remove_keybind("Super+Q");
+        doc.rule_set_string("window_rule", 1, "match.app_id", "alacritty");
+        let after = doc.leaf_values();
+        assert!(!after.iter().any(|(key, _)| key == "keybinds.Super+Q"));
+        assert_ne!(before, after);
+
+        assert!(doc.revert_leaf(&["window_rule"]));
+        assert!(doc.revert_leaf(&["keybinds", "Super+Q"]));
+        assert_eq!(doc.leaf_values(), before);
+        assert!(doc.text().contains("# kitty"));
+    }
+
+    #[test]
+    fn discard_restores_the_saved_text() {
+        let mut doc = ConfigDocument::from_str(SAMPLE).unwrap();
+        doc.set_bool(&["general", "xwayland"], false);
+        doc.set_keybind("Super+T", "spawn", None, None, None);
+        doc.discard();
+        assert!(!doc.is_modified());
+        assert_eq!(doc.text(), SAMPLE);
     }
 
     #[test]

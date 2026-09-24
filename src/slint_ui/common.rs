@@ -139,27 +139,15 @@ pub(super) fn reset_key(shell: &mut Shell, key: &str) {
             None => return,
         },
     };
-    let saved_repr = shell
-        .saved
-        .get(home)
-        .and_then(|values| values.get(key))
-        .cloned();
     let doc = if home == main {
         &mut shell.doc
     } else {
         &mut shell.includes.docs[home].doc
     };
-    match saved_repr {
-        Some(repr) => {
-            doc.set_leaf_text(key, &repr);
-        }
-        None => {
-            // Drops the tables the edit created (keeping any already on
-            // disk), so a reverted new key leaves the file as it was.
-            let parts: Vec<&str> = key.split('.').collect();
-            doc.revert_leaf(&parts);
-        }
-    }
+    // The saved item comes back as it is on disk; a new key is dropped
+    // with the tables it created, so the file is left as it was.
+    let parts: Vec<&str> = key.split('.').collect();
+    doc.revert_leaf(&parts);
 }
 
 pub(super) fn file_name_of(path: &Path) -> String {
