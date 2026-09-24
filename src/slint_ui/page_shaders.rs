@@ -449,16 +449,35 @@ fn write_assignments(
                 }
             })
             .map_err(|err| format!("could not update {}: {err}", paths[*doc].display()))?;
-        // The file is the new baseline for "changed" dots and the popup.
-        let saved: ConfigDocument = doc_at(shell, *doc)
+        // The written key's new on-disk value is its saved baseline. Only
+        // that key: the rest of the baseline may hold values that aren't
+        // on disk yet (the guided setup's suggestions) and must stay.
+        let on_disk: ConfigDocument = doc_at(shell, *doc)
             .original_text()
             .parse()
             .map_err(|err| format!("{err}"))?;
         if let Some(slot) = shell.saved.get_mut(*doc) {
-            *slot = saved.leaf_values().into_iter().collect();
+            rebase_saved_key(slot, &key.join("."), &on_disk);
         }
     }
     Ok(())
+}
+
+/// Set one key's saved baseline to its value in `on_disk` (dropping it
+/// when the file no longer has it), leaving every other key alone.
+fn rebase_saved_key(saved: &mut BTreeMap<String, String>, dotted: &str, on_disk: &ConfigDocument) {
+    let repr = on_disk
+        .leaf_values()
+        .into_iter()
+        .find_map(|(path, repr)| (path == dotted).then_some(repr));
+    match repr {
+        Some(repr) => {
+            saved.insert(dotted.to_owned(), repr);
+        }
+        None => {
+            saved.remove(dotted);
+        }
+    }
 }
 
 /// "Windows out, Overview" for the events assigned `shader`.
@@ -1199,5 +1218,37 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             app.set_shader_preview_direction(flipped);
             render_preview_at(&app, &shell, app.get_shader_preview_progress());
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn rebasing_one_key_leaves_the_rest_of_the_baseline() {
+        // A guide suggestion sits in the baseline but not on disk.
+        let mut saved = BTreeMap::from([
+            ("general.xwayland".to_owned(), "true".to_owned()),
+            (
+                "animation.windows_out.shader".to_owned(),
+                "\"shaders/old.glsl\"".to_owned(),
+            ),
+        ]);
+        let on_disk =
+            ConfigDocument::from_str("[animation.windows_out]\nshader = \"shaders/new.glsl\"\n")
+                .unwrap();
+        rebase_saved_key(&mut saved, "animation.windows_out.shader", &on_disk);
+        assert_eq!(
+            saved["animation.windows_out.shader"],
+            "\"shaders/new.glsl\""
+        );
+        assert_eq!(saved["general.xwayland"], "true", "untouched");
+        // A key the file no longer has leaves the baseline.
+        let cleared = ConfigDocument::from_str("").unwrap();
+        rebase_saved_key(&mut saved, "animation.windows_out.shader", &cleared);
+        assert!(!saved.contains_key("animation.windows_out.shader"));
+        assert_eq!(saved.len(), 1);
     }
 }
