@@ -1338,6 +1338,85 @@ pub mod code_edit {
         (out, map(anchor), map(cursor))
     }
 
+    /// A code state: text plus selection (byte offsets).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Snapshot {
+        pub text: String,
+        pub anchor: usize,
+        pub cursor: usize,
+    }
+
+    /// Undo/redo for the code pane, kept here rather than in the text
+    /// box: the box's own history is byte positions that go stale (and
+    /// can crash) once the text is replaced from outside, which Tab,
+    /// Enter and every builder change do.
+    #[derive(Debug, Default)]
+    pub struct History {
+        undo: Vec<Snapshot>,
+        redo: Vec<Snapshot>,
+        current: Option<Snapshot>,
+        last_typed: Option<std::time::Instant>,
+    }
+
+    /// Keystrokes closer together than this undo as one step.
+    const GROUP: std::time::Duration = std::time::Duration::from_millis(800);
+
+    impl History {
+        /// Start over from `text` (the editor opened on new code).
+        pub fn reset(&mut self, text: &str) {
+            *self = History::default();
+            self.current = Some(Snapshot {
+                text: text.to_owned(),
+                anchor: 0,
+                cursor: 0,
+            });
+        }
+
+        /// The code changed to `next`. `typed` edits close together in
+        /// time merge into one undo step; other edits (Tab, Enter, a
+        /// builder change) are always their own step.
+        pub fn record(&mut self, next: Snapshot, typed: bool, now: std::time::Instant) {
+            let Some(current) = self.current.take() else {
+                self.current = Some(next);
+                return;
+            };
+            if current.text == next.text {
+                self.current = Some(next);
+                return;
+            }
+            let merge = typed
+                && self
+                    .last_typed
+                    .is_some_and(|last| now.duration_since(last) < GROUP);
+            if !merge {
+                self.undo.push(current);
+            }
+            self.redo.clear();
+            self.last_typed = typed.then_some(now);
+            self.current = Some(next);
+        }
+
+        /// Step back; the state to show, if there was one.
+        pub fn undo(&mut self) -> Option<Snapshot> {
+            let previous = self.undo.pop()?;
+            if let Some(current) = self.current.replace(previous.clone()) {
+                self.redo.push(current);
+            }
+            self.last_typed = None;
+            Some(previous)
+        }
+
+        /// Step forward again after an undo.
+        pub fn redo(&mut self) -> Option<Snapshot> {
+            let next = self.redo.pop()?;
+            if let Some(current) = self.current.replace(next.clone()) {
+                self.undo.push(current);
+            }
+            self.last_typed = None;
+            Some(next)
+        }
+    }
+
     fn line_start(text: &str, pos: usize) -> usize {
         text[..pos].rfind('\n').map_or(0, |i| i + 1)
     }
@@ -1857,6 +1936,38 @@ vec2 cell_id = floor(uv * 12.0);
         assert_eq!(apply("\tx", 1, 1, Key::Outdent), ("x".into(), 0, 0));
         // A caret inside the removed spaces lands at the line start.
         assert_eq!(apply("    x", 2, 2, Key::Outdent), ("x".into(), 0, 0));
+    }
+
+    #[test]
+    fn code_history_undoes_typing_in_groups_and_other_edits_singly() {
+        use code_edit::{History, Snapshot};
+        use std::time::{Duration, Instant};
+        let snap = |text: &str| Snapshot {
+            text: text.to_owned(),
+            anchor: text.len(),
+            cursor: text.len(),
+        };
+        let t0 = Instant::now();
+        let mut history = History::default();
+        history.reset("a");
+        // Quick typing merges into one step...
+        history.record(snap("ab"), true, t0);
+        history.record(snap("abc"), true, t0 + Duration::from_millis(100));
+        // ...an indent (or builder change) is a step of its own.
+        history.record(snap("    abc"), false, t0 + Duration::from_millis(200));
+        assert_eq!(history.undo().unwrap().text, "abc");
+        assert_eq!(history.undo().unwrap().text, "a");
+        assert!(history.undo().is_none(), "nothing before the opened code");
+        assert_eq!(history.redo().unwrap().text, "abc");
+        assert_eq!(history.redo().unwrap().text, "    abc");
+        assert!(history.redo().is_none());
+        // A new edit after an undo drops the redo branch.
+        history.undo();
+        history.record(snap("abcd"), true, t0 + Duration::from_secs(5));
+        assert!(history.redo().is_none());
+        // Typing after a pause starts a new step.
+        history.record(snap("abcde"), true, t0 + Duration::from_secs(10));
+        assert_eq!(history.undo().unwrap().text, "abcd");
     }
 
     #[test]

@@ -91,6 +91,8 @@ struct Shell {
     // Typing settles before the code is re-checked: lint, builder sync
     // and the preview compile run once per pause, not per keystroke.
     shader_code_settle: slint::Timer,
+    // The code pane's undo/redo (the text box's own is unreliable).
+    shader_code_history: shaders::code_edit::History,
     shader_editing: Option<PathBuf>,
     // The effect builder's step stack; mirrors the code pane whenever
     // the builder can read it (the window's builder-locked flag).
@@ -160,6 +162,7 @@ impl Shell {
             shader_editor_baseline: String::new(),
             shader_editor_baseline_name: String::new(),
             shader_code_settle: slint::Timer::default(),
+            shader_code_history: shaders::code_edit::History::default(),
             builder_steps: Vec::new(),
             shader_preview: None,
             shader_preview_failed: false,

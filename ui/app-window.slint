@@ -186,7 +186,9 @@ export component AppWindow inherits Window {
     // Close request; with unsaved code Rust raises confirm-close instead.
     callback shader-editor-close();
     in-out property <bool> shader-editor-confirm-close;
-    callback shader-editor-text-changed(string);
+    // (text, anchor, cursor, kind); see ShaderCodeEditor.edited.
+    callback shader-editor-text-changed(string, int, int, int);
+    callback shader-code-history(string) -> CodeEdit;
     // Editor keys (Tab/Shift+Tab/Enter) done in Rust; see ShaderCodeEditor.
     callback shader-code-key(string, int, int, string) -> CodeEdit;
     callback shader-step-add(string);
@@ -1381,7 +1383,10 @@ export component AppWindow inherits Window {
                                 vertical-stretch: 1;
                                 min-height: 200px;
                                 text <=> root.shader-editor-text;
-                                edited(text) => { root.shader-editor-text-changed(text); }
+                                edited(text, anchor, cursor, kind) => {
+                                    root.shader-editor-text-changed(text, anchor, cursor, kind);
+                                }
+                                history(kind) => { root.shader-code-history(kind) }
                                 code-key(text, anchor, cursor, kind) => {
                                     root.shader-code-key(text, anchor, cursor, kind)
                                 }

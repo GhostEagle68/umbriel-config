@@ -244,7 +244,23 @@ fn regen_builder(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
 /// stack, leaving the step cards alone: a slider mid-drag must not be
 /// recreated under the pointer.
 fn regen_code(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    regen_code_grouped(app, shell, false);
+}
+
+/// `regen_code`, recording the change as an undo step; `grouped` merges
+/// it with a change moments ago (a slider drag's many updates).
+fn regen_code_grouped(app: &AppWindow, shell: &Rc<RefCell<Shell>>, grouped: bool) {
     let code = shaders::builder::generate_stack(&shell.borrow().builder_steps);
+    let end = code.len();
+    shell.borrow_mut().shader_code_history.record(
+        shaders::code_edit::Snapshot {
+            text: code.clone(),
+            anchor: end,
+            cursor: end,
+        },
+        grouped,
+        std::time::Instant::now(),
+    );
     let preview_text = code.clone();
     app.set_shader_editor_text(code.into());
     // Stack changes regenerate the code, so the preview compiles the new
@@ -615,6 +631,11 @@ fn show_editor(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     // A settle left over from the last session would re-check old code.
     shell.borrow().shader_code_settle.stop();
     shell.borrow_mut().shader_editor_baseline = app.get_shader_editor_text().to_string();
+    // A fresh undo history per opened shader.
+    shell
+        .borrow_mut()
+        .shader_code_history
+        .reset(app.get_shader_editor_text().as_str());
     shell.borrow_mut().shader_editor_baseline_name = app.get_shader_editor_name().to_string();
     app.set_shader_editor_confirm_close(false);
     app.set_shader_editor_open(true);
@@ -1137,8 +1158,22 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(shell);
-        app.on_shader_editor_text_changed(move |_| {
+        app.on_shader_editor_text_changed(move |text, anchor, cursor, kind| {
             let Some(app) = weak.upgrade() else { return };
+            // Typing (0) and key edits (1) are undo steps; a restore (2)
+            // came from the history itself.
+            if kind != 2 {
+                let offset = |value: i32| usize::try_from(value).unwrap_or(0);
+                shell.borrow_mut().shader_code_history.record(
+                    shaders::code_edit::Snapshot {
+                        text: text.to_string(),
+                        anchor: offset(anchor),
+                        cursor: offset(cursor),
+                    },
+                    kind == 0,
+                    std::time::Instant::now(),
+                );
+            }
             // Restart the settle timer; the work runs once typing pauses.
             let weak = app.as_weak();
             let settle_shell = Rc::downgrade(&shell);
@@ -1151,6 +1186,30 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                     }
                 },
             );
+        });
+    }
+    {
+        let shell = Rc::clone(shell);
+        app.on_shader_code_history(move |kind| {
+            let mut shell = shell.borrow_mut();
+            let history = &mut shell.shader_code_history;
+            let step = if kind.as_str() == "redo" {
+                history.redo()
+            } else {
+                history.undo()
+            };
+            match step {
+                Some(snapshot) => CodeEdit {
+                    text: snapshot.text.into(),
+                    anchor: snapshot.anchor as i32,
+                    cursor: snapshot.cursor as i32,
+                },
+                None => CodeEdit {
+                    text: SharedString::new(),
+                    anchor: -1,
+                    cursor: -1,
+                },
+            }
         });
     }
     // Code-editor keys: pure text surgery, see shaders::code_edit.
@@ -1280,7 +1339,7 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             let Some(app) = weak.upgrade() else { return };
             settle_now(&app, &shell);
             if !app.get_shader_builder_locked() && set_step_param(&shell, index, param, value) {
-                regen_code(&app, &shell);
+                regen_code_grouped(&app, &shell, true);
             }
         });
     }

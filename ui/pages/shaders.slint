@@ -702,10 +702,17 @@ export component ShaderPreviewRow inherits Rectangle {
 // cursor offsets) so code keys work like an editor. Tab indents,
 // Shift+Tab outdents, Enter keeps the indentation; Rust does the text
 // surgery through `code-key` ("indent" / "outdent" / "newline").
+// Undo/redo come from Rust too (`history`): the TextInput's own history
+// goes stale once the text is replaced from outside, and replaying it
+// can crash.
 export component ShaderCodeEditor inherits Rectangle {
     in-out property <string> text <=> input.text;
-    callback edited(string);
+    // (text, anchor, cursor, kind): kind 0 = typed, 1 = a key edit
+    // (Tab/Enter), 2 = an undo/redo restore (not recorded again).
+    callback edited(string, int, int, int);
     callback code-key(string, int, int, string) -> CodeEdit;
+    // "undo" / "redo": the state to restore, or cursor -1 for none.
+    callback history(string) -> CodeEdit;
 
     background: Theme.bg-0;
     border-radius: Theme.radius-s;
@@ -719,7 +726,17 @@ export component ShaderCodeEditor inherits Rectangle {
         input.set-selection-offsets(result.anchor, result.cursor);
         // Read back from the input: reusing result.text after the
         // assignment trips a move bug in Slint 1.16's Rust codegen.
-        root.edited(input.text);
+        root.edited(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, 1);
+    }
+
+    function step-history(kind: string) {
+        let result = root.history(kind);
+        if (result.cursor < 0) {
+            return;
+        }
+        input.text = result.text;
+        input.set-selection-offsets(result.anchor, result.cursor);
+        root.edited(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, 2);
     }
 
     ContextMenuArea {
@@ -760,9 +777,22 @@ export component ShaderCodeEditor inherits Rectangle {
                 font-size: Theme.font-small;
                 color: Theme.text-1;
 
-                edited => { root.edited(self.text); }
+                edited => {
+                    root.edited(self.text, self.anchor-position-byte-offset, self.cursor-position-byte-offset, 0);
+                }
 
                 key-pressed(event) => {
+                    // Undo/redo before the TextInput's own (stale) history.
+                    if (event.modifiers.control && !event.modifiers.alt) {
+                        if ((event.text == "z" || event.text == "Z") && !event.modifiers.shift) {
+                            root.step-history("undo");
+                            return accept;
+                        }
+                        if (event.text == "z" || event.text == "Z" || event.text == "y" || event.text == "Y") {
+                            root.step-history("redo");
+                            return accept;
+                        }
+                    }
                     if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
                         return reject;
                     }
