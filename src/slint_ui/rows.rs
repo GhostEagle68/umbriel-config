@@ -292,8 +292,24 @@ pub(super) fn commit_value(kind: Option<&schema::Kind>, raw: &str) -> Result<Str
             | schema::Kind::Curve
             | schema::Kind::OpenChoice(_),
         ) => Ok(format!("{raw:?}")),
-        _ => Ok(raw.to_owned()),
+        // No schema kind (a key the packaged config doesn't document):
+        // input that is already a TOML value (a number, a bool, an array,
+        // a quoted string) goes in as typed; anything else is text and
+        // must be quoted, or `set_leaf_text` rejects it.
+        _ => Ok(if is_toml_value(raw) {
+            raw.to_owned()
+        } else {
+            format!("{raw:?}")
+        }),
     }
+}
+
+/// Whether `text` parses as a TOML value on its own.
+fn is_toml_value(text: &str) -> bool {
+    !text.is_empty()
+        && format!("v = {text}")
+            .parse::<toml_edit::DocumentMut>()
+            .is_ok()
 }
 
 /// Clean, editor-ready text for a schema key, read through the typed
@@ -616,6 +632,21 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_kind_quotes_text_but_keeps_toml_values() {
+        // Paths and words are text: quoted, so the write is accepted.
+        assert_eq!(
+            commit_value(None, "shaders/x.glsl").unwrap(),
+            "\"shaders/x.glsl\""
+        );
+        assert_eq!(commit_value(None, "DP-3").unwrap(), "\"DP-3\"");
+        assert_eq!(commit_value(None, "").unwrap(), "\"\"");
+        // Values that already are TOML go in unchanged.
+        for value in ["12", "0.5", "true", "[1, 2]", "\"quoted\""] {
+            assert_eq!(commit_value(None, value).unwrap(), value);
+        }
+    }
 
     #[test]
     fn integer_kind_rejects_non_numeric_input() {
