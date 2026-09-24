@@ -1,6 +1,6 @@
 [package]
 name = "umbriel-config"
-version = "0.3.0-beta.3"
+version = "0.3.0-beta.4"
 edition = "2024"
 rust-version = "1.88"
 description = "GUI configurator for the Umbriel Wayland compositor"
