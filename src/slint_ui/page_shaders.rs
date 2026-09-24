@@ -471,6 +471,11 @@ fn write_assignments(
     shell: &mut Shell,
     edits: &[(&'static str, usize, Option<String>)],
 ) -> Result<(), String> {
+    if edits.is_empty() {
+        return Ok(());
+    }
+    // Like every other write, take a backup run of the on-disk chain first.
+    super::page_backups::snapshot_before_save(shell, &discovery::Env::from_process(), "shader");
     let paths = chain_paths(shell);
     for (event, doc, value) in edits {
         let key = ["animation", event, "shader"];
