@@ -56,6 +56,21 @@ fn chain_files(shell: &Shell) -> Vec<(String, PathBuf)> {
     chain
 }
 
+/// The chain file a backed-up file belongs to: the path the backup
+/// recorded, else (older runs) the chain file with the same name.
+fn chain_target<'a>(
+    chain: &'a [(String, PathBuf)],
+    file: &backups::BackupFile,
+) -> Option<&'a PathBuf> {
+    chain
+        .iter()
+        .find(|(name, path)| match &file.path {
+            Some(recorded) => path == recorded,
+            None => *name == file.name,
+        })
+        .map(|(_, path)| path)
+}
+
 /// Unified diff (backup vs current content) for every file in a run.
 fn backup_diff(shell: &Shell, base: &Path, id: &str) -> String {
     let files = match backups::read_run(base, id) {
@@ -64,15 +79,13 @@ fn backup_diff(shell: &Shell, base: &Path, id: &str) -> String {
     };
     let chain = chain_files(shell);
     let mut out = String::new();
-    for (name, old) in &files {
-        out += &format!("──── {name} ────\n");
-        let current = chain
-            .iter()
-            .find(|(n, _)| n == name)
-            .and_then(|(_, path)| std::fs::read_to_string(path).ok());
+    for file in &files {
+        out += &format!("──── {} ────\n", file.name);
+        let current =
+            chain_target(&chain, file).and_then(|path| std::fs::read_to_string(path).ok());
         match current {
             Some(current) => {
-                let diff = similar::TextDiff::from_lines(old, &current);
+                let diff = similar::TextDiff::from_lines(&file.content, &current);
                 let text = diff.unified_diff().context_radius(3).to_string();
                 out += if text.is_empty() {
                     "(identical to the current files)\n"
@@ -253,9 +266,9 @@ pub(super) fn install_backups(
                 };
                 let chain = chain_files(&shell);
                 let mut restored = 0;
-                for (name, content) in &backup {
-                    if let Some((_, path)) = chain.iter().find(|(n, _)| n == name)
-                        && std::fs::write(path, content).is_ok()
+                for file in &backup {
+                    if let Some(path) = chain_target(&chain, file)
+                        && std::fs::write(path, &file.content).is_ok()
                     {
                         restored += 1;
                     }

@@ -2,7 +2,7 @@
 //! save (and the manual "Back up now") writes one run holding the on-disk
 //! content of every chain file about to be overwritten, so a bad save is
 //! always reversible. Pure primitives — the shell decides when to call
-//! them and maps backup file names back onto the include chain.
+//! them and maps backed-up files back onto the include chain.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -37,11 +37,23 @@ pub struct RunInfo {
     pub files: Vec<String>,
 }
 
+/// One file of a backup run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackupFile {
+    /// Name inside the run directory.
+    pub name: String,
+    /// Where the file lived when backed up; `None` for runs made before
+    /// paths were recorded, which are matched by file name instead.
+    pub path: Option<PathBuf>,
+    pub content: String,
+}
+
 /// Write one run: every `(path, on-disk content)` pair is stored under
-/// its file name, plus an `origin` file whose first line is the main
-/// config path and whose second line is `trigger = <trigger>`. Returns
-/// the run id. Callers treat backup failures as best-effort and must
-/// never let them block a save.
+/// its file name (`2-name`, `3-name`… when two chain files share one),
+/// plus an `origin` file whose first line is the main config path, then
+/// `trigger = <trigger>`, then a `file <name> = <path>` line per file.
+/// Returns the run id. Callers treat backup failures as best-effort and
+/// must never let them block a save.
 pub fn snapshot_run(
     base: &Path,
     main_path: &Path,
@@ -52,14 +64,25 @@ pub fn snapshot_run(
     let id = next_run_id(&run_ids(base), &utc_stamp(now_secs()));
     let dir = base.join(&id);
     std::fs::create_dir_all(&dir)?;
+    let mut origin = format!("{}\ntrigger = {trigger}\n", main_path.display());
+    let mut stored: Vec<String> = Vec::new();
     for (path, content) in files {
-        let name = path.file_name().unwrap_or_else(|| OsStr::new("file"));
-        std::fs::write(dir.join(name), content)?;
+        let base_name = path
+            .file_name()
+            .unwrap_or_else(|| OsStr::new("file"))
+            .to_string_lossy()
+            .into_owned();
+        let mut name = base_name.clone();
+        let mut n = 2;
+        while stored.contains(&name) {
+            name = format!("{n}-{base_name}");
+            n += 1;
+        }
+        std::fs::write(dir.join(&name), content)?;
+        origin += &format!("file {name} = {}\n", path.display());
+        stored.push(name);
     }
-    std::fs::write(
-        dir.join("origin"),
-        format!("{}\ntrigger = {trigger}\n", main_path.display()),
-    )?;
+    std::fs::write(dir.join("origin"), origin)?;
     Ok(id)
 }
 
@@ -94,8 +117,15 @@ pub fn list_runs(base: &Path) -> Vec<RunInfo> {
         .collect()
 }
 
-/// Backup contents for one run: `(file name, content)` pairs, sorted.
-pub fn read_run(base: &Path, id: &str) -> std::io::Result<Vec<(String, String)>> {
+/// Backup contents for one run, sorted by name.
+pub fn read_run(base: &Path, id: &str) -> std::io::Result<Vec<BackupFile>> {
+    let origin = std::fs::read_to_string(base.join(id).join("origin")).unwrap_or_default();
+    let recorded = |name: &str| {
+        origin.lines().find_map(|line| {
+            let (stored, path) = line.strip_prefix("file ")?.split_once(" = ")?;
+            (stored == name).then(|| PathBuf::from(path))
+        })
+    };
     let mut out = Vec::new();
     for entry in std::fs::read_dir(base.join(id))? {
         let entry = entry?;
@@ -104,9 +134,14 @@ pub fn read_run(base: &Path, id: &str) -> std::io::Result<Vec<(String, String)>>
             continue;
         }
         let content = std::fs::read_to_string(entry.path())?;
-        out.push((name, content));
+        let path = recorded(&name);
+        out.push(BackupFile {
+            name,
+            path,
+            content,
+        });
     }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
 }
 
@@ -233,7 +268,11 @@ mod tests {
         assert_eq!(runs[0].files, vec!["config.toml", "monitors.toml"]);
         assert_eq!(
             read_run(&base, &id).unwrap()[0],
-            ("config.toml".to_owned(), "a = 1\n".to_owned())
+            BackupFile {
+                name: "config.toml".to_owned(),
+                path: Some(PathBuf::from("/cfg/config.toml")),
+                content: "a = 1\n".to_owned(),
+            }
         );
 
         // A second run in the same second gets a suffix; pruning keeps
@@ -245,6 +284,30 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id, id2);
         assert_eq!(runs[0].trigger, "manual");
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn files_sharing_a_name_keep_their_own_paths() {
+        let base = temp_base("samename");
+        let files = vec![
+            (PathBuf::from("/cfg/config.toml"), "main = 1\n".to_owned()),
+            (
+                PathBuf::from("/cfg/profiles/config.toml"),
+                "include = 1\n".to_owned(),
+            ),
+        ];
+        let id = snapshot_run(&base, Path::new("/cfg/config.toml"), "save", &files).unwrap();
+        let run = read_run(&base, &id).unwrap();
+        let find = |path: &str| {
+            run.iter()
+                .find(|file| file.path.as_deref() == Some(Path::new(path)))
+                .map(|file| file.content.as_str())
+        };
+        assert_eq!(run.len(), 2);
+        assert_eq!(find("/cfg/config.toml"), Some("main = 1\n"));
+        assert_eq!(find("/cfg/profiles/config.toml"), Some("include = 1\n"));
 
         std::fs::remove_dir_all(&base).ok();
     }
