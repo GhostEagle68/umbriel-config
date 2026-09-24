@@ -27,7 +27,7 @@ jobs:
         uses: extractions/setup-just@v4
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libinput10 libgbm1 libxkbcommon0
 
       # Prebuilt formatter from Slint's release, pinned to the version the
       # .slint files are formatted with (local: slint-lsp --version);
