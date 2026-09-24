@@ -376,28 +376,25 @@ fn assign_event(shell: &mut Shell, event: &str, shader: Option<&Path>) {
 /// shader doesn't already have, so a plain edit-and-save can't quietly
 /// take one over.
 fn use_for_rows(shell: &Shell) -> Vec<ShaderUse> {
-    let docs = chain_docs(shell);
-    let paths = chain_paths(shell);
-    let this = shell.shader_editing.as_deref();
+    let this = shell.shader_editing.as_deref().map(shaders::file_key);
     shaders::EVENTS
         .iter()
+        .zip(resolved_assignments(shell))
         .enumerate()
-        .map(|(index, event)| {
-            let resolved = shaders::current_assignment(&docs, event)
-                .map(|(value, doc)| (shaders::resolve(&value, &paths[doc]), value));
-            let uses_this = match (&resolved, this) {
-                (Some((resolved, _)), Some(this)) => shaders::same_file(resolved, this),
+        .map(|(index, (event, assigned))| {
+            let uses_this = match (&assigned, &this) {
+                (Some(assigned), Some(this)) => assigned.key == *this,
                 _ => false,
             };
-            let current = match &resolved {
+            let current = match &assigned {
                 None => String::new(),
                 Some(_) if uses_this => "uses this shader".to_owned(),
-                Some((resolved, value)) => {
+                Some(assigned) => {
                     let name = shell
                         .shaders
                         .iter()
-                        .find(|entry| shaders::same_file(&entry.path, resolved))
-                        .map_or(value.as_str(), |entry| entry.name.as_str());
+                        .find(|entry| shaders::file_key(&entry.path) == assigned.key)
+                        .map_or(assigned.value.as_str(), |entry| entry.name.as_str());
                     format!("uses {name}")
                 }
             };
@@ -450,14 +447,48 @@ fn new_home(shell: &Shell) -> usize {
 /// Every event whose assignment resolves to `shader`, with the chain
 /// index of the document holding it.
 fn assignments_of(shell: &Shell, shader: &Path) -> Vec<(&'static str, usize)> {
+    let key = shaders::file_key(shader);
+    shaders::EVENTS
+        .iter()
+        .zip(resolved_assignments(shell))
+        .filter_map(|(event, assigned)| {
+            let assigned = assigned?;
+            (assigned.key == key).then_some((*event, assigned.doc))
+        })
+        .collect()
+}
+
+/// One event's current assignment, resolved the way umbriel reads it.
+struct Resolved {
+    /// The value as written.
+    value: String,
+    /// Chain index of the document it comes from.
+    doc: usize,
+    /// Where umbriel reads the shader from.
+    path: PathBuf,
+    /// `path`'s identity for comparisons (`shaders::file_key`).
+    key: PathBuf,
+}
+
+/// Every event's assignment (in `shaders::EVENTS` order), resolved once.
+/// The single place assignment paths are interpreted: the dropdowns,
+/// the delete confirm and the Use-for checklist all read from it.
+fn resolved_assignments(shell: &Shell) -> Vec<Option<Resolved>> {
     let docs = chain_docs(shell);
     let paths = chain_paths(shell);
     shaders::EVENTS
         .iter()
-        .filter_map(|event| {
-            let (value, doc) = shaders::current_assignment(&docs, event)?;
-            shaders::same_file(&shaders::resolve(&value, &paths[doc]), shader)
-                .then_some((*event, doc))
+        .map(|event| {
+            shaders::current_assignment(&docs, event).map(|(value, doc)| {
+                let path = shaders::resolve(&value, &paths[doc]);
+                let key = shaders::file_key(&path);
+                Resolved {
+                    value,
+                    doc,
+                    path,
+                    key,
+                }
+            })
         })
         .collect()
 }
@@ -732,18 +763,7 @@ pub(super) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
     // Resolve each event's assignment and each library file once; the
     // cards and rows below only compare these (no per-pair filesystem
     // lookups).
-    let docs = chain_docs(shell);
-    let paths = chain_paths(shell);
-    let assigned: Vec<Option<(String, PathBuf, PathBuf)>> = shaders::EVENTS
-        .iter()
-        .map(|event| {
-            shaders::current_assignment(&docs, event).map(|(value, doc)| {
-                let resolved = shaders::resolve(&value, &paths[doc]);
-                let key = shaders::file_key(&resolved);
-                (value, resolved, key)
-            })
-        })
-        .collect();
+    let assigned = resolved_assignments(shell);
     let entry_keys: Vec<PathBuf> = shell
         .shaders
         .iter()
@@ -764,7 +784,11 @@ pub(super) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
             used_by: shaders::EVENTS
                 .iter()
                 .zip(&assigned)
-                .filter(|(_, current)| current.as_ref().is_some_and(|(_, _, key)| key == entry_key))
+                .filter(|(_, current)| {
+                    current
+                        .as_ref()
+                        .is_some_and(|current| current.key == *entry_key)
+                })
                 .map(|(event, _)| prettify(event))
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -781,16 +805,18 @@ pub(super) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
             choices.extend(shell.shaders.iter().map(|entry| entry.label.clone().into()));
             // Match by the file umbriel would actually read, so
             // "./shaders/x.glsl" and an absolute path both find x.glsl.
-            let index = current
-                .as_ref()
-                .and_then(|(_, _, key)| entry_keys.iter().position(|entry_key| entry_key == key));
+            let index = current.as_ref().and_then(|current| {
+                entry_keys
+                    .iter()
+                    .position(|entry_key| *entry_key == current.key)
+            });
             let warning = match &current {
-                Some((value, resolved, _)) => {
-                    shaders::assignment_problem(value, resolved).unwrap_or_default()
+                Some(current) => {
+                    shaders::assignment_problem(&current.value, &current.path).unwrap_or_default()
                 }
                 None => "",
             };
-            let current = current.map(|(value, _, _)| value);
+            let current = current.map(|current| current.value);
             // A value outside the library gets its own trailing entry, so
             // the dropdown shows it and "(no shader)" is a real change.
             let current_index = match (index, &current) {
