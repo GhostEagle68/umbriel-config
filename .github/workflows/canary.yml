@@ -86,9 +86,17 @@ jobs:
             echo
             # One commit per line, newest first, ending in its short sha:
             # the app trims this list to the commits after the user's build.
-            echo "## Commits"
+            # Capped, with a link to the rest.
+            range=${since:+"$since"..}HEAD
+            echo "## Commits (UTC)"
             echo
-            git log --no-merges --format='- %s (%h)' ${since:+"$since"..}HEAD
+            TZ=UTC git log --no-merges -n 30 --date=format-local:'%Y-%m-%d %H:%M' \
+              --format='- %ad · %s (%h)' $range
+            total=$(git rev-list --no-merges --count $range)
+            if [ "$total" -gt 30 ]; then
+              echo
+              echo "…and $((total - 30)) earlier ([all changes since ${since:-the start}](https://github.com/${GITHUB_REPOSITORY}/compare/${since:-$(git rev-list --max-parents=0 HEAD | tail -n 1)}...${GITHUB_SHA}))."
+            fi
             # Last on purpose: the app cuts the notes at the user's own
             # commit, so people already on canary never see this part.
             echo
