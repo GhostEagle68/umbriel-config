@@ -49,7 +49,7 @@ pub(super) fn schema_row(
     let home = entry_home(sets, &dotted);
     // An effect selector suggests the presets of its kind.
     let selector;
-    let entry = match effect_selector(&dotted) {
+    let entry = match effect_kind(&dotted) {
         Some(kind) => {
             let names = effect_presets(shell, kind)
                 .into_iter()
@@ -80,17 +80,47 @@ pub(super) fn schema_row(
     row
 }
 
-/// The preset kind an `[effects]` selector names (`effects.border` →
-/// `border`).
-fn effect_selector(key: &str) -> Option<&str> {
+/// The preset kind an effect key selects: an `[effects]` selector
+/// (`effects.border`) or a rule/output override
+/// (`window_rule[0:1].border_effect`, `output.DP-1.screen_effect`).
+pub(super) fn effect_kind(key: &str) -> Option<&str> {
     key.strip_prefix("effects.")
+        .or_else(|| key.rsplit('.').next()?.strip_suffix("_effect"))
         .filter(|kind| ["border", "window", "screen", "cursor"].contains(kind))
 }
 
 /// The presets of `kind` the loaded files define, then umbriel's bundled
 /// ones with the file to include for each.
-fn effect_presets(shell: &Shell, kind: &str) -> Vec<(String, Option<PathBuf>)> {
+pub(super) fn effect_presets(shell: &Shell, kind: &str) -> Vec<(String, Option<PathBuf>)> {
     shaders::presets(&chain_docs(shell), &super::page_shaders::data_roots(), kind)
+}
+
+/// A rule/output override's dropdown: "off", then the presets of its
+/// kind. `None` when `key` isn't an effect override.
+pub(super) fn effect_override_choices(
+    shell: &Shell,
+    key: &str,
+) -> Option<slint::ModelRc<SharedString>> {
+    let kind = effect_kind(key)?;
+    let mut choices: Vec<SharedString> = vec!["off".into()];
+    choices.extend(
+        effect_presets(shell, kind)
+            .into_iter()
+            .map(|(name, _)| name.into()),
+    );
+    Some(Rc::new(VecModel::from(choices)).into())
+}
+
+/// A bundled preset is only selectable once its file is included:
+/// include it when an effect key was set to its name.
+fn include_picked_preset(shell: &mut Shell, key: &str, value: &str) {
+    if let Some(kind) = effect_kind(key)
+        && let Some((_, Some(file))) = effect_presets(shell, kind)
+            .into_iter()
+            .find(|(name, _)| name == value.trim())
+    {
+        super::page_shaders::include_preset(shell, &file);
+    }
 }
 
 /// Refresh one row after a committed edit.
@@ -581,7 +611,12 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
         };
         let result = {
             let mut shell = shell.borrow_mut();
-            rules::apply_field_text(doc_at_mut(&mut shell, target), family, index, &field, raw)
+            let result =
+                rules::apply_field_text(doc_at_mut(&mut shell, target), family, index, &field, raw);
+            if result.is_ok() {
+                include_picked_preset(&mut shell, key, raw);
+            }
+            result
         };
         if let Err(err) = result {
             set_row_error(app, key, &err);
@@ -635,14 +670,8 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
             return;
         };
         let accepted = doc.set_leaf_text(key, &value_text);
-        // A bundled preset is only selectable once its file is included.
-        if accepted
-            && let Some(kind) = effect_selector(key)
-            && let Some((_, Some(file))) = effect_presets(&shell, kind)
-                .into_iter()
-                .find(|(name, _)| name == raw.trim())
-        {
-            super::page_shaders::include_preset(&mut shell, &file);
+        if accepted {
+            include_picked_preset(&mut shell, key, raw);
         }
         accepted
     };
@@ -672,6 +701,18 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effect_kind_covers_selectors_and_overrides() {
+        assert_eq!(effect_kind("effects.border"), Some("border"));
+        assert_eq!(
+            effect_kind("window_rule[0:1].window_effect"),
+            Some("window")
+        );
+        assert_eq!(effect_kind("output.DP-1.screen_effect"), Some("screen"));
+        assert_eq!(effect_kind("effects.max_fps"), None);
+        assert_eq!(effect_kind("animation.windows_in.effect"), None);
+    }
 
     #[test]
     fn unknown_kind_quotes_text_but_keeps_toml_values() {

@@ -324,6 +324,10 @@ pub(super) fn output_row(
             row.value = current.get(&key).cloned().unwrap_or(default_text).into();
         }
         outputs::FieldKind::Text => {
+            if let Some(choices) = super::rows::effect_override_choices(shell, &key) {
+                row.kind = ValueKind::OpenChoice;
+                row.choices = choices;
+            }
             row.value = doc
                 .get_string(&path)
                 .filter(|value| !value.is_empty())

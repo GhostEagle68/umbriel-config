@@ -56,6 +56,10 @@ fn rule_row(
         | rules::FieldKind::SizeFraction
         | rules::FieldKind::Position
         | rules::FieldKind::Raw => {
+            if let Some(choices) = super::rows::effect_override_choices(shell, &row.key) {
+                row.kind = ValueKind::OpenChoice;
+                row.choices = choices;
+            }
             row.value = text.into();
         }
         rules::FieldKind::Color => {

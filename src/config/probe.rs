@@ -31,8 +31,8 @@ const CONTAINERS: &[&str] = &[
     "input.device[]",
 ];
 
-/// Sections left alone: file lists, binds, and GPU selection.
-const SKIPPED: &[&str] = &["include", "keybinds", "drm"];
+/// Sections left alone: file lists and binds.
+const SKIPPED: &[&str] = &["include", "keybinds"];
 
 /// A section taking this share of the binary's words is a map of
 /// user-named keys (`environment`, `animation.beziers`), not settings.
