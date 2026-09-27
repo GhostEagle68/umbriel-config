@@ -18,6 +18,7 @@ are required, `[bracket]` forms are optional.
 | `<cmd>` | Command line, run through the shell: `spawn:kitty` |
 | `<name>` | Submap to enter; `submap:reset` leaves one level |
 | `<workspace>[/<output>]` | Bare digits select a 1-based position, other text selects a name, and double quotes force a name; append `/output` to scope either form |
+| `<output>` | Connector or monitor name from `umbriel outputs` |
 | `<window-id>` | Window id from `umbriel windows` |
 | `[<window-id>]` | The same id; the bare action targets the focused window |
 | `[<output>]` | Connector or monitor name. Bare `dpms-off` and `dpms-on` target every configured output |
@@ -32,6 +33,28 @@ are required, `[bracket]` forms are optional.
 | Action | Effect |
 |--------|--------|
 | `spawn:<cmd>` | Run a command with a launch activation token |
+
+## Screencasting
+
+Select one screen or window normally. The selected source starts sharing immediately, and the actions below can later
+change it while keeping the same PipeWire stream alive. Shares containing several selected sources remain fixed.
+
+The first set or follow action during an active share opens an Umbriel confirmation panel. Enter, or repeat a
+target-changing action, to approve it. Any other key or pointer click dismisses the panel and cancels only that pending
+action. A later action asks again. Once approved, target changes are immediate until the share ends. Set
+[`screencast.disable_dynamic_confirmation`](configuration.md#screencast) to `true` to skip this protection.
+
+Changing a window stream to an output, or an output stream to a window, is supported. Follow mode lasts only for the
+active portal session. Be careful with window following because focusing a private window immediately shares it.
+
+| Action | Effect |
+|--------|--------|
+| `screencast-clear` | Pause the screencast and stop following |
+| `screencast-follow-output` | Follow the focused output |
+| `screencast-follow-stop` | Stop following and keep the current target |
+| `screencast-follow-window` | Follow the focused window |
+| `screencast-set-output:[<output>]` | Share the focused output, or the selected output |
+| `screencast-set-window:[<window-id>]` | Share the focused window, or the selected window |
 
 ## Focus
 
@@ -199,6 +222,9 @@ are described in [Overview](workspaces-overview.md).
 | `dpms-off:[<output>]` | Power off one output, or every output when bare |
 | `dpms-on:[<output>]` | Power on one output, or every output when bare |
 | `keyboard-layout-next` | Switch one keyboard to its next configured layout |
+| `output-disable:<output>` | Remove an output from the desktop |
+| `output-enable:<output>` | Add an output to the desktop |
+| `output-toggle:<output>` | Add or remove an output from the desktop |
 | `session-quit:[skip-confirmation]` | Quit the session, confirming first unless told to skip |
 | `shortcuts-inhibit-toggle` | Toggle shortcuts inhibition for the focused surface |
 | `submap:<name>` | Enter a submap layer, or leave one with 'reset' |
@@ -299,8 +325,9 @@ enabled = false
 | `duration_ms` | `250` | Default duration for non-spring curves. |
 | `curve` | `"easeout"` | Default easing curve. |
 
-Each event also accepts `enabled`, `duration_ms`, and `curve`. A spring curve
-chooses its own duration, so `duration_ms` has no effect on that event.
+Each event other than `windows_drag` also accepts `enabled`, `duration_ms`,
+and `curve`. A spring curve chooses its own duration, so `duration_ms` has no
+effect on that event.
 
 ## Event tables
 
@@ -315,6 +342,7 @@ chooses its own duration, so `duration_ms` has no effect on that event.
 | `[animation.border]` | none | Focus-border color |
 | `[animation.dim_unfocused]` | `dim` | Unfocused-window opacity |
 | `[animation.layers]` | none | Layer-shell map and unmap |
+| `[animation.windows_drag]` | `physics` (default `false`), its only key | Drag physics |
 
 `windows_in` accepts `popin`, `zoom`, `slide`, `fade`, or `none`.
 `windows_out` accepts `fade`, `slide`, `popin`, or `zoom`. `scale` applies to
@@ -359,97 +387,78 @@ myBounce = { damping = 0.5, stiffness = 200 }
 
 Then set `curve = "myBezier"` or `curve = "myBounce"`.
 
-## Custom GLSL shaders
+## Custom effects
 
-Every animation event can use a custom fragment shader. The event's enabled
-state and curve still control its timeline.
-
-Umbriel ships `reveal.glsl` and `squash.glsl`. Reference the installed files
-directly:
+Every animation event other than `windows_drag` can run a custom program.
+Define an `animation` preset and select it with `effect`; the event's enabled
+state, duration, and curve still control its timeline. Umbriel ships `reveal`
+and `squash`:
 
 ```toml
+[include]
+files = [
+  "/usr/share/umbriel/effects/animation/reveal/effect.toml",
+  "/usr/share/umbriel/effects/animation/squash/effect.toml",
+]
+
 [animation.windows_in]
 duration_ms = 300
 curve = "easeout"
-shader = "/usr/share/umbriel/shaders/reveal.glsl"
+effect = "reveal"
 
 [animation.windows_out]
 duration_ms = 250
 curve = "easeout"
-shader = "/usr/share/umbriel/shaders/reveal.glsl"
+effect = "reveal"
 
 [animation.windows_move]
-shader = "/usr/share/umbriel/shaders/squash.glsl"
+effect = "squash"
 ```
 
-Adjust `/usr/share` for the package prefix. Relative paths resolve from the
-configuration file containing the setting. Shader files are watched and reload
-with the configuration.
+Adjust `/usr` for the package prefix. Defining your own preset, the shader
+interface, and reload behavior are in [Effects](effects.md). `windows_in` and
+`windows_out` without an effect keep their built-in fade and `style`; with an
+effect selected, `style` and `scale` are ignored. A running event keeps its
+program; a reload affects the next event.
 
-NixOS users can derive the path from the configured package:
-
-```nix
-{
-  programs.umbriel.settings.animation.windows_in.shader =
-    "${config.programs.umbriel.package}/share/umbriel/shaders/reveal.glsl";
-}
-```
-
-The `shader` value must name a regular GLSL file smaller than 256 KiB. Inline
-GLSL and recursive includes are not supported.
-
-### Shader interface
-
-Write GLSL ES 1.00 with this entry point. Do not add a `#version` declaration
-or your own `main`:
-
-```glsl
-vec4 animation(vec2 uv) {
-    return umbriel_sample(uv);
-}
-```
-
-Umbriel supplies `main`, precision declarations, and these commonly used
-values:
+### Animation uniforms
 
 | Name | Meaning |
 | --- | --- |
-| `uv` | Normalized target coordinates |
-| `umbriel_sample(vec2 uv)` | Sample the rendered target |
-| `umbriel_sample_previous(vec2 uv)` | Sample this target's previous shader result |
-| `umbriel_size` | Target width and height in logical units |
 | `umbriel_progress` | Eased progress, including overshoot |
 | `umbriel_clamped_progress` | Eased progress clamped to 0 through 1 |
 | `umbriel_linear_progress` | Progress before easing |
 | `umbriel_direction` | `1` for entering and `-1` for leaving |
 | `umbriel_random_seed` | Four stable random values for this transition |
 
-Return premultiplied RGBA. Preserve sampled alpha when modifying colors so a
-shader does not fill transparent parts of its target.
+### Targets
 
-`umbriel_sample_previous` enables feedback and allocates two additional buffers
-for the active target. Avoid it when an effect does not need feedback,
-especially for workspace and overview shaders.
+`windows_in`, `windows_out`, `windows_move`, and `dim_unfocused` process the
+window and its subsurfaces as one target; `border` processes the ring alone.
+`scratchpad` covers the window's show and hide fade and the dim and blur
+backdrops. `layers` covers a layer-shell surface's own tree. `workspaces` and
+`overview` process whole workspace or overview trees, so they see the results
+of inner effects. Effects composite descendants before ancestors.
 
-### Targets and composition
+## Drag physics
 
-Window shaders process the window, subsurfaces, and border as one target.
-Workspace and overview shaders process their corresponding scene trees.
-Shaders change presentation only; they do not affect layout, client sizes,
-input coordinates, or focus.
+```toml
+[animation.windows_drag]
+physics = true
+```
 
-Window shadows follow the alpha shape produced by window and border shaders.
-The compositor still applies configured color, softness, and offset.
+With drag physics on, a window dragged with the pointer bends like an elastic
+sheet pinned under the pointer, trails its motion, and settles when released
+or held still. It needs the animation master switch. Border, window, and
+overlay effects keep rendering on the deformed window. A window closed
+mid-drag keeps its shape while it fades.
 
-### Reload and failures
-
-Shaders compile on startup or configuration reload. A missing source or compile
-failure produces a diagnostic and falls back to the built-in effect. Compiler
-details appear in the Umbriel log.
-
-Custom shaders are trusted local GPU code. Expensive or nonterminating shaders
-can stall the driver, and active effects disable direct scanout. Prefer short,
-inexpensive effects.
+Only the window's own content deforms; its drop shadow follows that
+deformation within the window's shadow bounds. Re-grabbing a window while it
+settles continues its motion. Under the default `popin` style, or under
+`zoom`, the closing snapshot's clip grows by the deformation margin, so a
+client-side decoration extending past the window's geometry can remain
+visible within that margin while the snapshot fades.
 
 <!-- umbriel-config page: appearance.md -->
 # Appearance
@@ -493,13 +502,12 @@ Colors use `#RRGGBB` or `#RRGGBBAA`.
 [colors.border]
 focused = "#7AA3FFFF"
 unfocused = "#292933FF"
-scratchpad_focused = "#E5C07BFF"
-scratchpad_unfocused = "#5C4A2AFF"
 outer = "#1A1A1FFF"
 ```
 
-The first four values select focused and unfocused colors for regular and
-scratchpad windows. `outer` colors the optional outer border.
+`focused` and `unfocused` color the inner border; `outer` colors the optional
+outer border. A [window rule](window-rules.md#border-colors) can override any of
+them for the windows it matches.
 
 ### Overview colors
 
@@ -550,7 +558,9 @@ decorations. Restart applications after changing it because decoration protocol
 availability is fixed when an application connects.
 
 Borders render outside window content and are included in layout spacing.
-`corner_radius = 0` keeps every contour square.
+`corner_radius = 0` keeps every contour square. A
+[window rule](window-rules.md#decoration) can override `border_width`,
+`outer_border_width`, and `corner_radius` for the windows it matches.
 
 ### Blur
 
@@ -605,8 +615,10 @@ offset_y = 2
 A window's shadow falls on everything below it, including other floating,
 pinned, or scratchpad windows it overlaps. Tiled windows never shadow each
 other. Shadows are hidden for fullscreen windows. During a
-[custom window animation](animation.md#custom-glsl-shaders), the shadow follows
-the visible shape produced by the shader.
+[custom window animation](animation.md#custom-effects), the shadow follows
+the visible shape produced by the shader. A
+[window rule](window-rules.md#decoration) can turn the shadow on or off for the
+windows it matches.
 
 <!-- umbriel-config page: configuration.md -->
 # Configuration
@@ -683,8 +695,11 @@ Included files are applied in list order. The including file is applied last:
 - Plain arrays and scalar values are replaced by the last file that sets them.
 - Setting a rule list to `[]` discards entries collected earlier.
 
-Every file must contain valid TOML. Duplicate device or workspace selectors are
-still errors when they come from different files.
+Every file must contain valid TOML. Duplicate device or workspace selectors,
+and an effect preset defined in two files, are errors even when they come from
+different files: at startup Umbriel uses the default configuration and shows
+an error banner (unless the configuration sets `[drm]`, which refuses to
+start), and a reload keeps the previous configuration.
 
 If any included file defines `[drm]`, also declare `[drm]` in the main file.
 This prevents an incomplete GPU exclusion policy from loading when an include
@@ -776,6 +791,31 @@ lid_close = "notify-send 'The laptop lid is closed!'"
 lid_open = "notify-send 'The laptop lid is open!'"
 ```
 
+Logical output actions can remove the laptop panel from the desktop instead of
+merely powering it off:
+
+```toml
+[events]
+lid_close = "umbriel msg output-disable:eDP-1"
+lid_open = "umbriel msg output-enable:eDP-1"
+```
+
+## Screencast
+
+Target-changing screencast actions ask for confirmation the first time they are
+used during an active single-source share. Dismissing the panel cancels only the
+pending action, so invoking one again asks again. Approval lasts until the share
+ends.
+
+```toml
+[screencast]
+disable_dynamic_confirmation = false
+```
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `disable_dynamic_confirmation` | bool | `false` | Apply set and follow actions immediately without first confirming them. This can expose another window or output after an accidental key press. |
+
 ## Scratchpads
 
 With no `[[scratchpad]]` entries, Umbriel provides one implicit scratchpad named
@@ -812,6 +852,227 @@ and visible. Switching away from its workspace, hiding it in a scratchpad,
 disabling its output, or locking the session suspends the inhibitor until the
 surface becomes visible again.
 
+<!-- umbriel-config page: effects.md -->
+# Effects
+
+Effects are GLSL programs Umbriel runs on animation events, on the focused
+window's border, on windows, on whole outputs, and around the pointer. Every
+effect is off until you select one. Umbriel ships a small set; each is a
+preset you include and then name where it should apply.
+
+## Use a bundled effect
+
+Bundled presets install under `share/umbriel/effects/<kind>/<name>/`. Include a
+preset's `effect.toml`, then select its name. For an installation under `/usr`:
+
+```toml
+[include]
+files = [
+  "/usr/share/umbriel/effects/border/pulse/effect.toml",
+  "/usr/share/umbriel/effects/animation/reveal/effect.toml",
+]
+
+[effects]
+border = "pulse"
+
+[animation.windows_in]
+effect = "reveal"
+```
+
+Including a file only makes its preset available. The `border` and `effect`
+selectors are what turn it on. If your configuration already has an
+`[include]` table, append the paths to its `files` array and add the selectors
+to your existing `[effects]` and `[animation.windows_in]` tables rather than
+repeating the tables.
+
+Bundled presets:
+
+| Preset | Kind | Selector |
+| --- | --- | --- |
+| `reveal` | animation | `[animation.windows_in] effect = "reveal"` (also `windows_out`) |
+| `squash` | animation | `[animation.windows_move] effect = "squash"` |
+| `pulse` | border | `[effects] border = "pulse"` |
+| `scanlines` | window | `[effects] window = "scanlines"` |
+| `vignette` | screen | `[effects] screen = "vignette"` |
+| `glow` | cursor | `[effects] cursor = "glow"` |
+
+## Turn a default off for one window or output
+
+Set a selector to `""` to select nothing. A window rule or an output table can
+replace the default by name or switch it off with `"off"`:
+
+```toml
+[effects]
+border = "pulse"
+screen = "vignette"
+
+[[window_rule]]
+match.app_id = "^mpv$"
+border_effect = "off"
+window_effect = "scanlines"
+
+[output."HDMI-A-1"]
+screen_effect = "off"
+```
+
+`border_effect` and `window_effect` follow the usual window-rule merging: the
+last matching rule that sets a key wins. The cursor effect has no per-window
+or per-output override.
+
+## Settings
+
+`[effects]`:
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `border` | `""` | Border preset for the focused window. |
+| `window` | `""` | Window preset applied to every window. |
+| `screen` | `""` | Screen preset applied to every output. |
+| `cursor` | `""` | Cursor preset. |
+| `max_fps` | `0` | Cap, 0 to 240, for frames drawn only because an effect animates. `0` follows each output's refresh rate. |
+| `in_capture` | `false` | Include window, screen, and cursor effects in screencopy and image-copy captures. Border effects always appear, and an export-dmabuf capture always sees the same frame as the display, regardless of this setting. |
+
+Where each kind draws:
+
+- **animation** binds to an animation event through `[animation.<event>]
+  effect = "<name>"`. The event's `enabled`, `duration_ms`, and `curve` still
+  own its timeline; see [Animation](animation.md#custom-effects).
+- **border** draws on the focused window's border ring while the window is
+  decorated, not fullscreen, and not urgent. `padding` reserves transparent
+  space around the ring for the effect to paint into.
+- **window** draws over each window in place, regardless of focus, including
+  undecorated and fullscreen windows. It follows the window through opening,
+  closing, moving, workspace switches, and the overview. A floating window
+  with client-side decorations and `corner_radius = 0` has no rounding to mask
+  against, so the effect also shades the transparent margin the client draws
+  around such a window.
+- **screen** draws over the whole output after everything else, except the
+  cursor effect and the software cursor.
+- **cursor** draws in a square of `radius` logical pixels around the pointer
+  (`0` covers the whole output), after the screen effect, only on the output
+  currently holding the pointer, clipped at that output's edges. It runs
+  before the software cursor is drawn and never shades the cursor image, and
+  never affects a hardware cursor. It hides when the compositor hides the
+  pointer; a client that hides its own cursor image does not by itself turn
+  the effect off.
+
+The session lock detaches screen and cursor effects and never shades the lock
+surface.
+
+## Define a preset
+
+`[effects.preset.<name>]` defines one preset. `kind` is required; `shader` is
+a GLSL file relative to the TOML file that names it. The file is watched and
+reloads with the configuration; a missing or unreadable file reports a
+diagnostic and leaves the preset inert until the file appears, and a preset
+without `shader` is inert as well. `off` is a reserved name.
+
+| Key | Kinds | Default | Description |
+| --- | --- | --- | --- |
+| `kind` | all | required | `animation`, `border`, `window`, `screen`, or `cursor`. |
+| `shader` | all | none | Path to the GLSL source, at most 256 KiB. Without it the preset is inert. |
+| `palette` | all | `false` | Supply `[colors]` accent and status colors to the program. |
+| `padding` | border | `0` | Transparent space around the ring the effect may paint, 0 to 1024. |
+| `speed` | border | `1.0` | Multiplier on `umbriel_time`, 0 to 10. `0` holds `umbriel_time` at zero. |
+| `animated` | border | `true` | `false` freezes `umbriel_time` at zero. |
+| `overlay` | border | `""` | A window preset drawn on the window while the border effect applies. |
+| `light.spread` | border | `80` | How far light from the ring spills, 1 to 256 logical pixels. Defining `[effects.preset.<name>.light]` enables light. |
+| `light.intensity` | border | `1.0` | Light gain, 0 to 4. |
+| `light.threshold` | border | `0.5` | Brightness a ring pixel needs before it emits, 0 to 1. |
+| `radius` | cursor | `0` | Half-size of the square around the pointer, 0 to 4096; `0` covers the output. |
+
+Border light is built from the ring in buffer pixels, so the same preset's
+brightness differs across output scales. The light itself stacks below panels
+and pinned windows, above a window being dragged.
+
+Keys that do not belong to a preset's kind are reported as unknown. Defining
+the same preset name in two files is an error.
+
+```toml
+[effects.preset.tint]
+kind = "window"
+shader = "tint.glsl"
+palette = true
+
+[effects]
+window = "tint"
+```
+
+## Write a shader
+
+Sources are GLSL ES 1.00 fragment code without `#version`, `main`, or precision
+qualifiers. Each kind defines one entry point that receives `uv`, normalized
+over the drawn rectangle with `(0, 0)` at the top left, and returns
+premultiplied RGBA:
+
+| Kind | Entry point |
+| --- | --- |
+| animation | `vec4 animation(vec2 uv)` |
+| border | `vec4 border(vec2 uv)` |
+| window | `vec4 window(vec2 uv)` |
+| screen | `vec4 screen(vec2 uv)` |
+| cursor | `vec4 cursor(vec2 uv)` |
+
+Every kind sees:
+
+| Name | Meaning |
+| --- | --- |
+| `umbriel_sample(vec2 uv)` | The input under the drawn rectangle: the captured window for animations, the native ring for borders, the pixels already on screen for window, screen, and cursor effects. |
+| `umbriel_sample_previous(vec2 uv)` | This effect's previous result. Using it allocates two extra buffers for each window or output it runs on. |
+| `umbriel_size` | Drawn width and height in logical pixels. |
+| `umbriel_scale` | Buffer pixels per logical pixel. |
+| `umbriel_expand` | How far the drawn rectangle extends past the window on each side, as a fraction of its width and height. `(0, 0)` except for an animation running while drag physics deforms the window. |
+| `umbriel_time` | Seconds on the animation clock, times the border's `speed`. Held as a single-precision float that is never wrapped, so fine time-based motion loses precision after long uptimes. |
+| `umbriel_palette_count` | `4` for palette presets, `0` otherwise. |
+| `umbriel_palette_at(float t)` | The palette color at `t`, blended between neighboring colors from the wrapping sequence `accent_primary`, `accent_secondary`, `warning`, `error`. Transparent black when there is no palette. |
+
+Animations add `umbriel_progress`, `umbriel_clamped_progress`,
+`umbriel_linear_progress`, `umbriel_direction`, and `umbriel_random_seed`
+([Animation](animation.md#custom-effects)). Borders add `umbriel_border_hole`
+(the client rectangle in `uv`), `umbriel_border_radius` (its corner radii in
+logical pixels), and `umbriel_border_distance(vec2 uv)`, the signed distance
+in logical pixels to the client rectangle, negative inside it; the client hole
+is always cut out of a border's result. Cursor effects add `umbriel_pointer`,
+the pointer position in `uv`.
+
+### What a window effect sees
+
+At rest, a window effect reads the output framebuffer after the window has been
+drawn, so through a translucent window it sees and may rewrite the desktop
+behind it. While an animation encloses the window (opening, closing, moving,
+a workspace switch, the overview, or drag physics) it reads that animation's
+capture instead: it shades the window's own content, and the result is
+composited over the live desktop. A shader that depends on the backdrop must
+tolerate that change when an animation begins or ends. A border's `overlay`
+follows the same rule.
+
+### Reload and failures
+
+Presets compile at startup and on reload. A compile error is logged with the
+preset's name and the driver's message, whose line numbers count from the top
+of the shader file; that preset renders plainly (opening and closing
+animations keep their built-in animation, `style` and `scale` included) until
+a reload fixes it. Unknown names, or a preset of the wrong kind for a
+selector, report a diagnostic and are dropped: a top-level `[effects]`
+selector selects nothing, and a window rule's or output's own override falls
+back to an earlier matching rule or the `[effects]` default. Shaders are
+trusted local GPU code; keep them small and side-effect free.
+
+## Cost
+
+Nothing here costs anything until selected. A border effect renders the ring
+through a capture and one program pass per frame on the focused window, and
+requests extra frames only while its program reads `umbriel_time` and its
+clock advances, capped by `max_fps`. Light adds a second program pass and a
+blurred pyramid where the ring draws, and a blend on every output its light
+reaches. A window effect copies the pixels under the window and runs one pass
+per window per frame. Screen and cursor effects each run one pass over the
+output or the radius square and disable direct scanout on that output. Drag
+physics costs only while a window is held or settling.
+With `in_capture = false`, a pending screencopy or image-copy capture of an
+output composes its frame twice whenever any window, screen, or cursor effect
+is visible on that output.
+
 <!-- umbriel-config page: index.md -->
 # Umbriel
 
@@ -841,7 +1102,7 @@ without a running session.
 - Scrolling, Dwindle, and Master layouts
 - Independent workspaces and configuration per output
 - Floating, pinned, fullscreen, and [scratchpad](scratchpad.md) windows
-- Configurable keybinds, gestures, window rules, blur, shadows, and animations
+- Configurable keybinds, gestures, window rules, blur, shadows, animations, and [effects](effects.md)
 - X11 application support through xwayland-satellite
 - Local [IPC](ipc.md) for scripts, panels, and runtime inspection
 
@@ -863,6 +1124,7 @@ Configure keyboard, pointer, touchpad, tablet, cursor, and focus behavior under
 ```toml
 [input]
 middle_click_paste = false
+client_window_drag = true
 window_drag_toggle = "none"
 ```
 
@@ -870,6 +1132,11 @@ window_drag_toggle = "none"
 Shift+Insert. The regular Ctrl+C and Ctrl+V clipboard is unaffected.
 Applications started while primary selection is disabled must be restarted
 after it is re-enabled.
+
+`client_window_drag = false` ignores move requests from applications, such as
+dragging a client-side title bar or the empty tab strip of Chromium, Firefox,
+or Electron apps. Windows then move only with Mod+drag or keybinds.
+Resizing from client-side borders is unaffected.
 
 `window_drag_toggle` controls what pressing the other main mouse button does
 during a window drag:
@@ -950,12 +1217,14 @@ surface layouts.
 [input.touchpad]
 tap = true
 natural_scroll = true
+left_handed = false
 # accel_profile = "adaptive"
 # sensitivity = 0.5
 # scroll_factor = 1.5
 # disable_while_typing = true
 # disable_on_external_mouse = true
 # click_method = "clickfinger"
+# tap_button_map = "left_middle_right"
 ```
 
 Omitted values preserve the device's libinput defaults. Explicit unsupported
@@ -965,12 +1234,14 @@ settings are reported in the log.
 | --- | --- |
 | `tap` | Enable tap-to-click. |
 | `natural_scroll` | Reverse scrolling and three-finger gesture direction. |
+| `left_handed` | Swap the primary and secondary buttons. |
 | `accel_profile` | Use `"flat"`, `"adaptive"`, or a custom acceleration curve. |
 | `sensitivity` | Pointer speed from -1.0 to 1.0. |
 | `scroll_factor` | Application scroll multiplier from 0.1 to 10.0. |
 | `disable_while_typing` | Disable the touchpad during keyboard input. |
 | `disable_on_external_mouse` | Disable the touchpad while an external mouse is connected. |
 | `click_method` | Use `"button_areas"` or `"clickfinger"`. |
+| `tap_button_map` | Buttons for one-, two-, and three-finger taps: `"left_right_middle"` or `"left_middle_right"`. |
 
 `scroll_factor` also accepts per-axis values:
 
@@ -987,6 +1258,7 @@ navigation uses the factors documented in
 ```toml
 [input.mouse]
 natural_scroll = false
+left_handed = false
 # accel_profile = "flat"
 sensitivity = 0.0
 scroll_wheel_step = 60
@@ -995,7 +1267,8 @@ scroll_wheel_step = 60
 ```
 
 `sensitivity` ranges from -1.0 to 1.0. `scroll_wheel_step` accepts 1 to 1000
-logical pixels per layout-scroll action.
+logical pixels per layout-scroll action. `left_handed` swaps the primary and
+secondary buttons; omit it to preserve the device default.
 
 Omitting `accel_profile` preserves the device default. A custom libinput curve
 uses this form:
@@ -1029,6 +1302,7 @@ repeat_delay = 250
 name = "Acme Precision Touchpad"
 tap = true
 natural_scroll = false
+left_handed = false
 click_method = "clickfinger"
 
 [[input.device]]
@@ -1063,8 +1337,20 @@ calibration_matrix = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
 | `calibration_matrix` | Pass a six-number calibration matrix to libinput. |
 
 Focused-window mapping takes precedence over focused-output mapping, which
-takes precedence over `map_to_output`. When the selected target is unavailable,
-the next configured mapping is used.
+takes precedence over `map_to_output`.
+
+### Touch
+
+```toml
+[input.touch]
+enabled = true
+map_to_output = "eDP-1"
+```
+
+| Key | Description |
+| --- | --- |
+| `enabled` | Enable or disable touch input. |
+| `map_to_output` | Confine touch input to a connector or monitor name. |
 
 ### Cursor
 
@@ -1094,7 +1380,9 @@ inactive cursor; `0` disables the timeout.
 `follows_focus = true` moves the cursor to a newly focused window after
 keyboard-driven focus and transfer actions. Pointer-driven focus, gestures, and
 automatic replacement focus do not move it. `window-focus-warp:<id>` always
-moves the cursor regardless of this setting.
+moves the cursor regardless of this setting. Active-workspace output swaps keep
+the cursor and seat focus on the invoking output when this setting is false;
+when it is true, both follow the previously focused window to its new output.
 
 ### Focus
 
@@ -1254,11 +1542,14 @@ start-umbriel
 ```
 
 The launcher loads the login profile for supported shells such as bash, zsh,
-and fish. Environment variables from that profile are available to Umbriel and
-applications started in the session. Interactive shell files such as
-`~/.zshrc` are not loaded. In a systemd-managed session, `PATH` remains the
-value supplied by the user manager, including `environment.d`; the direct
-fallback inherits `PATH` from the login profile like the other variables.
+and fish. Environment variables from that profile, including `PATH`, are
+available to Umbriel and applications started in the session. Interactive
+shell files such as `~/.zshrc` are not loaded. In a systemd-managed session,
+the launcher imports the login environment into the user manager before
+starting Umbriel. Login-profile values take precedence over values with the
+same names from `environment.d`; variables found only in the user manager
+remain available. The direct fallback inherits the same login environment
+without importing it.
 
 In a managed native session, Umbriel places startup, autostart, event, and
 `spawn:` commands in scopes bound to the compositor service, so they are
@@ -1339,12 +1630,29 @@ snapshot whenever that family changes:
 | `windows` | Window identity, geometry, focus, state, workspace, or scratchpad |
 | `workspaces` | Inventory, layout, activity, occupancy, output, or focus |
 | `submap` | Active keybind submap |
+| `screencast` | Manual target and focus-following screencast commands |
 
 Payloads are full snapshots rather than deltas. Replace local state with the
 newest event instead of trying to merge increments. Identical consecutive
 payloads are omitted.
 
 An unknown family returns an error and closes the subscription.
+
+### Screencast payload
+
+The `screencast` event carries a monotonically increasing serial and one of six commands:
+
+```json
+{"event":"screencast","data":{"serial":12,"kind":"window","identifier":"window-id"}}
+{"event":"screencast","data":{"serial":13,"kind":"output","output":"DP-1"}}
+{"event":"screencast","data":{"serial":14,"kind":"follow_window"}}
+{"event":"screencast","data":{"serial":15,"kind":"follow_output"}}
+{"event":"screencast","data":{"serial":16,"kind":"follow_stop"}}
+{"event":"screencast","data":{"serial":17,"kind":"clear"}}
+```
+
+Every command advances the serial, even when it selects the same source or mode again. Portal backends use that edge
+so a newly authorized manual stream stays empty until the user performs another target action.
 
 ### Theme payload
 
@@ -1366,8 +1674,6 @@ The `theme` event mirrors `[colors]`, `[colors.border]`,
   "border":{
     "focused":"#7AA3FFFF",
     "unfocused":"#292933FF",
-    "scratchpad_focused":"#E5C07BFF",
-    "scratchpad_unfocused":"#5C4A2AFF",
     "outer":"#1A1A1FFF"
   },
   "overview":{
@@ -1389,6 +1695,7 @@ The CLI exposes the same event stream:
 umbriel subscribe workspaces
 umbriel subscribe workspaces,windows
 umbriel subscribe submap
+umbriel subscribe screencast
 ```
 
 It writes one JSON line per event until Umbriel exits or the reader closes:
@@ -1658,6 +1965,12 @@ protocol; no rule overrides it.
 
 Launchers and panels with search fields commonly use `on_demand`.
 
+While a fullscreen window is showing on an output, top-layer surfaces on that
+output remain underneath it and cannot receive keyboard focus, including with
+`exclusive` interactivity. Overlay-layer surfaces can still take focus. Once the
+fullscreen window leaves, an `exclusive` top-layer surface takes keyboard focus
+back; an `on_demand` one waits to be clicked.
+
 <!-- umbriel-config page: layout.md -->
 # Layout
 
@@ -1687,12 +2000,33 @@ Change the current workspace at runtime with
 [layout]
 gap = 8
 extent_presets = [0.333, 0.5, 0.667]
+new_exits_fullscreen = []  # "tiled", "floating", "pinned", "all", or an array such as ["tiled", "floating"]
 ```
 
 | Key | Default | Description |
 | --- | --- | --- |
 | `gap` | `8` | Gap between windows in logical pixels. |
 | `extent_presets` | `[0.333, 0.5, 0.667]` | Fractions used by primary and secondary extent cycle actions. |
+| `new_exits_fullscreen` | `[]` | Kinds of arriving window that make a fullscreen window on the workspace leave fullscreen. See [Leaving fullscreen](#leaving-fullscreen). |
+
+### Leaving fullscreen
+
+`new_exits_fullscreen` selects which kinds of window make a fullscreen window
+leave fullscreen when they arrive on its workspace. A window arrives when it
+opens there, is moved there from another workspace or output, is dropped there
+by drag-and-drop, or returns there from a scratchpad.
+
+| Value | Arriving window |
+| --- | --- |
+| `"tiled"` | A tiled window in the Dwindle or Master layout. |
+| `"floating"` | A floating window that is not pinned. |
+| `"pinned"` | A pinned window. |
+| `"all"` | Any window. |
+
+A string selects one kind and an array selects several. The empty array, the
+default, disables the behavior. In the scrolling layout a tiled window opens as
+a column beside the fullscreen one and the strip scrolls to it, so it never
+exits fullscreen.
 
 ### Struts
 
@@ -1773,6 +2107,11 @@ Closing a focused column moves focus to the nearest surviving column. When that
 column contains stacked windows, Umbriel restores its most recently focused
 member instead of always selecting its first row.
 
+With `follows_mouse = true`, closing a focused window beneath the pointer instead
+focuses the tiled window that occupies that position after the layout reflows.
+This also applies when another row in the same scrolling column expands into the
+stationary pointer.
+
 ## Vertical strips
 
 With horizontal workspaces, screen directions remain literal:
@@ -1794,13 +2133,11 @@ Dwindle recursively splits tiles into independently sized regions.
 ```toml
 [layout.dwindle]
 preserve_split = false
-new_exits_fullscreen = false
 ```
 
 | Key | Default | Description |
 | --- | --- | --- |
 | `preserve_split` | `false` | Keep each split direction fixed after creation. |
-| `new_exits_fullscreen` | `false` | Exit fullscreen when a new window opens. |
 
 ### Behavior
 
@@ -1824,7 +2161,6 @@ position = "left"
 default_width_fraction = 0.55
 new_on_top = true
 new_becomes_master = false
-new_exits_fullscreen = false
 ```
 
 | Key | Default | Description |
@@ -1833,7 +2169,6 @@ new_exits_fullscreen = false
 | `default_width_fraction` | `0.55` | Initial master-area fraction. |
 | `new_on_top` | `true` | Put new stack windows at the top. |
 | `new_becomes_master` | `false` | Give the master slot to each new window. |
-| `new_exits_fullscreen` | `false` | Exit fullscreen when a new window opens. |
 
 ### Behavior
 
@@ -1913,6 +2248,13 @@ Use a monitor identity when settings should follow one display between ports.
 Use a connector when settings belong to a physical port. If both match, the
 monitor section wins. Matching is case-insensitive.
 
+Without a matching output section, Umbriel enables outputs that advertise a
+preferred mode, a display identity, or no fixed mode list. A connector that
+advertises modes but provides neither a preferred mode nor an identity stays
+disabled. This avoids activating stale connector state reported by some DRM
+drivers. Add a matching output section with `enabled = true` to enable such a
+display explicitly.
+
 When an output disconnects or is disabled, Umbriel temporarily moves its
 workspaces and windows to another enabled output. They return with their layout
 and positions when the output becomes available again.
@@ -1931,10 +2273,13 @@ and positions when the output becomes available again.
 | `direct_scanout` | bool | `true` | Allow eligible fullscreen buffers to bypass composition. |
 | `hdr` | string | `"off"` | HDR activation policy. |
 | `sdr_white` | float | `203` | SDR reference white in cd/m² while HDR is active. |
+| `bit_depth` | int | `8` | Render bit depth for SDR output: `8` or `10`. |
 | `workspaces` | int, string array, or `"dynamic"` | `"dynamic"` | Workspace inventory for this output. |
 | `min_workspaces` | int | `1` | Minimum count for a dynamic output. |
+| `cyclic_workspaces` | bool | `false` | Wrap a workspace step around the ends of the inventory. |
 | `workspace_axis` | string | `"vertical"` | Workspace arrangement axis. |
 | `layout.scrolling.default_extent_fraction` | float | inherited | Initial scrolling-column extent on this output. |
+| `screen_effect` | string | inherited | Replace `effects.screen` by name, or `"off"` to disable it on this output. |
 
 Umbriel tries an unadvertised resolution as a custom mode. If it cannot apply
 the configured mode, it uses the preferred advertised mode and logs a warning.
@@ -1958,6 +2303,27 @@ Do not combine `min_workspaces` with a fixed workspace inventory. See
 [Workspaces](workspaces.md#choose-a-workspace-model) for naming, lifecycle, and
 workspace rules.
 
+### Cyclic workspaces
+
+With `cyclic_workspaces = true`, a workspace step past either end of the
+inventory wraps to the other end:
+
+```toml
+[output.DP-1]
+workspaces = 3
+cyclic_workspaces = true
+```
+
+This applies to `workspace-next`/`previous`,
+`window-move-to-workspace-next`/`previous`,
+`window-move-to-workspace-silent-next`/`previous`,
+`window-move-or-workspace-up`/`down` at the column edge, and
+`column-move-to-workspace-next`/`previous`.
+
+On a dynamic output, the trailing empty workspace is the last one. Stepping
+forward from the last populated workspace enters it, and one more step wraps to
+the first. A static inventory wraps directly at both ends.
+
 ### Initial scrolling width
 
 Override the global starting width for new scrolling columns on one output:
@@ -1970,6 +2336,17 @@ default_extent_fraction = 0.4
 A matching workspace rule can override this value. Reloading affects new
 columns only; existing columns keep their current width. See
 [Scrolling behavior](layout.md#scrolling-behavior).
+
+### Screen effect
+
+```toml
+[output."HDMI-A-1"]
+screen_effect = "off"
+```
+
+`screen_effect` names an `[effects.preset.<name>]` of kind `screen`, or `"off"`
+to disable `effects.screen` on this output. See
+[Effects](effects.md#turn-a-default-off-for-one-window-or-output).
 
 ### Position and scale
 
@@ -2065,6 +2442,60 @@ session environment values.
 Screenshots from normal screencopy clients receive an SDR view while HDR is
 active.
 
+### Bit depth
+
+Set `bit_depth = 10` to request a 10-bit SDR compositor render format:
+
+```toml
+[output.DP-1]
+bit_depth = 10
+```
+
+Umbriel selects XR30 (`DRM_FORMAT_XRGB2101010`) or XB30
+(`DRM_FORMAT_XBGR2101010`) when the backend accepts it. XB30 is tried first if
+it is already active. Otherwise, XR30 is tried first. If no 10-bit format
+commits, the output falls back to 8-bit. HDR uses 10-bit independently of this
+setting.
+
+While a 10-bit format is active, blur and effects intermediate buffers are
+upgraded to FP16 precision, provided the renderer supports FP16 render targets
+and linear filtering of half-float textures. Otherwise, they remain 8-bit.
+
+`bit_depth = 10` controls the compositor render format only. It does not
+guarantee that the physical display link runs at 10 bits per channel. The
+number of bits delivered to the panel depends on the display's EDID, cable,
+and driver. Run `umbriel color` to confirm the active render format that the
+compositor committed.
+
+In `umbriel color --json`, `bit_depth` is the configured value and
+`bit_depth_active` reports whether an enabled SDR output is currently using
+XR30 or XB30. `bit_depth_fallback_reason` explains a failed 10-bit request.
+It is empty while HDR is active.
+
+#### VRR fallback
+
+When VRR is also requested and the output supports adaptive sync, Umbriel tests
+the formats with VRR first, in the order described above. If neither passes, it
+tests them without VRR in the same order. Once a format passes its test,
+Umbriel attempts to commit it. If that commit fails with VRR, it retries the
+same format without VRR, without another test. A failed commit does not try the
+other format. If no 10-bit format commits, it falls back to 8-bit. HDR follows
+the same retry rule before falling back to SDR.
+
+#### Direct scanout with 10-bit
+
+Direct scanout remains enabled by the `direct_scanout` setting, but it may be
+less likely to engage while 10-bit rendering is active. Direct scanout requires
+the client buffer format to exactly match what KMS accepts for the plane. Set
+`direct_scanout = false` to disable direct scanout for an output entirely.
+
+#### Screencopy and capture
+
+Screencopy clients such as `grim` and Noctalia receive raw buffers in the
+output's active 10-bit render format (XR30 or XB30) when 10-bit SDR is active.
+Unlike HDR capture, the pixels are not converted to an 8-bit SDR format first.
+Tools that do not handle 10-bit formats may produce undesired output.
+
 ## Disabling an output
 
 Set `enabled = false` for a persistent disabled state:
@@ -2078,6 +2509,21 @@ The output leaves the desktop, but its workspaces and windows are retained and
 return when it is enabled again. Output-management tools can temporarily
 override this state until a later configuration reload reapplies the file.
 
+Use the logical output actions for the same temporary change without an
+external output-management tool:
+
+```sh
+umbriel msg output-disable:eDP-1
+umbriel msg output-enable:eDP-1
+umbriel msg output-toggle:eDP-1
+```
+
+These actions remove and restore the output as part of the desktop layout.
+Windows move to another enabled output while their home is unavailable, then
+return when it is enabled again. A disabled output is also absent from
+whole-desktop screenshots. The actions can be used directly by
+[lid event commands](configuration.md#events).
+
 ## Display power management
 
 Use DPMS actions to power monitors off without removing their workspaces:
@@ -2090,7 +2536,8 @@ umbriel msg dpms-on:DP-1
 
 The bare actions target every configured output. Input wakes all monitors when
 every output is powered off. Outputs disabled with `enabled = false` are not
-affected.
+affected. DPMS does not remove an output from the logical desktop, move its
+windows, or exclude it from a whole-desktop capture.
 
 ## Live reconfiguration
 
@@ -2271,12 +2718,14 @@ has deliberately moved it elsewhere.
 
 ## Appearance and window actions
 
-Scratchpad windows use dedicated border colors:
+Scratchpad windows use the regular border colors unless a
+[window rule](window-rules.md#border-colors) matches them:
 
 ```toml
-[colors.border]
-scratchpad_focused = "#E5C07BFF"
-scratchpad_unfocused = "#5C4A2AFF"
+[[window_rule]]
+match.is_scratchpad = true
+border_color_focused = "#E5C07BFF"
+border_color_unfocused = "#5C4A2AFF"
 ```
 
 Show and hide transitions, backdrop dimming and blur, and optional entry sizing
@@ -2555,10 +3004,63 @@ and sets its extent.
 | `vrr` | Override the focused output's VRR policy. |
 | `tearing` | Request or veto asynchronous presentation. |
 | `hdr` | Override the focused output's HDR policy. |
+| `border_color_focused` | Override `colors.border.focused`. |
+| `border_color_unfocused` | Override `colors.border.unfocused`. |
+| `border_color_outer` | Override `colors.border.outer`. |
+| `border_width` | Override `appearance.border_width`, 0 to 100. |
+| `outer_border_width` | Override `appearance.outer_border_width`, 0 to 100. |
+| `corner_radius` | Override `appearance.corner_radius`, 0 to 100. |
+| `shadow` | Override `appearance.shadow.enabled`. |
+| `border_effect` | Replace `effects.border` by name, or `"off"` to disable it. |
+| `window_effect` | Replace `effects.window` by name, or `"off"` to disable it. |
 
 These values refresh when matching identity or state changes. Fullscreen
 bypasses rule opacity unless
 [`appearance.opaque_fullscreen`](appearance.md#window-appearance) is `false`.
+
+### Border colors
+
+Each `border_color_*` key is independent: an unset key keeps the
+[`[colors.border]`](appearance.md#border-colors) color. Combined with the state
+selectors, they tell floating, pinned, or scratchpad windows apart:
+
+```toml
+[[window_rule]]
+match.is_scratchpad = true
+border_color_focused = "#E5C07BFF"
+border_color_unfocused = "#5C4A2AFF"
+```
+
+### Decoration
+
+`border_width`, `outer_border_width`, `corner_radius`, and `shadow` change what
+Umbriel draws around the windows a rule matches. Layout spacing keeps using the
+global border widths, so a rule never moves other windows: a thinner border
+leaves its gap empty, and a thicker one draws into the gap. The shadow's
+softness, offsets, and color stay global.
+
+An application that draws its own rounded corners and shadow looks best
+without Umbriel's:
+
+```toml
+[[window_rule]]
+match.app_id = "^org[.]gnome[.]TextEditor$"
+border_width = 0
+corner_radius = 0
+shadow = false
+```
+
+### Effects
+
+```toml
+[[window_rule]]
+match.app_id = "^mpv$"
+border_effect = "off"
+window_effect = "scanlines"
+```
+
+Names refer to `[effects.preset.<name>]` tables of the matching kind. See
+[Effects](effects.md#turn-a-default-off-for-one-window-or-output).
 
 ## The only window in the workspace
 
@@ -2573,7 +3075,8 @@ default_maximize = true
 
 It can apply fullscreen, maximize-to-edges, maximize, or a scrolling extent.
 The effect is removed when another tiled window appears and restored when the
-window becomes alone again.
+window becomes alone again. A window that opens with `default_pinned = true`
+opens floating, so it never opens in the alone state.
 
 Combine it with other selectors when only one application should receive the
 behavior:
@@ -2893,6 +3396,7 @@ rule can override only `layout.struts.top`.
 | `layout.gap` | Set the window gap. |
 | `layout.struts.{left,right,top,bottom}` | Reserve signed logical pixels at each edge. |
 | `layout.extent_presets` | Set extent-cycle fractions. |
+| `layout.new_exits_fullscreen` | Choose which arriving windows exit fullscreen; see [Leaving fullscreen](layout.md#leaving-fullscreen). |
 | `layout.scrolling.default_extent_fraction` | Set the initial scrolling-column extent. |
 | `layout.scrolling.center_underfull_strip` | Center or start-align an underfull strip. |
 | `layout.scrolling.center_focused` | Control when focus changes center a column. |

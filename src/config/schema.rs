@@ -513,9 +513,11 @@ pub fn assemble_docs(docs: &str) -> Vec<Entry> {
                     .section
                     .split('.')
                     .all(|part| is_bare_key(part) && !part.chars().any(|c| c.is_ascii_uppercase()));
-            // Curve registries hold user-named entries, not settings.
-            let registry =
-                ["animation.beziers", "animation.springs"].contains(&entry.section.as_str());
+            // Curve registries and effect presets hold user-named
+            // entries, not settings.
+            let registry = ["animation.beziers", "animation.springs"]
+                .contains(&entry.section.as_str())
+                || entry.section.starts_with("effects.preset.");
             if plain && !registry && known.insert(entry.dotted()) {
                 entries.push(entry);
             }
@@ -528,9 +530,10 @@ pub fn assemble_docs(docs: &str) -> Vec<Entry> {
 }
 
 /// Two rules the docs state in prose rather than in a block: every
-/// animation event also accepts `enabled`, `duration_ms` and `curve`
-/// (the `[animation]` defaults), and hot corners come in four sections
-/// shaped like the documented `top_left`.
+/// animation event but `windows_drag` (only `physics`) also accepts
+/// `enabled`, `duration_ms` and `curve` (the `[animation]` defaults),
+/// and hot corners come in four sections shaped like the documented
+/// `top_left`.
 fn fill_documented_siblings(entries: &mut Vec<Entry>) {
     let mut added: Vec<Entry> = Vec::new();
     let has = |entries: &[Entry], added: &[Entry], dotted: &str| {
@@ -541,7 +544,9 @@ fn fill_documented_siblings(entries: &mut Vec<Entry>) {
     };
     let events: BTreeSet<String> = entries
         .iter()
-        .filter(|entry| entry.path.len() == 3 && entry.path[0] == "animation")
+        .filter(|entry| {
+            entry.path.len() == 3 && entry.path[0] == "animation" && entry.path[1] != "windows_drag"
+        })
         .map(|entry| entry.path[1].clone())
         .collect();
     for event in &events {
@@ -1676,6 +1681,25 @@ curve = \"easeout\"
             if entry.dotted().ends_with("curve") {
                 assert!(matches!(entry.kind, Kind::Curve), "{}", entry.dotted());
             }
+        }
+    }
+
+    #[test]
+    fn effect_presets_and_drag_physics_read_as_umbriel_documents_them() {
+        let entries = assemble_docs(crate::config::umbriel_docs::BUNDLED);
+        let has = |key: &str| entries.iter().any(|entry| entry.dotted() == key);
+        // effects.md's example preset is not a setting.
+        assert!(
+            !entries
+                .iter()
+                .any(|e| e.section.starts_with("effects.preset"))
+        );
+        assert!(has("effects.border") && has("effects.window"));
+        // windows_drag takes only `physics`.
+        assert!(has("animation.windows_drag.physics"));
+        for key in ["enabled", "duration_ms", "curve"] {
+            assert!(!has(&format!("animation.windows_drag.{key}")), "{key}");
+            assert!(has(&format!("animation.windows_move.{key}")), "{key}");
         }
     }
 }

@@ -160,6 +160,10 @@ pub const PAGES: &[Page] = &[
                 section: "animation.windows_move",
             },
             Card {
+                title: "Window drag",
+                section: "animation.windows_drag",
+            },
+            Card {
                 title: "Workspaces",
                 section: "animation.workspaces",
             },
@@ -196,7 +200,7 @@ pub const PAGES: &[Page] = &[
     Page {
         id: "appearance",
         title: "Appearance",
-        description: "Window decoration: borders, corners, blur, shadows.",
+        description: "Window decoration: borders, corners, blur, shadows, effects.",
         group: "look",
         cards: &[
             Card {
@@ -210,6 +214,10 @@ pub const PAGES: &[Page] = &[
             Card {
                 title: "Shadows",
                 section: "appearance.shadow",
+            },
+            Card {
+                title: "Effects",
+                section: "effects",
             },
         ],
     },
@@ -291,6 +299,16 @@ pub const PAGES: &[Page] = &[
         }],
     },
     Page {
+        id: "touch",
+        title: "Touchscreen",
+        description: "Touch input and which output it maps to.",
+        group: "input",
+        cards: &[Card {
+            title: "Touchscreen",
+            section: "input.touch",
+        }],
+    },
+    Page {
         id: "cursor",
         title: "Cursor",
         description: "Cursor theme, size, and visibility.",
@@ -313,12 +331,18 @@ pub const PAGES: &[Page] = &[
     Page {
         id: "general",
         title: "General",
-        description: "Core session behavior, XWayland, cheat sheet, autostart.",
+        description: "Core session behavior, XWayland, cheat sheet, autostart, screencasts.",
         group: "system",
-        cards: &[Card {
-            title: "General",
-            section: "general",
-        }],
+        cards: &[
+            Card {
+                title: "General",
+                section: "general",
+            },
+            Card {
+                title: "Screencasts",
+                section: "screencast",
+            },
+        ],
     },
     Page {
         id: "environment",
