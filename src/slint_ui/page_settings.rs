@@ -308,29 +308,59 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             let Some(app) = weak.upgrade() else { return };
             // Rebuild from the docs, diff old vs fresh, store the fresh
             // snapshot; the added keys get badges.
-            let fresh = super::load_schema(&env);
+            let super::Loaded {
+                schema: fresh,
+                rule_families,
+                output_fields,
+                schema_source: source,
+            } = super::load_schema(&env);
             let fresh_set = schema::key_set(&fresh);
             let mut shell = shell.borrow_mut();
             let drift = schema::diff(&schema::key_set(&shell.schema), &fresh_set);
             let _ = state::store(&state::snapshot_path(&env), &fresh_set);
             shell.new_keys.extend(drift.added.iter().cloned());
-            let (note, clean) = if !error.is_empty() {
-                (
+            let (note, clean) = match (&source, error.is_empty(), drift.is_empty()) {
+                // umbriel's schema decides the keys; the docs only add
+                // labels and units, so their refresh reads as that.
+                (Some(_), false, _) => (
+                    format!(
+                        "{} Couldn't refresh labels from umbriel's docs ({error}).",
+                        super::schema_note(source.as_deref())
+                    ),
+                    false,
+                ),
+                (Some(_), true, true) => (
+                    format!(
+                        "{} Labels are up to date with umbriel's docs.",
+                        super::schema_note(source.as_deref())
+                    ),
+                    true,
+                ),
+                (Some(_), true, false) => (
+                    format!(
+                        "{} Changed: {}.",
+                        super::schema_note(source.as_deref()),
+                        drift.summary()
+                    ),
+                    false,
+                ),
+                (None, false, _) => (
                     format!("Couldn't download umbriel's docs ({error}); using the saved copy."),
                     false,
-                )
-            } else if drift.is_empty() {
-                (
+                ),
+                (None, true, true) => (
                     "Settings are up to date with umbriel's docs.".to_owned(),
                     true,
-                )
-            } else {
-                (
+                ),
+                (None, true, false) => (
                     format!("Synced from umbriel's docs: {}.", drift.summary()),
                     false,
-                )
+                ),
             };
             shell.schema = fresh;
+            shell.rule_families = rule_families;
+            shell.output_fields = output_fields;
+            shell.schema_source = source;
             app.set_sync_note(note.clone().into());
             app.set_sync_clean(clean);
             if !drift.is_empty() {

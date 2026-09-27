@@ -47,6 +47,22 @@ pub(super) fn schema_row(
     let main = shell.includes.docs.len();
     let dotted = entry.dotted();
     let home = entry_home(sets, &dotted);
+    // An effect selector suggests the presets of its kind.
+    let selector;
+    let entry = match effect_selector(&dotted) {
+        Some(kind) => {
+            let names = effect_presets(shell, kind)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect();
+            selector = schema::Entry {
+                kind: schema::Kind::OpenChoice(names),
+                ..entry.clone()
+            };
+            &selector
+        }
+        None => entry,
+    };
     let mut row = setting_row(doc_at(shell, home.unwrap_or(main)), entry);
     row.is_new = shell.new_keys.contains(dotted.as_str());
     row.available = home.is_none();
@@ -62,6 +78,19 @@ pub(super) fn schema_row(
         None => false,
     };
     row
+}
+
+/// The preset kind an `[effects]` selector names (`effects.border` →
+/// `border`).
+fn effect_selector(key: &str) -> Option<&str> {
+    key.strip_prefix("effects.")
+        .filter(|kind| ["border", "window", "screen", "cursor"].contains(kind))
+}
+
+/// The presets of `kind` the loaded files define, then umbriel's bundled
+/// ones with the file to include for each.
+fn effect_presets(shell: &Shell, kind: &str) -> Vec<(String, Option<PathBuf>)> {
+    shaders::presets(&chain_docs(shell), &super::page_shaders::data_roots(), kind)
 }
 
 /// Refresh one row after a committed edit.
@@ -123,6 +152,11 @@ pub(super) fn rebuild_row(app: &AppWindow, shell: &Shell, key: &str, force: bool
         let Some((name, field_key)) = rest.rsplit_once('.') else {
             return;
         };
+        // A dotted field (`layout.scrolling.…`) names its output earlier.
+        let (name, field) = match outputs::split_key(&shell.output_fields, key) {
+            Some((name, field)) => (name, Some(field)),
+            None => (name, None),
+        };
         let monitor = shell
             .guide_monitors
             .iter()
@@ -141,10 +175,7 @@ pub(super) fn rebuild_row(app: &AppWindow, shell: &Shell, key: &str, force: bool
                 refresh_choice_row(shell, name, monitor, &current)
             }
             _ => {
-                let Some(field) = outputs::FIELDS.iter().find(|field| field.key == field_key)
-                else {
-                    return;
-                };
+                let Some(field) = field else { return };
                 output_row(shell, name, field, &current)
             }
         };
@@ -218,7 +249,7 @@ fn value_kind(kind: &schema::Kind) -> ValueKind {
         schema::Kind::Bool => ValueKind::Boolean,
         schema::Kind::Integer { .. } => ValueKind::Integer,
         schema::Kind::Float { .. } => ValueKind::Float,
-        schema::Kind::Text => ValueKind::Text,
+        schema::Kind::Text | schema::Kind::Raw => ValueKind::Text,
         schema::Kind::List => ValueKind::List,
         schema::Kind::Choice(_) => ValueKind::Choice,
         schema::Kind::Color => ValueKind::Color,
@@ -326,6 +357,7 @@ fn typed_value(doc: &ConfigDocument, entry: &schema::Entry) -> Option<String> {
         | schema::Kind::Color
         | schema::Kind::Curve
         | schema::Kind::OpenChoice(_) => doc.get_string(&parts),
+        schema::Kind::Raw => doc.get_raw(&parts),
     }
 }
 
@@ -426,7 +458,7 @@ fn hsva_to_hex(h: f32, s: f32, v: f32, a: f32) -> String {
 /// Hex color (#RRGGBB or #RRGGBBAA) to swatch brush; opaque black when
 /// unparseable. The alpha byte rides along so translucent values
 /// preview truthfully.
-fn swatch_for(value: &str) -> slint::Brush {
+pub(super) fn swatch_for(value: &str) -> slint::Brush {
     let (r, g, b, a) = parse_hex_color(value).unwrap_or((0, 0, 0, 255));
     slint::Brush::from(slint::Color::from_argb_u8(a, r, g, b))
 }
@@ -539,19 +571,17 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
     // to the owning document — no schema formatting, no
     // save-popup destination.
     if let Some((family, doc, index, field_key)) = rules::parse_rule_key(key) {
-        let field = rules::fields(family)
-            .0
-            .iter()
-            .chain(rules::fields(family).1)
-            .find(|field| field.key == field_key);
-        let Some(field) = field else { return };
-        let target = {
+        let (field, target) = {
             let shell = shell.borrow();
-            doc.unwrap_or_else(|| super::page_rules::rule_target(&shell, family))
+            let Some(field) = shell.rule_family(family).field(field_key).cloned() else {
+                return;
+            };
+            let target = doc.unwrap_or_else(|| super::page_rules::rule_target(&shell, family));
+            (field, target)
         };
         let result = {
             let mut shell = shell.borrow_mut();
-            rules::apply_field_text(doc_at_mut(&mut shell, target), family, index, field, raw)
+            rules::apply_field_text(doc_at_mut(&mut shell, target), family, index, &field, raw)
         };
         if let Err(err) = result {
             set_row_error(app, key, &err);
@@ -604,7 +634,17 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
         } else {
             return;
         };
-        doc.set_leaf_text(key, &value_text)
+        let accepted = doc.set_leaf_text(key, &value_text);
+        // A bundled preset is only selectable once its file is included.
+        if accepted
+            && let Some(kind) = effect_selector(key)
+            && let Some((_, Some(file))) = effect_presets(&shell, kind)
+                .into_iter()
+                .find(|(name, _)| name == raw.trim())
+        {
+            super::page_shaders::include_preset(&mut shell, &file);
+        }
+        accepted
     };
     if !accepted {
         let err = format!("umbriel would reject {key} = {value_text}");
@@ -617,7 +657,7 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
     refresh_row(app, &shell, key);
     // Shader assignments live on their own page; refresh the
     // assignment dropdowns after a change.
-    if key.starts_with("animation.") && key.ends_with(".shader") {
+    if key.starts_with("animation.") && key.ends_with(".effect") {
         super::page_shaders::rebuild_shaders(app, &shell);
     }
     // A new resolution changes which refreshes exist — rebuild

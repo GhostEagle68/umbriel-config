@@ -108,6 +108,7 @@ pub(super) fn section_nav(shell: &Shell) -> Vec<SectionNav> {
     }
 
     let counts = page_new_counts(shell);
+    let sets = chain_path_sets(shell);
     let mut nav: Vec<SectionNav> = Vec::new();
     let mut claimed_tops: Vec<&'static str> = Vec::new();
     // Outputs leads the sidebar and needs no redundant group header.
@@ -121,7 +122,27 @@ pub(super) fn section_nav(shell: &Shell) -> Vec<SectionNav> {
             new_count: 0,
             is_header: true,
         });
-        for page in catalog::PAGES.iter().filter(|page| page.group == *group) {
+        // A page of cards none of which this umbriel reads (a newer
+        // umbriel's settings) would be empty, unless your files set keys
+        // there (`[environment]`'s variables).
+        let readable = |page: &&catalog::Page| {
+            page.cards.is_empty()
+                || page.cards.iter().any(|card| {
+                    let prefix = format!("{}.", card.section);
+                    shell
+                        .schema
+                        .iter()
+                        .any(|entry| entry.section == card.section)
+                        || sets
+                            .iter()
+                            .any(|set| set.iter().any(|key| key.starts_with(&prefix)))
+                })
+        };
+        for page in catalog::PAGES
+            .iter()
+            .filter(|page| page.group == *group)
+            .filter(readable)
+        {
             push_page(&mut nav, &mut claimed_tops, &counts, page);
         }
     }
@@ -202,8 +223,11 @@ fn catalog_page_cards(shell: &Shell, page: &catalog::Page) -> Vec<SettingsCard> 
     let tops = catalog::page_top_levels(page);
     let mut auto: BTreeMap<String, Vec<SettingRow>> = BTreeMap::new();
     for entry in &shell.schema {
-        let top = entry.section.split('.').next().unwrap_or("");
-        if !tops.contains(&top) || claimed.contains(&entry.section.as_str()) {
+        // Sub-sections no page claims land on the first page of their
+        // area, not on every page sharing it.
+        if claimed.contains(&entry.section.as_str())
+            || page_id_for_section(&entry.section) != page.id
+        {
             continue;
         }
         let row = schema_row(shell, &sets, &labels, &current, entry);
@@ -267,7 +291,7 @@ fn other_card(
     tops: &[&str],
 ) -> Option<SettingsCard> {
     let docs: Vec<&ConfigDocument> = shell.includes.docs.iter().map(|inc| &inc.doc).collect();
-    let claims = schema::managed_claims(&docs);
+    let claims = schema::managed_claims(&docs, &shell.output_fields);
     let schema_keys = schema::key_set(&shell.schema);
     let mut other: BTreeMap<String, SettingRow> = BTreeMap::new();
     for (i, set) in sets.iter().enumerate() {

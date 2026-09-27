@@ -14,15 +14,17 @@ pub(in crate::slint_ui) fn scan_shaders(shell: &mut Shell) {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    // Bundled presets live at <data root>/umbriel/effects; the
-    // packaged default config sits at <data root>/umbriel/config.toml.
-    let env = discovery::Env::from_process();
-    let data_roots: Vec<PathBuf> = discovery::packaged_default(&env)
+    shell.shaders = shaders::scan(&config_dir, &data_roots());
+    shell.shaders_installed = config_dir.join("shaders/community").is_dir();
+}
+
+/// Where umbriel's bundled presets live: `<data root>/umbriel/effects`,
+/// beside the packaged default config at `<data root>/umbriel/config.toml`.
+pub(in crate::slint_ui) fn data_roots() -> Vec<PathBuf> {
+    discovery::packaged_default(&discovery::Env::from_process())
         .and_then(|path| path.parent().and_then(Path::parent).map(Path::to_path_buf))
         .into_iter()
-        .collect();
-    shell.shaders = shaders::scan(&config_dir, &data_roots);
-    shell.shaders_installed = config_dir.join("shaders/community").is_dir();
+        .collect()
 }
 
 pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
@@ -264,7 +266,7 @@ pub(super) fn assign_event(
 
 /// List `preset_file` under the main config's `[include] files`, as an
 /// unsaved change, unless an include already names it.
-fn include_preset(shell: &mut Shell, preset_file: &Path) {
+pub(in crate::slint_ui) fn include_preset(shell: &mut Shell, preset_file: &Path) {
     let listed = includes::listed_paths(&shell.doc, &shell.path);
     if listed
         .iter()

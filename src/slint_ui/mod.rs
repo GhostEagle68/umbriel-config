@@ -28,8 +28,8 @@ use slint::{
     CloseRequestResponse, ComponentHandle, LogicalSize, Model, SharedString, VecModel, WindowSize,
 };
 use umbriel_config::config::{
-    backups, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema,
-    settings as app_settings, shaders, state, umbriel_docs, validate,
+    backups, discovery, document::ConfigDocument, includes, keybinds, outputs, probe, rules,
+    schema, settings as app_settings, shaders, state, umbriel_docs, umbriel_schema, validate,
 };
 
 use umbriel_config::{changelog, live, update};
@@ -60,6 +60,13 @@ struct Shell {
     healthy: bool,
     load_error: Option<String>,
     schema: Vec<schema::Entry>,
+    // The rule pages' fields, per family.
+    rule_families: Vec<rules::Family>,
+    // The Outputs page's fields.
+    output_fields: Vec<outputs::Field>,
+    // umbriel's own schema, described, when it is the source of the three
+    // above; `None` when the docs are.
+    schema_source: Option<String>,
     includes: includes::IncludeChain,
     // Per chain index: each doc's leaf values as last saved on disk. A row
     // whose current value differs from this snapshot is "changed".
@@ -108,12 +115,55 @@ struct Shell {
     shader_preview_timeline: umbriel_config::config::curves::Timeline,
 }
 
-/// The settings pages' entries: umbriel's docs (downloaded, else
-/// bundled) plus anything only the installed packaged config has.
-fn load_schema(env: &discovery::Env) -> Vec<schema::Entry> {
+/// The Umbriel settings page's line on where the settings come from;
+/// `source` describes umbriel's own schema when that is in use.
+fn schema_note(source: Option<&str>) -> String {
+    match source {
+        Some(source) => format!("Settings come from umbriel itself ({source})."),
+        None => "Settings come from umbriel's docs (this umbriel can't list its own settings yet)."
+            .to_owned(),
+    }
+}
+
+/// Everything built from umbriel's description of its config.
+struct Loaded {
+    schema: Vec<schema::Entry>,
+    rule_families: Vec<rules::Family>,
+    output_fields: Vec<outputs::Field>,
+    schema_source: Option<String>,
+}
+
+/// The settings pages' entries and the rule and output pages' fields, plus
+/// a description of umbriel's schema when it was their source. With an
+/// installed umbriel, its own schema (printed, else probed), with the
+/// docs for labels, units and defaults; otherwise umbriel's docs
+/// (downloaded, else bundled) plus anything only the installed packaged
+/// config has, and the built-in rule and output fields.
+fn load_schema(env: &discovery::Env) -> Loaded {
     let packaged =
         discovery::packaged_default(env).and_then(|path| std::fs::read_to_string(path).ok());
-    schema::combined(&umbriel_docs::load(env), packaged.as_deref())
+    let docs = schema::combined(&umbriel_docs::load(env), packaged.as_deref());
+    // umbriel's own list when it can print one, else what probing it
+    // found; the docs only when neither works (no umbriel installed).
+    let umbriel = umbriel_schema::load().or_else(|| probe::load(env, &docs));
+    let keys = umbriel.as_ref().map(|schema| schema.options.as_slice());
+    let schema_source = umbriel.as_ref().map(|schema| {
+        format!(
+            "{} keys, build {}",
+            schema.options.len(),
+            schema.revision.as_deref().unwrap_or("unknown")
+        )
+    });
+    eprintln!("umbriel-config: {}", schema_note(schema_source.as_deref()));
+    Loaded {
+        schema: match keys {
+            Some(keys) => schema::from_umbriel(keys, &docs),
+            None => docs,
+        },
+        rule_families: rules::families(keys),
+        output_fields: outputs::fields(keys),
+        schema_source,
+    }
 }
 
 impl Shell {
@@ -133,7 +183,12 @@ impl Shell {
                 )
             }
         };
-        let schema = load_schema(env);
+        let Loaded {
+            schema,
+            rule_families,
+            output_fields,
+            schema_source,
+        } = load_schema(env);
         // Startup drift: keys added since the last snapshot get NEW badges.
         // No snapshot yet (first run) flags nothing.
         let seen = state::load(&state::snapshot_path(env));
@@ -153,6 +208,9 @@ impl Shell {
             healthy,
             load_error,
             schema,
+            rule_families,
+            output_fields,
+            schema_source,
             includes,
             saved: Vec::new(),
             new_keys,
@@ -188,6 +246,13 @@ impl Shell {
         self.saved = (0..=main)
             .map(|i| common::doc_at(self, i).leaf_values().into_iter().collect())
             .collect();
+    }
+
+    fn rule_family(&self, name: &str) -> &rules::Family {
+        self.rule_families
+            .iter()
+            .find(|family| family.name == name)
+            .expect("every rule page's family is loaded")
     }
 
     fn any_modified(&self) -> bool {
@@ -241,6 +306,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     app.set_dark_mode(settings.dark);
     app.global::<Theme>().set_dark(settings.dark);
     app.set_backup_note(page_backups::backup_note(&settings, &env));
+    app.set_sync_note(schema_note(shell.borrow().schema_source.as_deref()).into());
     app.set_backup_count_text(settings.backup_count.to_string().into());
     app.set_backup_dir_text(settings.backup_dir.clone().unwrap_or_default().into());
     {

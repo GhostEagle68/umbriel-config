@@ -241,17 +241,23 @@ pub(super) fn start_guide(shell: &mut Shell) -> bool {
                 &[i64::from(monitor.position.0), i64::from(monitor.position.1)],
             );
         }
-        for field in outputs::FIELDS {
-            if matches!(field.key, "enabled" | "mode" | "scale" | "position") {
+        for field in shell.output_fields.clone() {
+            if matches!(
+                field.key.as_str(),
+                "enabled" | "mode" | "scale" | "position"
+            ) {
                 continue; // detection fills these
             }
-            if is_set(field.key) {
+            if is_set(&field.key) {
                 continue;
             }
-            let path = ["output", name, field.key];
+            let path = field.path(name);
             match &field.default {
                 Some(outputs::DefaultValue::Bool(value)) => {
                     shell.doc.set_bool(&path, *value);
+                }
+                Some(outputs::DefaultValue::Integer(value)) => {
+                    shell.doc.set_integer(&path, *value);
                 }
                 Some(outputs::DefaultValue::Float(value)) => {
                     shell.doc.set_float(&path, *value);

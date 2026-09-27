@@ -50,7 +50,7 @@ fn output_monitor_rows(
         .iter()
         .find(|monitor| monitor.name == name);
     let mut rows: Vec<SettingRow> = Vec::new();
-    for field in outputs::FIELDS {
+    for field in &shell.output_fields {
         if field.key == "mode"
             && let Some(detected) = monitor.filter(|monitor| !monitor.modes.is_empty())
         {
@@ -239,6 +239,11 @@ fn output_field_hint(key: &str) -> &'static str {
         "tearing" => "Allow tearing for lower input lag. Recommended: off.",
         "direct_scanout" => "Send fullscreen apps straight to the display. Recommended: on.",
         "workspaces" => "Workspace names for this monitor; dynamic keeps them automatic.",
+        "min_workspaces" => "Fewest workspaces a dynamic monitor keeps. Don't combine with names.",
+        "workspace_axis" => "Whether this monitor's workspaces stack vertically or horizontally.",
+        "layout.scrolling.default_extent_fraction" => {
+            "Width of new scrolling columns on this monitor; empty uses the Layout setting."
+        }
         _ => "",
     }
 }
@@ -253,14 +258,15 @@ pub(super) fn output_row(
 ) -> SettingRow {
     let main = shell.includes.docs.len();
     let doc = doc_at(shell, main);
-    let path = ["output", name, field.key];
+    let path = field.path(name);
     let key = format!("output.{name}.{}", field.key);
-    let mut row = blank_row(key.clone(), field.label, shell.includes.docs.len() as i32);
-    row.hint = output_field_hint(field.key).into();
+    let mut row = blank_row(key.clone(), &field.label, shell.includes.docs.len() as i32);
+    row.hint = output_field_hint(&field.key).into();
     let default_text = match &field.default {
         Some(outputs::DefaultValue::Bool(value)) => value.to_string(),
+        Some(outputs::DefaultValue::Integer(value)) => value.to_string(),
         Some(outputs::DefaultValue::Float(value)) => value.to_string(),
-        Some(outputs::DefaultValue::Text(value)) => (*value).to_owned(),
+        Some(outputs::DefaultValue::Text(value)) => value.clone(),
         None => String::new(),
     };
     match &field.kind {
@@ -278,7 +284,7 @@ pub(super) fn output_row(
             row.choices = Rc::new(VecModel::from(
                 vocab
                     .iter()
-                    .map(|value| SharedString::from(*value))
+                    .map(|value| SharedString::from(value.as_str()))
                     .collect::<Vec<_>>(),
             ))
             .into();
@@ -299,11 +305,23 @@ pub(super) fn output_row(
             row.kind = ValueKind::Float;
             row.min = *min as f32;
             row.max = *max as f32;
+            // Unset without a default stays blank: 0 would read as set.
             row.value = doc
                 .get_float(&path)
-                .unwrap_or_else(|| default_text.parse().unwrap_or(0.0))
-                .to_string()
+                .map_or(default_text, |value| value.to_string())
                 .into();
+        }
+        outputs::FieldKind::Integer { min, max } => {
+            row.kind = ValueKind::Integer;
+            row.min = *min as f32;
+            row.max = *max as f32;
+            row.value = doc
+                .get_integer(&path)
+                .map_or(default_text, |value| value.to_string())
+                .into();
+        }
+        outputs::FieldKind::Raw => {
+            row.value = current.get(&key).cloned().unwrap_or(default_text).into();
         }
         outputs::FieldKind::Text => {
             row.value = doc
@@ -329,8 +347,7 @@ pub(super) fn output_row(
 /// Format raw editor input for an output field (not schema-backed) into
 /// its TOML text form.
 pub(super) fn format_output_value(shell: &Shell, key: &str, raw: &str) -> Result<String, String> {
-    let field_key = key.rsplit('.').next().unwrap_or_default();
-    let name = &key["output.".len()..key.len() - field_key.len() - 1];
+    let (name, field_key) = key["output.".len()..].rsplit_once('.').unwrap_or_default();
     // The detected mode string splits into two dropdowns; both compose
     // the full mode this output saves.
     match field_key {
@@ -367,7 +384,7 @@ pub(super) fn format_output_value(shell: &Shell, key: &str, raw: &str) -> Result
         }
         _ => {}
     }
-    let Some(field) = outputs::FIELDS.iter().find(|field| field.key == field_key) else {
+    let Some((_, field)) = outputs::split_key(&shell.output_fields, key) else {
         return Err(format!("unknown output field in {key}"));
     };
     let raw = raw.trim();
@@ -382,6 +399,14 @@ pub(super) fn format_output_value(shell: &Shell, key: &str, raw: &str) -> Result
                 .map_err(|_| format!("'{raw}' is not a number"))?;
             Ok(value.clamp(*min, *max).to_string())
         }
+        outputs::FieldKind::Integer { min, max } => super::rows::commit_value(
+            Some(&schema::Kind::Integer {
+                min: Some(*min),
+                max: Some(*max),
+            }),
+            raw,
+        ),
+        outputs::FieldKind::Raw => super::rows::commit_value(None, raw),
         outputs::FieldKind::Position => {
             let mut parts = raw.split(',');
             let mut xy = [0_i32, 0];

@@ -112,7 +112,7 @@ fn bundled_shaders(dir: &Path) -> Vec<PathBuf> {
         .flatten()
         .filter_map(|item| {
             let preset_file = item.path().join("effect.toml");
-            let (_, shader) = read_preset(&preset_file)?;
+            let (_, shader) = read_preset(&preset_file, "animation")?;
             Some(resolve(&shader, &preset_file))
         })
         .collect();
@@ -120,17 +120,54 @@ fn bundled_shaders(dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// The animation preset a preset file defines: its name and `shader`
+/// The preset of `kind` a preset file defines: its name and `shader`
 /// value, or `None` for a missing file or one without such a preset.
-fn read_preset(preset_file: &Path) -> Option<(String, String)> {
+fn read_preset(preset_file: &Path, kind: &str) -> Option<(String, String)> {
     let doc: ConfigDocument = std::fs::read_to_string(preset_file).ok()?.parse().ok()?;
     doc.table_names(&["effects", "preset"])
         .into_iter()
         .find_map(|name| {
-            let kind = doc.get_string(&["effects", "preset", &name, "kind"])?;
+            let found = doc.get_string(&["effects", "preset", &name, "kind"])?;
             let shader = doc.get_string(&["effects", "preset", &name, "shader"])?;
-            (kind == "animation").then_some((name, shader))
+            (found == kind).then_some((name, shader))
         })
+}
+
+/// The presets of `kind` (`border`, `window`, …) a selector can name, in
+/// order: those the loaded files define, then umbriel's bundled ones
+/// (`<data dir>/umbriel/effects/<kind>/*/effect.toml`) with the file to
+/// include for each.
+pub fn presets(
+    docs: &[&ConfigDocument],
+    data_dirs: &[PathBuf],
+    kind: &str,
+) -> Vec<(String, Option<PathBuf>)> {
+    let mut found: Vec<(String, Option<PathBuf>)> = Vec::new();
+    for doc in docs {
+        for name in doc.table_names(&["effects", "preset"]) {
+            let defined = doc.get_string(&["effects", "preset", &name, "kind"]);
+            if defined.as_deref() == Some(kind) && !found.iter().any(|(known, _)| *known == name) {
+                found.push((name, None));
+            }
+        }
+    }
+    let mut bundled: Vec<(String, Option<PathBuf>)> = data_dirs
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir.join("umbriel/effects").join(kind)).ok())
+        .flat_map(|read| read.flatten())
+        .filter_map(|item| {
+            let preset_file = item.path().join("effect.toml");
+            let (name, _) = read_preset(&preset_file, kind)?;
+            Some((name, Some(preset_file)))
+        })
+        .collect();
+    bundled.sort();
+    for (name, file) in bundled {
+        if !found.iter().any(|(known, _)| *known == name) {
+            found.push((name, file));
+        }
+    }
+    found
 }
 
 /// Where a shader's preset is defined: its folder's `effect.toml` when
@@ -238,7 +275,8 @@ fn entry_for(path: PathBuf, source: Source) -> ShaderEntry {
     }
     let preset_file = preset_file_for(&path);
     // An existing preset file names the preset; otherwise the shader does.
-    let preset = read_preset(&preset_file).map_or_else(|| name.clone(), |(preset, _)| preset);
+    let preset =
+        read_preset(&preset_file, "animation").map_or_else(|| name.clone(), |(preset, _)| preset);
     let invalid = validate(&path);
     let description = readme_description(&path);
     ShaderEntry {
@@ -2271,6 +2309,41 @@ vec2 cell_id = floor(uv * 12.0);
     }
 
     #[test]
+    fn selectors_offer_loaded_presets_then_bundled_ones() {
+        let base = std::env::temp_dir().join(format!("umbriel-presets-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        for (kind, name) in [
+            ("border", "pulse"),
+            ("border", "mine"),
+            ("window", "scanlines"),
+        ] {
+            write(
+                &base.join(format!("umbriel/effects/{kind}/{name}/effect.toml")),
+                format!("[effects.preset.{name}]\nkind = \"{kind}\"\nshader = \"shader.glsl\"\n")
+                    .as_bytes(),
+            );
+        }
+        let own = ConfigDocument::from_str(
+            "[effects.preset.mine]\nkind = \"border\"\nshader = \"mine.glsl\"\n\n\
+             [effects.preset.tint]\nkind = \"window\"\nshader = \"tint.glsl\"\n",
+        )
+        .unwrap();
+        let found = presets(&[&own], std::slice::from_ref(&base), "border");
+        // Yours needs no include; a bundled one of the same name is hidden.
+        assert_eq!(
+            found,
+            vec![
+                ("mine".to_owned(), None),
+                (
+                    "pulse".to_owned(),
+                    Some(base.join("umbriel/effects/border/pulse/effect.toml"))
+                ),
+            ]
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
     fn a_community_update_keeps_preset_files_for_surviving_shaders() {
         let base = std::env::temp_dir().join(format!("umbriel-carry-{}", std::process::id()));
         std::fs::remove_dir_all(&base).ok();
@@ -2308,13 +2381,13 @@ vec2 cell_id = floor(uv * 12.0);
         );
         // What the app writes is the preset umbriel reads back.
         assert_eq!(
-            read_preset(&entry.preset_file),
+            read_preset(&entry.preset_file, "animation"),
             Some(("wobble".to_owned(), "wobble.glsl".to_owned()))
         );
         let renamed = rename_user_shader(&config_dir, &shader, "jelly").unwrap();
         assert!(!entry.preset_file.exists());
         assert_eq!(
-            read_preset(&config_dir.join("shaders/jelly.effect.toml")),
+            read_preset(&config_dir.join("shaders/jelly.effect.toml"), "animation"),
             Some(("jelly".to_owned(), "jelly.glsl".to_owned()))
         );
         delete_user_shader(&config_dir, &renamed).unwrap();

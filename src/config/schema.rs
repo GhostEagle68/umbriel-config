@@ -8,6 +8,7 @@
 
 use super::document::ConfigDocument;
 use super::outputs;
+use super::umbriel_schema;
 use std::collections::BTreeSet;
 use toml_edit::{DocumentMut, Item};
 
@@ -40,6 +41,9 @@ pub enum Kind {
     /// values alongside a free-text box; nothing outside the list is
     /// rejected.
     OpenChoice(Vec<String>),
+    /// A type the app has no editor for (`int_or_string`, …): TOML text as
+    /// typed, else a string.
+    Raw,
 }
 
 /// A typed scalar value; also used for defaults.
@@ -492,6 +496,117 @@ pub fn combined(docs: &str, packaged: Option<&str>) -> Vec<Entry> {
         );
     }
     entries
+}
+
+/// Entries from umbriel's own schema (`umbriel schema --json`): its keys,
+/// types, ranges and defaults win. The docs entry for the same key still
+/// supplies the label, unit and restart flag, the curve and action
+/// widgets, extra enum values, and any default the schema leaves out.
+/// Keys under arrays of tables or user-named tables belong to dedicated
+/// editors and are left out, as are sections [`OVERLAY`] skips.
+pub fn from_umbriel(keys: &[umbriel_schema::Key], docs: &[Entry]) -> Vec<Entry> {
+    // A value that may also be a table (`scroll_factor` or its per-axis
+    // form) is edited as the value; its table's keys are not settings.
+    let values: BTreeSet<&str> = keys
+        .iter()
+        .filter(|key| umbriel_kind(key).is_some())
+        .map(|key| key.path.as_str())
+        .collect();
+    keys.iter()
+        .filter(|key| !key.path.contains("[]") && !key.path.contains('<'))
+        .filter_map(|key| {
+            let path: Vec<String> = key.path.split('.').map(str::to_owned).collect();
+            let section = path[..path.len() - 1].join(".");
+            if section.is_empty() || is_skipped(&section) || values.contains(section.as_str()) {
+                return None;
+            }
+            let documented = docs.iter().find(|entry| entry.dotted() == key.path);
+            let kind = match (umbriel_kind(key), documented.map(|entry| &entry.kind)) {
+                (
+                    Some(Kind::Text),
+                    Some(kind @ (Kind::Curve | Kind::Choice(_) | Kind::OpenChoice(_))),
+                ) => kind.clone(),
+                (Some(Kind::Choice(mut values)), Some(Kind::Choice(extra))) => {
+                    for value in extra {
+                        if !values.contains(value) {
+                            values.push(value.clone());
+                        }
+                    }
+                    Kind::Choice(values)
+                }
+                // A type the app has no widget for: the docs' reading of
+                // it, else a raw TOML row.
+                (Some(Kind::Raw), Some(kind)) => kind.clone(),
+                (Some(kind), _) => kind,
+                // A value that may also be a table, which is all a probe
+                // can tell (`scroll_factor`): the docs' value.
+                (None, Some(kind)) => kind.clone(),
+                // A table of settings, listed through its own keys.
+                (None, None) => return None,
+            };
+            let default = key.default.as_ref().and_then(|value| match value {
+                serde_json::Value::Bool(value) => Some(Value::Bool(*value)),
+                serde_json::Value::Number(number) => match &kind {
+                    Kind::Integer { .. } => number.as_i64().map(Value::Integer),
+                    _ => number.as_f64().map(Value::Float),
+                },
+                // umbriel prints colors lowercase; the docs and the
+                // packaged config write them uppercase.
+                serde_json::Value::String(text) if kind == Kind::Color => {
+                    Some(Value::Text(text.to_uppercase()))
+                }
+                serde_json::Value::String(text) => Some(Value::Text(text.clone())),
+                _ => None,
+            });
+            let key_name = &path[path.len() - 1];
+            Some(Entry {
+                label: documented.map_or_else(
+                    || overlay_label(&key.path, key_name),
+                    |entry| entry.label.clone(),
+                ),
+                restart: documented.map_or_else(
+                    || OVERLAY.restart.contains(&key.path.as_str()),
+                    |entry| entry.restart,
+                ),
+                unit: documented.and_then(|entry| entry.unit.clone()),
+                default: default.or_else(|| documented.and_then(|entry| entry.default.clone())),
+                kind,
+                section,
+                path,
+            })
+        })
+        .collect()
+}
+
+/// The widget for one schema key; `None` for containers and for types
+/// with no widget of their own.
+fn umbriel_kind(key: &umbriel_schema::Key) -> Option<Kind> {
+    let integer = |bound: Option<f64>| bound.map(|value| value as i64);
+    Some(match key.kind.as_str() {
+        "bool" => Kind::Bool,
+        "int" => Kind::Integer {
+            min: integer(key.min),
+            max: integer(key.max),
+        },
+        // A per-axis table is the rare form; the plain number is edited.
+        "float" | "float_or_table" => Kind::Float {
+            min: key.min,
+            max: key.max,
+        },
+        "color" => Kind::Color,
+        "enum" => Kind::Choice(key.values.clone()),
+        "string" => match key.format.as_deref() {
+            Some("curve") => Kind::Curve,
+            Some("action") => {
+                Kind::OpenChoice(ACTIONS.iter().map(|action| (*action).to_owned()).collect())
+            }
+            _ => Kind::Text,
+        },
+        // `"all"` alone is also accepted; the list form covers every case.
+        kind if kind.ends_with("_array") || kind == "enum_or_array" => Kind::List,
+        "table" | "map" | "array_of_tables" => return None,
+        _ => Kind::Raw,
+    })
 }
 
 /// Derive entries from umbriel's user docs (every page, concatenated).
@@ -957,7 +1072,7 @@ fn is_word_like(word: &str) -> bool {
 }
 
 /// `#RRGGBB` or `#RRGGBBAA`.
-fn is_color(value: &str) -> bool {
+pub(super) fn is_color(value: &str) -> bool {
     let Some(hex) = value.strip_prefix('#') else {
         return false;
     };
@@ -1063,7 +1178,10 @@ pub fn diff(old: &BTreeSet<String>, new: &BTreeSet<String>) -> SchemaDiff {
 /// editor owns every chord in `[keybinds]`, the rules pages own the rule
 /// arrays, and the Outputs page owns each configured output's known
 /// fields. A path under one of these never reaches the Raw sweep.
-pub fn managed_claims(docs: &[&ConfigDocument]) -> BTreeSet<String> {
+pub fn managed_claims(
+    docs: &[&ConfigDocument],
+    output_fields: &[outputs::Field],
+) -> BTreeSet<String> {
     let mut claims: BTreeSet<String> = [
         "keybinds",
         "window_rule",
@@ -1082,7 +1200,7 @@ pub fn managed_claims(docs: &[&ConfigDocument]) -> BTreeSet<String> {
     claims.insert("effects.preset".to_owned());
     for doc in docs {
         for name in outputs::configured(doc) {
-            for field in outputs::FIELDS {
+            for field in output_fields {
                 claims.insert(format!("output.{name}.{}", field.key));
             }
         }
@@ -1113,6 +1231,61 @@ pub fn uncovered(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn umbriel_schema_drives_the_settings_pages() {
+        let keys = umbriel_schema::parse(umbriel_schema::FIXTURE)
+            .unwrap()
+            .options;
+        let docs = assemble_docs(super::super::umbriel_docs::BUNDLED);
+        let entries = from_umbriel(&keys, &docs);
+        let find = |dotted: &str| entries.iter().find(|entry| entry.dotted() == dotted);
+        // Only plain settings: rule arrays, user-named tables and the
+        // sections dedicated editors own stay off the settings pages.
+        assert!(entries.iter().all(|entry| {
+            let dotted = entry.dotted();
+            !dotted.contains("[]") && !dotted.contains('<') && !is_skipped(&entry.section)
+        }));
+        let border = find("appearance.border_width").unwrap();
+        assert_eq!(
+            border.kind,
+            Kind::Integer {
+                min: Some(0),
+                max: Some(100)
+            }
+        );
+        assert_eq!(border.default, Some(Value::Integer(2)));
+        assert!(find("layout.new_exits_fullscreen").is_some());
+        assert!(find("layout.dwindle.new_exits_fullscreen").is_none());
+        assert_eq!(
+            find("colors.border.focused").unwrap().default,
+            Some(Value::Text("#7AA3FFFF".to_owned()))
+        );
+        // The docs still supply the widgets the schema has no word for.
+        assert_eq!(
+            find("animation.windows_in.curve").unwrap().kind,
+            Kind::Curve
+        );
+        assert!(matches!(
+            find("input.mouse.accel_profile").unwrap().kind,
+            Kind::Choice(_)
+        ));
+        // A value that may also be a table is edited as the value.
+        assert!(find("input.touchpad.scroll_factor").is_some());
+        assert!(find("input.touchpad.scroll_factor.horizontal").is_none());
+        // A type the app has no editor for still gets a row.
+        let future = umbriel_schema::parse(
+            r#"{"options":[{"path":"general.future","type":"int_or_string"},
+                           {"path":"general.nested","type":"table"}]}"#,
+        )
+        .unwrap();
+        let entries = from_umbriel(&future.options, &[]);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            (entries[0].dotted(), &entries[0].kind),
+            ("general.future".to_owned(), &Kind::Raw)
+        );
+    }
 
     #[test]
     fn assemble_docs_reads_blocks_with_their_tables() {
@@ -1654,7 +1827,7 @@ focus_on_activate = false
     #[test]
     fn managed_claims_cover_configured_output_fields() {
         let doc = ConfigDocument::from_str("[output.DP-1]\nmode = \"1920x1080\"\n").unwrap();
-        let claims = managed_claims(&[&doc]);
+        let claims = managed_claims(&[&doc], &outputs::fields(None));
         assert!(claims.contains("keybinds"));
         assert!(claims.contains("include.files"));
         assert!(claims.contains("output.DP-1.mode"));

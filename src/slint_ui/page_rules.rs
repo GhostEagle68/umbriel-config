@@ -40,8 +40,8 @@ fn rule_row(
 ) -> SettingRow {
     let doc = doc_at(shell, doc_index);
     let mut row = blank_row(
-        rules::rule_key(family, doc_index, index, field.key),
-        field.label,
+        rules::rule_key(family, doc_index, index, &field.key),
+        &field.label,
         doc_index as i32,
     );
     row.home_label = setting_labels(shell)
@@ -54,7 +54,16 @@ fn rule_row(
         | rules::FieldKind::List
         | rules::FieldKind::SizePx
         | rules::FieldKind::SizeFraction
-        | rules::FieldKind::Position => {
+        | rules::FieldKind::Position
+        | rules::FieldKind::Raw => {
+            row.value = text.into();
+        }
+        rules::FieldKind::Color => {
+            row.kind = ValueKind::Color;
+            // Unset has no swatch (the row default is transparent).
+            if !text.is_empty() {
+                row.swatch = super::rows::swatch_for(&text);
+            }
             row.value = text.into();
         }
         rules::FieldKind::Toggle => {
@@ -65,7 +74,7 @@ fn rule_row(
         rules::FieldKind::Choice(options) => {
             row.kind = ValueKind::Choice;
             let mut choices: Vec<SharedString> = vec!["(unset)".into()];
-            choices.extend(options.iter().map(|option| (*option).into()));
+            choices.extend(options.iter().map(|option| option.as_str().into()));
             row.choices = Rc::new(VecModel::from(choices)).into();
             row.value = if text.is_empty() {
                 "(unset)".into()
@@ -88,21 +97,14 @@ fn rule_row(
             row.kind = ValueKind::Float;
             row.min = *min as f32;
             row.max = *max as f32;
-            row.value = if text.is_empty() {
-                min.to_string().into()
-            } else {
-                text.into()
-            };
+            // Unset stays blank: the minimum would read as a set value.
+            row.value = text.into();
         }
         rules::FieldKind::Integer { min, max } => {
             row.kind = ValueKind::Integer;
             row.min = *min as f32;
             row.max = *max as f32;
-            row.value = if text.is_empty() {
-                min.to_string().into()
-            } else {
-                text.into()
-            };
+            row.value = text.into();
         }
     }
     row
@@ -113,7 +115,8 @@ fn rule_row(
 fn rule_cards(shell: &Shell, family: &str) -> Vec<RuleCard> {
     let main = shell.includes.docs.len();
     let labels = setting_labels(shell);
-    let (match_fields, setting_fields) = rules::fields(family);
+    let rule_family = shell.rule_family(family);
+    let (match_fields, setting_fields) = (&rule_family.matches, &rule_family.settings);
     let mut cards: Vec<RuleCard> = Vec::new();
     for doc_index in 0..=main {
         let doc = doc_at(shell, doc_index);

@@ -5180,6 +5180,7 @@ dependencies = [
  "rfd",
  "semver",
  "serde",
+ "serde_json",
  "sha2",
  "similar",
  "slint",

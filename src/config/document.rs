@@ -246,6 +246,13 @@ impl ConfigDocument {
         Self::item_at(&self.doc, path)?.as_str().map(str::to_owned)
     }
 
+    /// A value as TOML text (`3`, `"web"`, `{ x = 1 }`), for keys the app
+    /// has no typed editor for.
+    pub fn get_raw(&self, path: &[&str]) -> Option<String> {
+        let value = Self::item_at(&self.doc, path)?.as_value()?;
+        Some(value.clone().decorated("", "").to_string())
+    }
+
     /// A number written either way TOML allows (`1` or `1.0`).
     pub fn get_number(&self, path: &[&str]) -> Option<f64> {
         let value = Self::item_at_any(&self.doc, path)?.as_value()?;
@@ -534,6 +541,20 @@ impl ConfigDocument {
             .iter()
             .map(|value| value.as_str().map(str::to_owned))
             .collect()
+    }
+
+    /// A rule value as TOML text (`3`, `"web"`, `{ x = 1 }`), for fields
+    /// the app has no typed editor for.
+    pub fn rule_raw(&self, name: &str, index: usize, key: &str) -> Option<String> {
+        let value = self.rule_item(name, index, key)?.as_value()?;
+        Some(value.clone().decorated("", "").to_string())
+    }
+
+    /// Store TOML text as typed; anything that isn't a TOML value is
+    /// stored as a string.
+    pub fn rule_set_raw(&mut self, name: &str, index: usize, key: &str, text: &str) {
+        let value = text.parse::<Value>().unwrap_or_else(|_| text.into());
+        self.rule_store(name, index, key, value);
     }
 
     pub fn rule_set_string(&mut self, name: &str, index: usize, key: &str, value: &str) {
