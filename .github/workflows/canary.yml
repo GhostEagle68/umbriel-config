@@ -84,14 +84,24 @@ jobs:
           {
             echo "Untested build of \`${GITHUB_SHA::7}\` from dev."
             echo
-            # One commit per line, newest first, ending in its short sha:
-            # the app trims this list to the commits after the user's build.
+            # Newest first, each commit's line ending in its short sha: the
+            # app trims the notes to the commits after the user's build.
             # Capped, with a link to the rest.
             range=${since:+"$since"..}HEAD
             echo "## Commits (UTC)"
             echo
-            TZ=UTC git log --no-merges -n 30 --date=format-local:'%Y-%m-%d %H:%M' \
-              --format='- %ad · %s (%h)' $range
+            # Bodies are indented under their commit, trailers dropped.
+            for sha in $(git rev-list --no-merges -n 30 $range); do
+              TZ=UTC git log -1 --date=format-local:'%Y-%m-%d %H:%M' \
+                --format='- %ad · %s (%h)' "$sha"
+              body=$(git log -1 --format=%b "$sha" |
+                grep -viE '^(co-authored-by|signed-off-by):' || true)
+              if [ -n "${body//[[:space:]]/}" ]; then
+                echo
+                printf '%s\n' "$body" | sed 's/^./  &/'
+                echo
+              fi
+            done
             total=$(git rev-list --no-merges --count $range)
             if [ "$total" -gt 30 ]; then
               echo
