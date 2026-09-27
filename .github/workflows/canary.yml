@@ -72,6 +72,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # the notes list commits since the last v* tag
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
       - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
@@ -82,33 +85,27 @@ jobs:
           set -euo pipefail
           since=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
           {
-            echo "Untested build of \`${GITHUB_SHA::7}\` from dev."
+            echo "Untested build of \`${GITHUB_SHA::7}\` from dev. Times are UTC."
             echo
-            # Newest first, each commit's line ending in its short sha: the
-            # app trims the notes to the commits after the user's build.
-            # Capped, with a link to the rest.
+            # Grouped like CHANGELOG.md (cliff.toml); CLIFF_CANARY adds each
+            # entry's date (UTC) and short sha. The commits line lists every
+            # commit newest first, so the app can drop the entries a
+            # user's build already has. Capped, with a link to the rest.
             range=${since:+"$since"..}HEAD
-            echo "## Commits (UTC)"
-            echo
-            # Bodies are indented under their commit, trailers dropped.
-            for sha in $(git rev-list --no-merges -n 30 $range); do
-              TZ=UTC git log -1 --date=format-local:'%Y-%m-%d %H:%M' \
-                --format='- %ad · %s (%h)' "$sha"
-              body=$(git log -1 --format=%b "$sha" |
-                grep -viE '^(co-authored-by|signed-off-by):' || true)
-              if [ -n "${body//[[:space:]]/}" ]; then
-                echo
-                printf '%s\n' "$body" | sed 's/^./  &/'
-                echo
-              fi
-            done
             total=$(git rev-list --no-merges --count $range)
+            cliff_range=$range
+            if [ "$total" -gt 30 ]; then
+              cliff_range="$(git rev-list --no-merges -n 30 $range | tail -n 1)^..HEAD"
+            fi
+            echo "<!-- commits: $(git rev-list $range | cut -c1-7 | paste -sd ' ') -->"
+            CLIFF_CANARY=1 git cliff --strip header "$cliff_range" |
+              sed '/^## \[Unreleased\]/d'
             if [ "$total" -gt 30 ]; then
               echo
               echo "…and $((total - 30)) earlier ([all changes since ${since:-the start}](https://github.com/${GITHUB_REPOSITORY}/compare/${since:-$(git rev-list --max-parents=0 HEAD | tail -n 1)}...${GITHUB_SHA}))."
             fi
-            # Last on purpose: the app cuts the notes at the user's own
-            # commit, so people already on canary never see this part.
+            # Last on purpose: the app stops reading here, so people
+            # already on canary never see this part.
             echo
             echo "## Install"
             echo

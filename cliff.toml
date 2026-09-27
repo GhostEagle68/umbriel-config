@@ -3,6 +3,7 @@ header = "# Changelog\n"
 body = """
 {% macro entry(commit) %}{% set note = commit.footers | default(value=[]) | filter(attribute="token", value="Changelog") | first %}{% set nv = "" %}{% if note %}{% set nv = note.value | trim %}{% endif %}
 - {% if nv != "" and nv != "short" %}{{ note.value }}{% else %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}{% endif %}{% if commit.breaking and commit.breaking_description and commit.breaking_description != commit.message %} — {{ commit.breaking_description }}{% endif %}
+{%- if get_env(name="CLIFF_CANARY", default="") != "" %} · {{ commit.committer.timestamp | date(format="%Y-%m-%d %H:%M") }} ({{ commit.id | truncate(length=7, end="") }}){% endif %}
 {%- if commit.body and nv == "" %}
 {{ commit.body | trim | indent(prefix="  ", first=true) }}
 {%- endif %}

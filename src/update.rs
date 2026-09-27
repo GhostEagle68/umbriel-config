@@ -134,15 +134,56 @@ fn short(sha: &str) -> &str {
     &sha[..7.min(sha.len())]
 }
 
-/// The canary notes list commits newest first, each ending `(<short sha>)`;
-/// keep only those after `build`. Unknown builds keep everything.
+/// The canary notes group entries under headings as cliff.toml does,
+/// each entry's first line ending `(<short sha>)`, and list every commit
+/// newest first in a `<!-- commits: … -->` line. Keep the entries newer
+/// than `build` (an unknown build keeps them all), drop headings left
+/// empty, and stop at `## Install`, which is for new installs.
 fn new_to(body: &str, build: Option<&str>) -> String {
-    let lines: Vec<&str> = body.lines().collect();
-    let cut = build
-        .map(|build| format!("({})", short(build)))
-        .and_then(|mark| lines.iter().position(|line| line.ends_with(&mark)))
-        .unwrap_or(lines.len());
-    lines[..cut].join("\n")
+    let order: Vec<&str> = body
+        .lines()
+        .find_map(|line| line.strip_prefix("<!-- commits: ")?.strip_suffix(" -->"))
+        .map(|list| list.split(' ').collect())
+        .unwrap_or_default();
+    let seen = build
+        .and_then(|build| order.iter().position(|sha| *sha == short(build)))
+        .map_or(&[][..], |at| &order[at..]);
+    // Drop each entry the build has: its `- ` line and indented body.
+    let mut kept: Vec<&str> = Vec::new();
+    let mut skipping = false;
+    for line in body.lines().take_while(|line| *line != "## Install") {
+        if line.starts_with("<!-- commits: ") {
+            continue;
+        }
+        if line.starts_with("- ") {
+            skipping = seen.iter().any(|sha| line.ends_with(&format!("({sha})")));
+        } else if !line.is_empty() && !line.starts_with("  ") {
+            skipping = false;
+        }
+        if !skipping {
+            kept.push(line);
+        }
+    }
+    // A heading stays while an entry sits under it, before the next
+    // heading of its level or above.
+    let level = |line: &str| {
+        line.starts_with('#')
+            .then(|| line.chars().take_while(|c| *c == '#').count())
+    };
+    let mut lines: Vec<&str> = kept
+        .iter()
+        .enumerate()
+        .filter(|(at, line)| match level(line) {
+            None => true,
+            Some(depth) => kept[at + 1..]
+                .iter()
+                .take_while(|next| level(next).is_none_or(|next| next > depth))
+                .any(|next| next.starts_with("- ")),
+        })
+        .map(|(_, line)| *line)
+        .collect();
+    lines.dedup_by(|a, b| a.is_empty() && b.is_empty());
+    lines.join("\n")
 }
 
 /// How this build was installed. Only a tarball copy replaces itself;
@@ -491,15 +532,48 @@ mod tests {
 
     #[test]
     fn canary_notes_keep_only_commits_after_the_build() {
-        let body = "## Coming in the next release\n\nShaders write presets.\n\n\
-                    ## Commits\n\n- fix: c (ccccccc)\n- feat: b (bbbbbbb)\n- fix: a (aaaaaaa)";
-        let trimmed = new_to(body, Some("bbbbbbb1234"));
-        assert!(trimmed.contains("Shaders write presets."));
-        assert!(trimmed.contains("(ccccccc)"));
-        assert!(!trimmed.contains("(bbbbbbb)") && !trimmed.contains("(aaaaaaa)"));
-        // A build older than the list, or none at all, sees everything.
-        assert_eq!(new_to(body, Some("9999999")), body);
-        assert_eq!(new_to(body, None), body);
+        // As canary.yml writes them: grouped by cliff.toml, newest last
+        // within a group, with a skipped `ci` commit (ddddddd) that has
+        // no entry.
+        let body = "Untested build of `ddddddd` from dev.\n\
+                    <!-- commits: ddddddd ccccccc bbbbbbb aaaaaaa -->\n\
+                    \n\
+                    ### 🚀 Features\n\
+                    \n\
+                    #### Shaders\n\
+                    \n\
+                    - Old shader thing · 2026-09-26 10:00 (aaaaaaa)\n\
+                    - New shader thing · 2026-09-27 10:00 (ccccccc)\n\
+                    \x20 Its body.\n\
+                    \n\
+                    \x20 - A detail.\n\
+                    \n\
+                    ### 🐛 Fixed\n\
+                    \n\
+                    #### Updates\n\
+                    \n\
+                    - Old fix · 2026-09-26 11:00 (bbbbbbb)\n\
+                    \x20 Its body.\n\
+                    \n\
+                    ## Install\n\
+                    \n\
+                    curl …";
+        let expected = "Untested build of `ddddddd` from dev.\n\
+                        \n\
+                        ### 🚀 Features\n\
+                        \n\
+                        #### Shaders\n\
+                        \n\
+                        - New shader thing · 2026-09-27 10:00 (ccccccc)\n\
+                        \x20 Its body.\n\
+                        \n\
+                        \x20 - A detail.\n";
+        assert_eq!(new_to(body, Some("bbbbbbb1234")), expected);
+        // A build outside the list, or none at all, sees every entry.
+        let all = new_to(body, Some("9999999"));
+        assert!(all.contains("(aaaaaaa)") && all.contains("(bbbbbbb)"));
+        assert!(!all.contains("## Install") && !all.contains("<!--"));
+        assert_eq!(new_to(body, None), all);
     }
 
     #[test]
