@@ -1,6 +1,6 @@
 //! Post-save validation through the compositor's own checker.
 //!
-//! Wraps `umbriel validate -c <path>`: `error: ` / `warning: ` lines on
+//! Wraps `umbriel config validate -c <path>`: `error: ` / `warning: ` lines on
 //! stderr become diagnostics (compositor: `src/main.cpp`,
 //! `validateConfig`). umbriel exits nonzero whenever it reports any
 //! diagnostic, warnings included (docs/user/configuration.md), but a
@@ -16,7 +16,7 @@ pub enum ValidateError {
     Launch { source: std::io::Error },
 }
 
-/// One entry from `umbriel validate -c <path>`'s stderr, e.g. `error: ...` or `warning: ...`.
+/// One entry from `umbriel config validate -c <path>`'s stderr, e.g. `error: ...` or `warning: ...`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Diagnostic {
     Error(String),
@@ -44,16 +44,16 @@ pub struct Report {
 impl Report {
     /// Accepted by umbriel: no errors. Warnings don't block — the
     /// compositor applies warning-only configs (per-setting fallback),
-    /// even though `umbriel validate` exits nonzero for them.
+    /// even though `umbriel config validate` exits nonzero for them.
     pub fn is_ok(&self) -> bool {
         !self.diagnostics.iter().any(Diagnostic::is_error)
     }
 }
 
-/// Run `umbriel validate -c <path>` and capture its output.
+/// Run `umbriel config validate -c <path>` and capture its output.
 pub fn validate(path: &Path) -> Result<Report, ValidateError> {
     let output = Command::new("umbriel")
-        .arg("validate")
+        .args(["config", "validate"])
         .arg("-c")
         .arg(path)
         .output()
@@ -82,7 +82,8 @@ fn parse(stderr: &str, exited_cleanly: bool) -> Report {
         .collect();
     if !exited_cleanly && diagnostics.is_empty() {
         diagnostics.push(Diagnostic::Error(
-            "umbriel validate exited unsuccessfully without reporting diagnostics".to_owned(),
+            "umbriel config validate exited unsuccessfully without reporting diagnostics"
+                .to_owned(),
         ));
     }
     Report { diagnostics }

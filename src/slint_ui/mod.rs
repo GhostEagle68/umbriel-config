@@ -28,8 +28,8 @@ use slint::{
     CloseRequestResponse, ComponentHandle, LogicalSize, Model, SharedString, VecModel, WindowSize,
 };
 use umbriel_config::config::{
-    backups, discovery, document::ConfigDocument, includes, keybinds, outputs, probe, rules,
-    schema, settings as app_settings, shaders, state, umbriel_docs, umbriel_schema, validate,
+    backups, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema,
+    settings as app_settings, shaders, state, umbriel_docs, umbriel_schema, validate,
 };
 
 use umbriel_config::{changelog, live, update};
@@ -135,7 +135,7 @@ struct Loaded {
 
 /// The settings pages' entries and the rule and output pages' fields, plus
 /// a description of umbriel's schema when it was their source. With an
-/// installed umbriel, its own schema (printed, else probed), with the
+/// installed umbriel, its own schema, with the
 /// docs for labels, units and defaults; otherwise umbriel's docs
 /// (downloaded, else bundled) plus anything only the installed packaged
 /// config has, and the built-in rule and output fields.
@@ -143,9 +143,7 @@ fn load_schema(env: &discovery::Env) -> Loaded {
     let packaged =
         discovery::packaged_default(env).and_then(|path| std::fs::read_to_string(path).ok());
     let docs = schema::combined(&umbriel_docs::load(env), packaged.as_deref());
-    // umbriel's own list when it can print one, else what probing it
-    // found; the docs only when neither works (no umbriel installed).
-    let umbriel = umbriel_schema::load().or_else(|| probe::load(env, &docs));
+    let umbriel = umbriel_schema::load();
     let keys = umbriel.as_ref().map(|schema| schema.options.as_slice());
     let schema_source = umbriel.as_ref().map(|schema| {
         format!(

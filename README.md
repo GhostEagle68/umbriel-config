@@ -44,7 +44,7 @@ Zcode GLM 5.3 and Claude Opus 5.5 models are used to help plan, review code, fix
   lists readable.
 - **Your file stays yours** — lossless TOML editing keeps every comment and
   piece of formatting; saves are atomic with a one-time `.bak` backup,
-  a symlinked config (dotfiles) stays a symlink, and `umbriel validate`
+  a symlinked config (dotfiles) stays a symlink, and `umbriel config validate`
   runs on every save.
 
 ## Install

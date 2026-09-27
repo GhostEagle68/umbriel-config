@@ -1,4 +1,4 @@
-//! umbriel's own description of its config, from `umbriel schema --json`:
+//! umbriel's own description of its config, from `umbriel config schema --json`:
 //! every key its parser reads, with type, range and default. When the
 //! installed umbriel has the command, it is the source of the settings
 //! pages and rule editors; otherwise the docs are (see
@@ -37,7 +37,7 @@ pub struct Schema {
 /// old to have the command.
 pub fn load() -> Option<Schema> {
     let output = Command::new("umbriel")
-        .args(["schema", "--json"])
+        .args(["config", "schema", "--json"])
         .output()
         .ok()
         .filter(|output| output.status.success())?;
@@ -50,7 +50,7 @@ pub fn parse(json: &str) -> Option<Schema> {
         .filter(|schema| !schema.options.is_empty())
 }
 
-/// A real `umbriel schema --json` output, for tests across the crate.
+/// A real `umbriel config schema --json` output, for tests across the crate.
 #[cfg(test)]
 pub const FIXTURE: &str = include_str!("testdata/umbriel-schema.json");
 

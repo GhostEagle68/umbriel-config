@@ -6,7 +6,6 @@ pub mod document;
 pub mod includes;
 pub mod keybinds;
 pub mod outputs;
-pub mod probe;
 pub mod rules;
 pub mod schema;
 pub mod settings;

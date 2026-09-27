@@ -498,7 +498,7 @@ pub fn combined(docs: &str, packaged: Option<&str>) -> Vec<Entry> {
     entries
 }
 
-/// Entries from umbriel's own schema (`umbriel schema --json`): its keys,
+/// Entries from umbriel's own schema (`umbriel config schema --json`): its keys,
 /// types, ranges and defaults win. The docs entry for the same key still
 /// supplies the label, unit and restart flag, the curve and action
 /// widgets, extra enum values, and any default the schema leaves out.
@@ -538,8 +538,8 @@ pub fn from_umbriel(keys: &[umbriel_schema::Key], docs: &[Entry]) -> Vec<Entry> 
                 // it, else a raw TOML row.
                 (Some(Kind::Raw), Some(kind)) => kind.clone(),
                 (Some(kind), _) => kind,
-                // A value that may also be a table, which is all a probe
-                // can tell (`scroll_factor`): the docs' value.
+                // A table to umbriel that the docs show as a value: the
+                // docs' value.
                 (None, Some(kind)) => kind.clone(),
                 // A table of settings, listed through its own keys.
                 (None, None) => return None,
