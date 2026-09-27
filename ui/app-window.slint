@@ -27,10 +27,12 @@ import {
     ColorPickerCard,
     NavRow,
     PointerRow,
+    ReleaseNotes,
 } from "widgets.slint";
 import {
     ColorMath,
     MonitorCard,
+    NotesCard,
     PickerState,
     RuleCard,
     SaveEntry,
@@ -136,7 +138,9 @@ export component AppWindow inherits Window {
     // What's new / changelog overlay.
     in-out property <bool> show-whatsnew;
     in property <string> whatsnew-title;
-    in property <string> whatsnew-body;
+    in property <[NotesCard]> whatsnew-cards;
+    // true while it shows every release: hides "Show full changelog".
+    in property <bool> whatsnew-full;
     // One-time notice above the notes; empty once it has been read.
     in-out property <string> whatsnew-notice;
     callback view-changelog();
@@ -1070,8 +1074,8 @@ export component AppWindow inherits Window {
         }
 
         Rectangle {
-            width: min(parent.width - 96px, 560px);
-            height: min(parent.height - 96px, 520px);
+            width: min(parent.width - 96px, 720px);
+            height: min(parent.height - 96px, 680px);
             background: Theme.bg-1;
             border-radius: Theme.radius-l;
             border-width: 1px;
@@ -1135,23 +1139,26 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                Rectangle {
-                    background: Theme.bg-0;
-                    border-radius: Theme.radius-m;
+                sv := ScrollView {
+                    viewport-height: notes.preferred-height;
 
-                    sv := ScrollView {
-                        width: 100%;
-                        height: 100%;
-                        viewport-height: changelog-text.preferred-height + 2 * Theme.space-m;
+                    notes := VerticalLayout {
+                        width: sv.visible-width;
+                        alignment: start;
+                        spacing: Theme.space-l;
 
-                        changelog-text := Text {
-                            x: Theme.space-m;
-                            width: sv.visible-width - 2 * Theme.space-m;
-                            y: Theme.space-m;
-                            text: root.whatsnew-body;
-                            color: Theme.text-1;
-                            font-size: Theme.font-small;
-                            wrap: TextWrap.word-wrap;
+                        ReleaseNotes {
+                            cards: root.whatsnew-cards;
+                        }
+
+                        if !root.whatsnew-full: HorizontalLayout {
+                            alignment: center;
+                            padding-bottom: Theme.space-s;
+
+                            ActionButton {
+                                text: "Show full changelog";
+                                clicked => { root.view-changelog(); }
+                            }
                         }
                     }
                 }

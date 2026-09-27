@@ -6,6 +6,8 @@ import { CheckBox, ComboBox, LineEdit, Slider } from "std-widgets.slint";
 import {
     ColorMath,
     Hsva,
+    NoteLine,
+    NotesCard,
     PickerState,
     SettingRow,
     ValueKind,
@@ -621,6 +623,183 @@ export component ColorPickerCard inherits Rectangle {
 
             Rectangle {
                 horizontal-stretch: 1;
+            }
+        }
+    }
+}
+
+// One line of release notes (see NoteLine for the kinds). Placed by
+// hand rather than with layouts: a wrapping Text inside a layout in a
+// repeater is often measured a line short, while its own
+// preferred-height is right, so the height here comes from that.
+component NoteLineView inherits Rectangle {
+    in property <NoteLine> line;
+    property <bool> prose: line.kind >= 2;
+    property <bool> bullet: line.kind == 2 || line.kind == 3;
+    property <color> tone: line.tone == 1 ? Theme.accent
+        : line.tone == 2 ? Theme.success
+        : line.tone == 3 ? Theme.warning
+        : line.tone == 4 ? Theme.danger
+        : Theme.text-2;
+    property <length> indent: line.kind == 3 ? 18px : line.kind == 4 ? 14px : 0px;
+    property <length> text-x: indent + (bullet ? 6px + Theme.space-s : 0px);
+    property <length> top: line.kind == 0 ? Theme.space-l : line.kind == 1 ? Theme.space-m : 0px;
+    property <length> gap: line.kind == 1 || line.kind == 4 || line.kind == 5 ? Theme.space-xs : 2px;
+
+    height: top + gap + (line.kind == 0 ? chip.height
+        : line.kind == 1 ? scope.preferred-height
+        : body.preferred-height + (line.meta != "" ? meta.preferred-height : 0px));
+
+    // Group heading: a tinted chip.
+    chip := Rectangle {
+        visible: line.kind == 0;
+        x: 0px;
+        y: top;
+        width: chip-text.preferred-width + 20px;
+        height: chip-text.preferred-height + 6px;
+        border-radius: self.height / 2;
+        background: tone.with-alpha(0.16);
+
+        chip-text := Text {
+            text: line.kind == 0 ? line.text : "";
+            color: tone;
+            font-size: Theme.font-small;
+            font-weight: 700;
+        }
+    }
+
+    // Scope: a bold label with a hairline running to the edge.
+    scope := Text {
+        visible: line.kind == 1;
+        x: 0px;
+        y: top;
+        text: line.kind == 1 ? line.text : "";
+        color: Theme.text-1;
+        font-size: Theme.font-body;
+        font-weight: 700;
+    }
+    Rectangle {
+        visible: line.kind == 1;
+        x: scope.preferred-width + Theme.space-m;
+        y: top + scope.preferred-height / 2;
+        width: max(0px, parent.width - self.x);
+        height: 1px;
+        background: Theme.border;
+    }
+
+    // The marker on the first line: a dot in the group's color, or a
+    // ring for a sub-bullet.
+    Rectangle {
+        visible: bullet;
+        x: indent;
+        y: top + 6px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: line.kind == 2 ? tone : transparent;
+        border-width: line.kind == 3 ? 1px : 0px;
+        border-color: Theme.text-2;
+    }
+
+    body := Text {
+        visible: prose;
+        x: text-x;
+        y: top;
+        width: parent.width - self.x;
+        height: self.preferred-height;
+        text: prose ? line.text : "";
+        color: line.kind == 2 ? Theme.text-1 : Theme.text-2;
+        font-size: line.kind == 4 ? Theme.font-small : Theme.font-body;
+        wrap: word-wrap;
+    }
+    meta := Text {
+        visible: line.meta != "";
+        x: text-x;
+        y: top + body.preferred-height;
+        text: line.meta;
+        color: Theme.text-2;
+        font-size: Theme.font-small;
+        font-family: Theme.font-mono;
+    }
+}
+
+// Release notes, newest first: one card per release, a pill naming its
+// channel, and each change group as a tinted chip.
+export component ReleaseNotes inherits VerticalLayout {
+    in property <[NotesCard]> cards;
+    property <length> pad: 20px;
+
+    alignment: start;
+    spacing: Theme.space-l;
+
+    for card in root.cards: Rectangle {
+        property <color> channel: card.badge == "Canary" ? Theme.warning
+            : card.badge == "Stable" ? Theme.success
+            : Theme.accent;
+
+        border-radius: Theme.radius-l;
+        border-width: 1px;
+        border-color: Theme.border;
+        background: Theme.bg-0;
+
+        // A short bar in the channel's color beside the title.
+        Rectangle {
+            x: 0px;
+            y: pad + 4px;
+            width: 3px;
+            height: 22px;
+            border-radius: 1.5px;
+            background: channel;
+        }
+
+        VerticalLayout {
+            padding: pad;
+            spacing: 3px;
+
+            HorizontalLayout {
+                spacing: Theme.space-m;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+
+                    Text {
+                        text: card.title;
+                        color: Theme.text-1;
+                        font-size: Theme.font-title;
+                        font-weight: 700;
+                    }
+                    if card.date != "": Text {
+                        text: card.date;
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                    }
+                }
+                if card.badge != "": VerticalLayout {
+                    alignment: start;
+
+                    Rectangle {
+                        border-radius: 11px;
+                        background: channel.with-alpha(0.16);
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            padding-top: 3px;
+                            padding-bottom: 3px;
+
+                            Text {
+                                text: card.badge;
+                                color: channel;
+                                font-size: Theme.font-small;
+                                font-weight: 700;
+                            }
+                        }
+                    }
+                }
+            }
+            for line in card.lines: NoteLineView {
+                line: line;
             }
         }
     }

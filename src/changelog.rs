@@ -14,8 +14,8 @@ pub fn bundled() -> &'static str {
 pub struct Section {
     pub version: String,
     pub date: String,
-    /// The section body verbatim — headings, bullets, blank lines. The
-    /// renderer keeps it plain; there is no markdown engine in Slint.
+    /// The section body verbatim — headings, bullets, blank lines;
+    /// `blocks` splits it for the notes view.
     pub body: String,
 }
 
@@ -92,23 +92,143 @@ fn in_bundled_fonts(ch: char) -> bool {
         )
 }
 
-/// Every section as display text, newest first: a header line per
-/// version, then its body.
-pub fn full_text(sections: &[Section]) -> String {
-    let mut out = String::new();
-    for section in sections {
-        out.push_str(&format!(
-            "Version {}{}\n{}\n\n",
-            section.version,
-            if section.date.is_empty() {
-                String::new()
+/// What a line of release notes is, for the notes view. The order is
+/// the `kind` numbering of the UI's NoteLine.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BlockKind {
+    Heading,
+    Scope,
+    Bullet,
+    SubBullet,
+    Detail,
+    Paragraph,
+}
+
+/// One line of release notes as the notes view draws it.
+#[derive(Debug, PartialEq)]
+pub struct Block {
+    pub kind: BlockKind,
+    /// The group's color: 0 neutral, 1 features, 2 fixes, 3 highlights,
+    /// 4 removals.
+    pub tone: i32,
+    pub text: String,
+    /// A canary entry's date and commit, split off its bullet.
+    pub meta: String,
+}
+
+/// Split release notes into lines: `##`/`###` group headings, `####`
+/// scopes, bullets and sub-bullets, a commit's body under its bullet,
+/// and paragraphs. Wrapped lines join up; comments, code fences and
+/// emphasis marks drop.
+pub fn blocks(notes: &str) -> Vec<Block> {
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut tone = 0;
+    // Whether the next plain line continues the last block: no blank
+    // line in between.
+    let mut open = false;
+    for line in notes.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("<!--") || trimmed.starts_with("```") {
+            open = false;
+            continue;
+        }
+        let indented = line.starts_with(' ');
+        let (kind, text) = if let Some(rest) = trimmed.strip_prefix('#') {
+            let text = rest.trim_start_matches('#').trim();
+            if rest.starts_with("###") {
+                (BlockKind::Scope, text)
             } else {
-                format!(" — {}", section.date)
-            },
-            section.body
-        ));
+                tone = tone_of(text);
+                (BlockKind::Heading, text)
+            }
+        } else if let Some(text) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        {
+            let kind = if indented {
+                BlockKind::SubBullet
+            } else {
+                BlockKind::Bullet
+            };
+            (kind, text)
+        } else if open
+            && let Some(last) = blocks.last_mut()
+            // A commit's bullet is one line; what follows is its body.
+            && !(last.kind == BlockKind::Bullet && !last.meta.is_empty())
+            && !matches!(last.kind, BlockKind::Heading | BlockKind::Scope)
+        {
+            last.text.push(' ');
+            last.text.push_str(&plain(trimmed));
+            continue;
+        } else if indented {
+            (BlockKind::Detail, trimmed)
+        } else {
+            (BlockKind::Paragraph, trimmed)
+        };
+        let (text, meta) = match kind {
+            BlockKind::Bullet => split_meta(text),
+            _ => (text, String::new()),
+        };
+        blocks.push(Block {
+            kind,
+            tone,
+            text: plain(text),
+            meta,
+        });
+        open = true;
     }
-    out.trim().to_owned()
+    blocks
+}
+
+/// A group heading's color (see `Block::tone`).
+fn tone_of(heading: &str) -> i32 {
+    let heading = heading.to_lowercase();
+    if heading.contains("feature") || heading.contains("added") {
+        1
+    } else if heading.contains("fix") {
+        2
+    } else if heading.contains("highlight") || heading.contains("coming") {
+        3
+    } else if heading.contains("remov") || heading.contains("break") {
+        4
+    } else {
+        0
+    }
+}
+
+/// Split a canary bullet's `· 2026-09-27 01:06 (a4264c8)` tail off as
+/// its meta line.
+fn split_meta(text: &str) -> (&str, String) {
+    let commit = text
+        .strip_suffix(')')
+        .and_then(|head| head.rsplit_once(" ("))
+        .filter(|(_, sha)| sha.len() >= 7 && sha.chars().all(|ch| ch.is_ascii_hexdigit()));
+    match commit {
+        Some((head, sha)) => match head.rsplit_once(" · ") {
+            Some((title, date)) => (title, format!("{date} · {sha}")),
+            None => (head, sha.to_owned()),
+        },
+        None => (text, String::new()),
+    }
+}
+
+/// Markdown marks the view can't draw: emphasis and code marks drop, a
+/// link keeps its text.
+fn plain(text: &str) -> String {
+    let text = text.replace("**", "").replace('`', "");
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(start) = rest.find('[') {
+        let Some((label, tail)) = rest[start + 1..].split_once("](") else {
+            break;
+        };
+        let Some(end) = tail.find(')') else { break };
+        out.push_str(&rest[..start]);
+        out.push_str(label);
+        rest = &tail[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn stamp_path(env: &discovery::Env) -> PathBuf {
@@ -205,12 +325,50 @@ mod tests {
     }
 
     #[test]
-    fn full_text_lists_every_section_with_headers() {
-        let text = full_text(&parse(FIXTURE));
-        assert!(text.contains("Version 0.2.0 — 2026-09-20"));
-        assert!(text.contains("Version 0.1.0-alpha.1\n"));
-        assert!(text.contains("- backups"));
-        assert!(!text.contains("Unreleased"));
+    fn blocks_split_canary_notes() {
+        let notes = "Untested build of `a4264c8` from dev.\n\
+            \n\
+            <!-- commits: a4264c8 -->\n\
+            ### Fixed\n\
+            \n\
+            #### Schema\n\
+            \n\
+            - Read the docs · 2026-09-27 01:06 (a4264c8)\n\
+            \x20 The bundled docs now cover\n\
+            \x20 effect presets.\n\
+            \n\
+            \x20 - Animations: a Window\n\
+            \x20   drag card.\n\
+            \n\
+            ### Features\n\
+            - Plain **bold** bullet that\n\
+            \x20 wraps, see [the docs](https://x).\n";
+        let parsed = blocks(notes);
+        let got: Vec<(BlockKind, i32, &str, &str)> = parsed
+            .iter()
+            .map(|block| {
+                (
+                    block.kind,
+                    block.tone,
+                    block.text.as_str(),
+                    block.meta.as_str(),
+                )
+            })
+            .collect();
+        use BlockKind::*;
+        assert_eq!(
+            got,
+            [
+                (Paragraph, 0, "Untested build of a4264c8 from dev.", ""),
+                (Heading, 2, "Fixed", ""),
+                (Scope, 2, "Schema", ""),
+                (Bullet, 2, "Read the docs", "2026-09-27 01:06 · a4264c8"),
+                (Detail, 2, "The bundled docs now cover effect presets.", ""),
+                (SubBullet, 2, "Animations: a Window drag card.", ""),
+                (Heading, 1, "Features", ""),
+                (Bullet, 1, "Plain bold bullet that wraps, see the docs.", ""),
+            ]
+        );
     }
 
     #[test]

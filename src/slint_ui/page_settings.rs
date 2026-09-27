@@ -376,14 +376,13 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
         let weak = app.as_weak();
         app.on_view_changelog(move || {
             let Some(app) = weak.upgrade() else { return };
-            app.set_whatsnew_title("Changelog".into());
-            app.set_whatsnew_body(
-                changelog::renderable(&changelog::full_text(&changelog::parse(
-                    changelog::bundled(),
-                )))
-                .into(),
+            let sections = changelog::parse(changelog::bundled());
+            show_notes(
+                &app,
+                "Changelog",
+                sections.iter().map(release_card).collect(),
+                true,
             );
-            app.set_show_whatsnew(true);
         });
     }
     {
@@ -393,27 +392,22 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             // The fetched notes are the new release's body; fall back to
             // the bundled section when the check hasn't run.
             let notes = app.get_update_notes().to_string();
-            if notes.is_empty() {
+            let card = if notes.is_empty() {
                 let sections = changelog::parse(changelog::bundled());
-                let section = changelog::for_version(&sections, env!("CARGO_PKG_VERSION"));
-                app.set_whatsnew_title(
-                    format!("What's new in {}", env!("CARGO_PKG_VERSION")).into(),
-                );
-                app.set_whatsnew_body(
-                    changelog::renderable(
-                        &section
-                            .map(|section| section.body.clone())
-                            .unwrap_or_default(),
-                    )
-                    .into(),
-                );
+                changelog::for_version(&sections, env!("CARGO_PKG_VERSION")).map(release_card)
             } else {
-                // The fetched body is the release page's markdown, emoji
-                // headings and all.
-                app.set_whatsnew_title("What's new in this release".into());
-                app.set_whatsnew_body(changelog::renderable(&notes).into());
-            }
-            app.set_show_whatsnew(true);
+                let version = app.get_update_version().to_string();
+                Some(match version.strip_prefix("canary ") {
+                    Some(sha) => notes_card(format!("Canary {sha}"), "", "Canary", &notes),
+                    None => notes_card(
+                        format!("Version {version}"),
+                        "",
+                        version_badge(&version),
+                        &notes,
+                    ),
+                })
+            };
+            show_notes(&app, "What's new", card.into_iter().collect(), false);
         });
     }
     app.on_open_url(|url| {
@@ -421,4 +415,51 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             .arg(url.as_str())
             .spawn();
     });
+}
+
+/// Open the What's new view on `cards`, newest first. `full` means every
+/// release is shown, which hides its "Show full changelog" button.
+pub(super) fn show_notes(app: &AppWindow, title: &str, cards: Vec<NotesCard>, full: bool) {
+    app.set_whatsnew_title(title.into());
+    app.set_whatsnew_cards(Rc::new(VecModel::from(cards)).into());
+    app.set_whatsnew_full(full);
+    app.set_show_whatsnew(true);
+}
+
+/// One release's notes as a card of the What's new view.
+pub(super) fn notes_card(title: String, date: &str, badge: &str, notes: &str) -> NotesCard {
+    let lines: Vec<NoteLine> = changelog::blocks(&changelog::renderable(notes))
+        .into_iter()
+        .map(|block| NoteLine {
+            kind: block.kind as i32,
+            tone: block.tone,
+            text: block.text.into(),
+            meta: block.meta.into(),
+        })
+        .collect();
+    NotesCard {
+        title: title.into(),
+        date: date.into(),
+        badge: badge.into(),
+        lines: Rc::new(VecModel::from(lines)).into(),
+    }
+}
+
+/// A bundled changelog section as a card.
+pub(super) fn release_card(section: &changelog::Section) -> NotesCard {
+    notes_card(
+        format!("Version {}", section.version),
+        &section.date,
+        version_badge(&section.version),
+        &section.body,
+    )
+}
+
+/// A pre-release (`0.3.0-beta.4`) is a beta; a plain version is stable.
+fn version_badge(version: &str) -> &'static str {
+    if version.contains('-') {
+        "Beta"
+    } else {
+        "Stable"
+    }
 }

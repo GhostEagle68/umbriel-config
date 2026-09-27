@@ -393,21 +393,25 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         let canary_notes = update::BUILD_SHA
             .and_then(|sha| update::take_canary_notes(&env).map(|notes| (sha, notes)));
         if let Some((sha, notes)) = canary_notes {
-            app.set_whatsnew_title(
-                format!("What's new in canary {}", &sha[..7.min(sha.len())]).into(),
+            let title = format!("Canary {}", &sha[..7.min(sha.len())]);
+            page_settings::show_notes(
+                &app,
+                "What's new",
+                vec![page_settings::notes_card(title, "", "Canary", &notes)],
+                false,
             );
-            app.set_whatsnew_body(changelog::renderable(&notes).into());
-            app.set_show_whatsnew(true);
         } else if changelog::should_show(&env, env!("CARGO_PKG_VERSION"))
             && let Some(section) = changelog::for_version(&sections, env!("CARGO_PKG_VERSION"))
         {
-            app.set_whatsnew_title(format!("What's new in {}", env!("CARGO_PKG_VERSION")).into());
-            app.set_whatsnew_body(changelog::renderable(&section.body).into());
-            app.set_show_whatsnew(true);
+            page_settings::show_notes(
+                &app,
+                "What's new",
+                vec![page_settings::release_card(section)],
+                false,
+            );
             changelog::mark_shown(&env, env!("CARGO_PKG_VERSION"));
         } else if notice {
-            app.set_whatsnew_title("Updates work differently now".into());
-            app.set_show_whatsnew(true);
+            page_settings::show_notes(&app, "Updates work differently now", Vec::new(), false);
         }
     }
 

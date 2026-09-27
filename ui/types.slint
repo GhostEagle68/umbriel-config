@@ -222,3 +222,26 @@ export struct SectionNav {
     new-count: int,
     is-header: bool,
 }
+
+// One line of release notes, split from their markdown in Rust
+// (changelog.rs `blocks`); Slint draws markdown only from literals.
+// kind: 0 = group heading ("Fixed"), 1 = scope ("Schema"),
+// 2 = bullet, 3 = sub-bullet, 4 = a bullet's detail text,
+// 5 = paragraph. tone: the group's color (0 neutral, 1 features,
+// 2 fixes, 3 highlights, 4 removals). meta: a bullet's date and
+// commit, muted.
+export struct NoteLine {
+    kind: int,
+    tone: int,
+    text: string,
+    meta: string,
+}
+
+// One release in the notes view. badge: "Canary", "Beta", "Stable",
+// or "" for none.
+export struct NotesCard {
+    title: string,
+    date: string,
+    badge: string,
+    lines: [NoteLine],
+}
