@@ -597,6 +597,9 @@ fn umbriel_kind(key: &umbriel_schema::Key) -> Option<Kind> {
             Some("action") => {
                 Kind::OpenChoice(ACTIONS.iter().map(|action| (*action).to_owned()).collect())
             }
+            // Named values beside a free form (`accel_profile`'s custom
+            // curves): offered, not enforced.
+            _ if !key.values.is_empty() => Kind::OpenChoice(key.values.clone()),
             _ => Kind::Text,
         },
         // `"all"` alone is also accepted; the list form covers every case.
@@ -1230,6 +1233,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dropdowns_offer_exactly_what_umbriel_accepts() {
+        let keys = umbriel_schema::parse(umbriel_schema::FIXTURE)
+            .unwrap()
+            .options;
+        let docs = assemble_docs(super::super::umbriel_docs::BUNDLED);
+        let entries = from_umbriel(&keys, &docs);
+        for key in keys.iter().filter(|key| !key.values.is_empty()) {
+            let Some(entry) = entries.iter().find(|entry| entry.dotted() == key.path) else {
+                continue;
+            };
+            match (key.kind.as_str(), &entry.kind) {
+                // A fixed set: the docs may not add or drop a value.
+                ("enum", Kind::Choice(values)) => assert_eq!(values, &key.values, "{}", key.path),
+                // Named values of a free string: suggested, not enforced.
+                ("string", Kind::OpenChoice(values)) => {
+                    assert_eq!(values, &key.values, "{}", key.path)
+                }
+                ("enum_or_array", Kind::List) => {}
+                (_, kind) => panic!("{}: {kind:?} for {}", key.path, key.kind),
+            }
+        }
+    }
+
+    #[test]
     fn umbriel_schema_drives_the_settings_pages() {
         let keys = umbriel_schema::parse(umbriel_schema::FIXTURE)
             .unwrap()
@@ -1263,10 +1290,6 @@ mod tests {
             find("animation.windows_in.curve").unwrap().kind,
             Kind::Curve
         );
-        assert!(matches!(
-            find("input.mouse.accel_profile").unwrap().kind,
-            Kind::Choice(_)
-        ));
         // A value that may also be a table is edited as the value.
         assert!(find("input.touchpad.scroll_factor").is_some());
         assert!(find("input.touchpad.scroll_factor.horizontal").is_none());
