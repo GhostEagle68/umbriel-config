@@ -1,4 +1,5 @@
-//! GUI configurator for Umbriel; `path`, `get`, and `set` keep the debug CLI.
+//! GUI configurator for Umbriel; `path`, `get`, and `set` keep the debug CLI,
+//! and `rollback` undoes the last in-app update.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -42,6 +43,11 @@ fn run() -> Result<()> {
             Ok(())
         }
         "get" => get(&path, rest),
+        "rollback" => {
+            let exe = umbriel_config::update::rollback().map_err(anyhow::Error::msg)?;
+            println!("restored the previous build at {}", exe.display());
+            Ok(())
+        }
         "set" => set(&path, rest),
         "outputs" => match live::outputs() {
             Ok(list) => {
@@ -70,7 +76,9 @@ fn run() -> Result<()> {
             }
             Err(err) => bail!("live outputs unavailable: {err}"),
         },
-        other => bail!("unknown command '{other}'; expected gui, path, get, set, or outputs"),
+        other => {
+            bail!("unknown command '{other}'; expected gui, path, get, set, outputs, or rollback")
+        }
     }
 }
 

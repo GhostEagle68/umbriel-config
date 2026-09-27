@@ -1,0 +1,103 @@
+name: Canary
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# A burst of pushes builds only the newest commit.
+concurrency:
+  group: canary
+  cancel-in-progress: true
+
+env:
+  TAG: canary
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runs-on: ubuntu-latest
+            arch: x86_64
+          - runs-on: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # Dependencies rarely change between pushes; only our crate rebuilds.
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+      - name: Build release binary
+        run: cargo build --release --locked
+        env:
+          # The update check compares this with the canary tag's commit.
+          UMBRIEL_CONFIG_BUILD_SHA: ${{ github.sha }}
+      - name: Package release artifacts
+        run: |
+          # One top-level folder, so extracting leaves a tidy directory
+          # to cd into instead of scattering bin/ and share/ into $PWD.
+          stage=umbriel-config-${{ matrix.arch }}-linux
+          mkdir -p $stage/bin $stage/share/licenses $stage/share/applications $stage/share/icons/hicolor/scalable/apps
+          cp target/release/umbriel-config $stage/bin/
+          cp README.md LICENSE.md LICENSE-Slint.md $stage/
+          cp assets/fonts/LICENSE-Inter.txt $stage/share/licenses/
+          cp assets/fonts/LICENSE-JetBrainsMono.txt $stage/share/licenses/
+          cp assets/umbriel-config.desktop $stage/share/applications/
+          cp assets/umbriel-config.svg $stage/share/icons/hicolor/scalable/apps/
+          # Extract-then-run-this, so the download isn't a puzzle.
+          install -m755 packaging/install.sh $stage/install.sh
+          cp packaging/INSTALL.txt $stage/
+          tar -czf $stage.tar.gz $stage
+          sha256sum $stage.tar.gz > $stage.tar.gz.sha256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: umbriel-config-${{ matrix.arch }}-linux
+          path: |
+            umbriel-config-${{ matrix.arch }}-linux.tar.gz
+            umbriel-config-${{ matrix.arch }}-linux.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the notes list commits since the last v* tag
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+      - name: Replace the canary release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          since=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          {
+            echo "Untested build of \`${GITHUB_SHA::7}\` from dev."
+            echo
+            # The highlights written for the next release, when there are any.
+            highlights=$(find changes -name '*.md' ! -name README.md | sort)
+            if [ -n "$highlights" ]; then
+              echo "## Coming in the next release"
+              echo
+              for fragment in $highlights; do cat "$fragment"; echo; done
+            fi
+            # One commit per line, newest first, ending in its short sha:
+            # the app trims this list to the commits after the user's build.
+            echo "## Commits"
+            echo
+            git log --no-merges --format='- %s (%h)' ${since:+"$since"..}HEAD
+          } > notes.md
+          gh release delete "$TAG" --cleanup-tag --yes || true
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+            --title "$TAG ${GITHUB_SHA::7}" --notes-file notes.md \
+            umbriel-config-*-linux.tar.gz umbriel-config-*-linux.tar.gz.sha256

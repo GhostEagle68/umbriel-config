@@ -41,9 +41,11 @@ pub(super) fn start_update_check(weak: slint::Weak<AppWindow>, env: Option<disco
     let Some(app) = weak.upgrade() else { return };
     app.set_update_note("Checking…".into());
     // Read the channel here: the worker can't touch the window.
-    let prereleases = app.get_update_prereleases();
+    let channel = app_settings::Channel::ALL[app.get_update_channel() as usize];
+    // Only the startup check may install on its own.
+    let automatic = env.is_some();
     std::thread::spawn(move || {
-        let result = update::check(prereleases);
+        let result = update::check(channel);
         if result.is_ok()
             && let Some(env) = env.as_ref()
         {
@@ -58,15 +60,26 @@ pub(super) fn start_update_check(weak: slint::Weak<AppWindow>, env: Option<disco
                 ),
                 Ok(update::Verdict::UpdateAvailable { version, notes }) => {
                     app.set_update_available(true);
-                    app.set_update_note(format!("Version {version} available.").into());
+                    let note = match channel {
+                        app_settings::Channel::Stable => format!("Version {version} available."),
+                        app_settings::Channel::Canary => format!("New build: {version}."),
+                    };
+                    app.set_update_note(note.into());
                     // Who owns this binary decides whether the app may
                     // install the update or only name the command.
                     let kind = update::current_install_kind();
                     app.set_update_can_install(kind == update::InstallKind::Tarball);
-                    app.set_update_hint(update::update_hint(kind, &version).into());
+                    app.set_update_hint(update::update_hint(kind, channel, &version).into());
                     app.set_update_version(version.into());
                     if let Some(notes) = notes {
                         app.set_update_notes(notes.into());
+                    }
+                    if automatic
+                        && channel == app_settings::Channel::Canary
+                        && app.get_canary_auto_install()
+                        && kind == update::InstallKind::Tarball
+                    {
+                        app.invoke_install_update();
                     }
                 }
                 Err(err) => app.set_update_note(format!("Couldn't check: {err}").into()),
@@ -133,6 +146,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
     }
     {
         let weak = app.as_weak();
+        let env = env.clone();
         // Two installs at once would race on the same staged file.
         let installing = Arc::new(AtomicBool::new(false));
         app.on_install_update(move || {
@@ -141,11 +155,16 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             if version.is_empty() || installing.swap(true, Ordering::Relaxed) {
                 return;
             }
+            let tag = match app_settings::Channel::ALL[app.get_update_channel() as usize] {
+                app_settings::Channel::Canary => "canary".to_owned(),
+                _ => format!("v{version}"),
+            };
             app.set_update_note("Installing…".into());
             let weak = app.as_weak();
             let installing = Arc::clone(&installing);
+            let env = env.clone();
             std::thread::spawn(move || {
-                let result = update::install(&version);
+                let result = update::install(&tag);
                 let _ = slint::invoke_from_event_loop(move || {
                     installing.store(false, Ordering::Relaxed);
                     let Some(app) = weak.upgrade() else { return };
@@ -155,6 +174,14 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
                             app.set_update_note(
                                 format!("Installed {version}. Restart to use it.").into(),
                             );
+                            if tag == "canary" {
+                                // Every canary shares a version, so the new
+                                // build shows these instead of the changelog.
+                                update::save_canary_notes(&env, &app.get_update_notes());
+                                app.set_update_strip(
+                                    format!("Updated to {version}. Restart to use it").into(),
+                                );
+                            }
                         }
                         Err(err) => app.set_update_note(format!("Install failed: {err}").into()),
                     }
@@ -196,11 +223,19 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
     {
         let weak = app.as_weak();
         let env = env.clone();
-        app.on_update_channel_selected(move |prereleases| {
+        app.on_canary_auto_install_toggled({
+            let env = env.clone();
+            move |checked| {
+                let mut settings = app_settings::load(&env);
+                settings.canary_auto_install = checked;
+                let _ = app_settings::store(&env, &settings);
+            }
+        });
+        app.on_update_channel_selected(move |index| {
             let Some(app) = weak.upgrade() else { return };
-            app.set_update_prereleases(prereleases);
+            app.set_update_channel(index);
             let mut settings = app_settings::load(&env);
-            settings.prereleases = prereleases;
+            settings.channel = app_settings::Channel::ALL[index as usize];
             let _ = app_settings::store(&env, &settings);
             start_update_check(app.as_weak(), None);
         });

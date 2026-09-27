@@ -232,7 +232,12 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     app.set_dirty(false);
     app.set_app_version(env!("CARGO_PKG_VERSION").into());
     app.set_check_updates_on_start(settings.check_updates_on_start);
-    app.set_update_prereleases(settings.prereleases);
+    let channel = app_settings::Channel::ALL
+        .iter()
+        .position(|channel| *channel == settings.channel)
+        .unwrap_or(0);
+    app.set_update_channel(channel as i32);
+    app.set_canary_auto_install(settings.canary_auto_install);
     app.set_dark_mode(settings.dark);
     app.global::<Theme>().set_dark(settings.dark);
     app.set_backup_note(page_backups::backup_note(&settings, &env));
@@ -317,16 +322,26 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         let notice = update::notice_should_show(&env);
         if notice {
             app.set_whatsnew_notice(
-                "Updates work differently now. You're on the Pre-release channel, \
-                 which gets new builds from the dev branch first. Prefer tested \
-                 releases? Switch to Stable in Settings → Updates. If you installed \
-                 from the release tarball, updates can now be installed from the app; \
-                 cargo, AUR and source builds show the command to run instead."
+                "Two update channels now. Canary, the default while the app is \
+                 unfinished, gets a new build with every pushed commit to dev; Stable gets tested \
+                 releases only. Switch in Settings → Updates. Canary can also \
+                 install new builds on launch by itself. If a build misbehaves, \
+                 `umbriel-config rollback` puts back the previous one."
                     .into(),
             );
             update::notice_mark_shown(&env);
         }
-        if changelog::should_show(&env, env!("CARGO_PKG_VERSION"))
+        // A canary build shows the notes saved when it was installed; the
+        // changelog is per version, and every canary shares one.
+        let canary_notes = update::BUILD_SHA
+            .and_then(|sha| update::take_canary_notes(&env).map(|notes| (sha, notes)));
+        if let Some((sha, notes)) = canary_notes {
+            app.set_whatsnew_title(
+                format!("What's new in canary {}", &sha[..7.min(sha.len())]).into(),
+            );
+            app.set_whatsnew_body(changelog::renderable(&notes).into());
+            app.set_show_whatsnew(true);
+        } else if changelog::should_show(&env, env!("CARGO_PKG_VERSION"))
             && let Some(section) = changelog::for_version(&sections, env!("CARGO_PKG_VERSION"))
         {
             app.set_whatsnew_title(format!("What's new in {}", env!("CARGO_PKG_VERSION")).into());
@@ -404,7 +419,10 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         );
     }
 
-    if settings.check_updates_on_start && update::should_auto_check(&env) {
+    // Canary checks on every launch: a new build can land at any push.
+    if settings.check_updates_on_start
+        && (settings.channel == app_settings::Channel::Canary || update::should_auto_check(&env))
+    {
         page_settings::start_update_check(app.as_weak(), Some(env.clone()));
     }
     // New umbriel options come from its docs; refresh them at most daily.

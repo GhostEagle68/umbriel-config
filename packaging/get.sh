@@ -2,10 +2,11 @@
 # Downloads the newest umbriel-config release, checks it against the
 # published sha256, and installs it into ~/.local.
 #
-#   curl -fsSL https://raw.githubusercontent.com/GhostEagle68/umbriel-config/main/packaging/get.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/GhostEagle68/umbriel-config/dev/packaging/get.sh | sh
 #
 # Flags (after `| sh -s --`):
 #   --prerelease   take the newest pre-release instead of the newest stable
+#   --canary       take the untested build of the latest commit to dev
 #   --version X    install exactly that version, e.g. --version 0.3.0-beta.1
 #
 # PREFIX=/usr/local picks another install prefix, as in install.sh.
@@ -18,6 +19,7 @@ version=
 while [ $# -gt 0 ]; do
     case "$1" in
         --prerelease) channel=prerelease ;;
+        --canary) channel=canary ;;
         --version) shift; version="${1:-}" ;;
         *) echo "error: unknown option '$1'" >&2; exit 1 ;;
     esac
@@ -37,23 +39,27 @@ case "$(uname -m)" in
     *) echo "error: unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
 
-# First tag in the API response: /releases/latest is the newest stable,
-# /releases is every release newest-first.
+# First versioned tag in the API response: /releases/latest is the newest
+# stable, /releases is every release newest-first. The rolling `canary`
+# release is recreated on every push, so it is often first; skip it.
 newest_tag() {
     curl -fsSL "$1" 2>/dev/null |
         sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' |
+        grep '^v' |
         head -n 1
 }
 
 if [ -z "$version" ]; then
-    if [ "$channel" = stable ]; then
+    if [ "$channel" = canary ]; then
+        tag=canary
+    elif [ "$channel" = stable ]; then
         tag=$(newest_tag "https://api.github.com/repos/$repo/releases/latest")
         if [ -z "$tag" ]; then
             echo "No stable release yet — installing the newest pre-release."
-            tag=$(newest_tag "https://api.github.com/repos/$repo/releases?per_page=1")
+            tag=$(newest_tag "https://api.github.com/repos/$repo/releases?per_page=20")
         fi
     else
-        tag=$(newest_tag "https://api.github.com/repos/$repo/releases?per_page=1")
+        tag=$(newest_tag "https://api.github.com/repos/$repo/releases?per_page=20")
     fi
 else
     tag="v$version"

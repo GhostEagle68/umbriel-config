@@ -7,7 +7,8 @@ import { Theme } from "../theme.slint";
 export component SettingsPage inherits Rectangle {
     in property <string> app-version;
     in property <bool> check-updates-on-start;
-    in property <bool> update-prereleases;
+    in property <int> update-channel;
+    in property <bool> canary-auto-install;
     in property <bool> update-can-install;
     in property <string> update-hint;
     in property <bool> update-installed;
@@ -27,7 +28,8 @@ export component SettingsPage inherits Rectangle {
     callback open-url(string);
     callback relaunch();
     callback sync-schema();
-    callback channel-selected(bool);
+    callback channel-selected(int);
+    callback auto-install-toggled(bool);
     callback install-update();
     callback restart-app();
     callback view-changelog();
@@ -266,18 +268,47 @@ export component SettingsPage inherits Rectangle {
 
                         ComboBox {
                             width: 140px;
-                            model: ["Pre-release", "Stable"];
-                            current-index: root.update-prereleases ? 0 : 1;
+                            model: ["Stable", "Canary"];
+                            current-index: root.update-channel;
                             selected => {
-                                root.channel-selected(self.current-index == 0);
+                                root.channel-selected(self.current-index);
                             }
                         }
 
                         Text {
                             horizontal-stretch: 1;
-                            text: root.update-prereleases
-                                ? "New features first, from the dev branch"
-                                : "Tested releases only";
+                            text: root.update-channel == 0
+                                ? "Tested releases only"
+                                : "Recommended for now: every commit to dev, may break";
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            wrap: TextWrap.word-wrap;
+                        }
+                    }
+
+                    if root.update-channel == 1: HorizontalLayout {
+                        min-height: 32px;
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Canary updates";
+                            min-width: 130px;
+                            max-width: 260px;
+                            horizontal-stretch: 1;
+                            wrap: TextWrap.word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        CheckBox {
+                            text: "Install automatically on launch";
+                            checked: root.canary-auto-install;
+                            toggled => { root.auto-install-toggled(self.checked); }
+                        }
+
+                        Text {
+                            horizontal-stretch: 1;
+                            text: "Undo with: umbriel-config rollback";
                             color: Theme.text-2;
                             font-size: Theme.font-small;
                             vertical-alignment: center;

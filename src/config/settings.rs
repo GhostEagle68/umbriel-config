@@ -5,6 +5,27 @@ use super::discovery;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+/// Which releases the update check offers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Channel {
+    /// Versioned releases (`v0.3.0`).
+    Stable,
+    /// The rolling build of every commit to dev.
+    Canary,
+}
+
+impl Channel {
+    /// Also the order of the Settings page's channel dropdown.
+    pub const ALL: [Channel; 2] = [Channel::Stable, Channel::Canary];
+
+    fn name(self) -> &'static str {
+        match self {
+            Channel::Stable => "stable",
+            Channel::Canary => "canary",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub check_updates_on_start: bool,
@@ -12,8 +33,10 @@ pub struct Settings {
     pub window_height: u32,
     /// true = dark design, false = light design.
     pub dark: bool,
-    /// true = Pre-release channel (dev builds first), false = Stable only.
-    pub prereleases: bool,
+    /// Which releases the update check offers.
+    pub channel: Channel,
+    /// Canary only: install a newer canary on launch without asking.
+    pub canary_auto_install: bool,
     /// Backup runs kept per location (minimum 1).
     pub backup_count: u32,
     /// Custom backup location; None = the state-directory default.
@@ -27,7 +50,9 @@ pub const DEFAULT: Settings = Settings {
     dark: true,
     backup_count: 10,
     backup_dir: None,
-    prereleases: true,
+    // Canary while the app is unfinished; Stable once it reaches 1.0.
+    channel: Channel::Canary,
+    canary_auto_install: false,
 };
 
 pub fn path(env: &discovery::Env) -> PathBuf {
@@ -51,6 +76,9 @@ pub fn load(env: &discovery::Env) -> Settings {
 /// field-by-field to the defaults.
 fn parse(text: &str) -> Settings {
     let mut settings = DEFAULT;
+    let mut channel = None;
+    // `prereleases`, from before channels had names; `channel` wins.
+    let mut legacy = None;
     for line in text.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
@@ -63,12 +91,23 @@ fn parse(text: &str) -> Settings {
                 settings.window_height = value.parse().unwrap_or(DEFAULT.window_height)
             }
             "dark" => settings.dark = value.parse().unwrap_or(DEFAULT.dark),
-            "prereleases" => settings.prereleases = value.parse().unwrap_or(DEFAULT.prereleases),
+            "channel" => channel = Channel::ALL.into_iter().find(|c| c.name() == value),
+            "prereleases" => {
+                legacy = value.parse::<bool>().ok().map(|early| {
+                    if early {
+                        Channel::Canary
+                    } else {
+                        Channel::Stable
+                    }
+                })
+            }
+            "canary_auto_install" => settings.canary_auto_install = value == "true",
             "backup_count" => settings.backup_count = value.parse().unwrap_or(DEFAULT.backup_count),
             "backup_dir" => settings.backup_dir = (!value.is_empty()).then(|| value.to_owned()),
             _ => {}
         }
     }
+    settings.channel = channel.or(legacy).unwrap_or(DEFAULT.channel);
     settings
 }
 
@@ -80,14 +119,15 @@ pub fn store(env: &discovery::Env, settings: &Settings) -> std::io::Result<()> {
     std::fs::write(
         path,
         format!(
-            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\ndark = {}\nbackup_count = {}\nbackup_dir = {}\nprereleases = {}\n",
+            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\ndark = {}\nbackup_count = {}\nbackup_dir = {}\nchannel = {}\ncanary_auto_install = {}\n",
             settings.check_updates_on_start,
             settings.window_width,
             settings.window_height,
             settings.dark,
             settings.backup_count,
             settings.backup_dir.as_deref().unwrap_or(""),
-            settings.prereleases,
+            settings.channel.name(),
+            settings.canary_auto_install,
         ),
     )
 }
@@ -117,7 +157,8 @@ mod tests {
                 window_width: 1280,
                 window_height: 800,
                 dark: false,
-                prereleases: false,
+                channel: Channel::Stable,
+                canary_auto_install: true,
                 backup_count: 3,
                 backup_dir: Some("/tmp/b".to_owned()),
             },
@@ -130,7 +171,8 @@ mod tests {
                 window_width: 1280,
                 window_height: 800,
                 dark: false,
-                prereleases: false,
+                channel: Channel::Stable,
+                canary_auto_install: true,
                 backup_count: 3,
                 backup_dir: Some("/tmp/b".to_owned()),
             }
@@ -145,7 +187,7 @@ mod tests {
         let settings = parse(
             "unknown = 1\ncheck_updates_on_start = false\nwindow_width = oops\nwindow_height = 700\ndark = false\nbackup_count = 3\nbackup_dir = /tmp/b\nbad_dark = maybe\n",
         );
-        assert!(settings.prereleases);
+        assert_eq!(settings.channel, Channel::Canary);
         assert!(!settings.check_updates_on_start);
         assert_eq!(settings.window_width, DEFAULT.window_width);
         assert_eq!(settings.window_height, 700);
@@ -157,5 +199,16 @@ mod tests {
         assert!(settings.dark);
         assert_eq!(settings.backup_count, DEFAULT.backup_count);
         assert_eq!(settings.backup_dir, None);
+    }
+
+    #[test]
+    fn channel_reads_the_old_prereleases_key() {
+        assert_eq!(parse("prereleases = true\n").channel, Channel::Canary);
+        assert_eq!(parse("prereleases = false\n").channel, Channel::Stable);
+        // The named channel wins, whichever line comes first.
+        assert_eq!(
+            parse("channel = stable\nprereleases = true\n").channel,
+            Channel::Stable
+        );
     }
 }

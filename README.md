@@ -56,9 +56,9 @@ curl -fsSL https://raw.githubusercontent.com/GhostEagle68/umbriel-config/dev/pac
 ```
 
 That picks the right build for your machine, verifies its checksum, and
-installs into `~/.local`. Add `-s -- --prerelease` to follow the
-pre-release channel, or `-s -- --version XXX` for an exact
-version. Replace 'XXX' with exact version.
+installs into `~/.local`. Add `-s -- --canary` for the build of the
+latest change instead of the latest release, or `-s -- --version XXX`
+for an exact version (replace `XXX` with the version).
 
 Prefer to do it manually? Download the tarball for your machine from the
 [releases page](https://github.com/GhostEagle68/umbriel-config/releases)
@@ -79,8 +79,15 @@ instead, and a `.sha256` checksum sits beside every tarball.
 ## Updating
 
 Installed from a tarball, the app updates itself: **Settings → Updates →
-Install update**, then Restart. The same card picks your channel —
-**Stable** for tested releases, **Pre-release** for new features first.
+Install update**, then Restart. The same card picks your channel:
+
+- **Canary** (the default while the app is in beta): a new build with
+  every change, published shortly after it lands. It can also install
+  new builds on launch by itself.
+- **Stable**: tested releases only.
+
+If an update misbehaves, `umbriel-config rollback` puts back the build it
+replaced.
 
 Installed another way, the app tells you the command for it instead:
 
@@ -178,6 +185,7 @@ umbriel-config --config PATH  # open a specific config file
 umbriel-config path           # print which config would be opened
 umbriel-config get|set ...    # debug CLI for single keys
 umbriel-config outputs        # list outputs reported by the compositor
+umbriel-config rollback       # put back the build the last in-app update replaced
 ```
 
 ## Beta caveats
@@ -185,9 +193,9 @@ umbriel-config outputs        # list outputs reported by the compositor
 - Core settings work
 - Expect bugs and missing features.
 - Umbriel Config may have frequent updates due to how fast Umbriel changes, staying up-to-date is highly recommended.
-- Every release so far is a pre-release, so new installs follow the
-  **Pre-release** channel; Stable starts offering updates with the first
-  stable release.
+- New installs follow the **Canary** channel, a build of every change as
+  it lands. Prefer tested releases only? Switch to **Stable** in
+  Settings → Updates.
 - Installs from GitHub release tarballs (x86_64 and aarch64), crates.io, or
   `cargo install --git`. AUR packaging is planned but not started.
 
