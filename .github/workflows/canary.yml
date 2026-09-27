@@ -84,18 +84,32 @@ jobs:
           {
             echo "Untested build of \`${GITHUB_SHA::7}\` from dev."
             echo
-            # The highlights written for the next release, when there are any.
-            highlights=$(find changes -name '*.md' ! -name README.md | sort)
-            if [ -n "$highlights" ]; then
-              echo "## Coming in the next release"
-              echo
-              for fragment in $highlights; do cat "$fragment"; echo; done
-            fi
             # One commit per line, newest first, ending in its short sha:
             # the app trims this list to the commits after the user's build.
             echo "## Commits"
             echo
             git log --no-merges --format='- %s (%h)' ${since:+"$since"..}HEAD
+            # Last on purpose: the app cuts the notes at the user's own
+            # commit, so people already on canary never see this part.
+            echo
+            echo "## Install"
+            echo
+            echo "Install this build in one command:"
+            echo
+            echo '```sh'
+            echo "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/dev/packaging/get.sh | sh -s -- --canary"
+            echo '```'
+            echo
+            echo "Or download the tarball for your machine below (\`x86_64\` for most PCs,"
+            echo "\`aarch64\` for ARM), then:"
+            echo
+            echo '```sh'
+            echo "tar -xzf umbriel-config-x86_64-linux.tar.gz"
+            echo "cd umbriel-config-x86_64-linux"
+            echo "./install.sh"
+            echo '```'
+            echo
+            echo "Already have umbriel-config? Pick **Canary** in **Settings → Updates**."
           } > notes.md
           gh release delete "$TAG" --cleanup-tag --yes || true
           gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
