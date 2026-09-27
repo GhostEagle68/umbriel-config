@@ -73,7 +73,13 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 
 echo "Downloading umbriel-config $tag ($arch)…"
-curl -fsSL "$base/$asset" -o "$work/$asset"
+curl -fsSL "$base/$asset" -o "$work/$asset" || {
+    # Every push to dev deletes the canary release and publishes a new
+    # one a few minutes later; there is none in between.
+    [ "$tag" = canary ] &&
+        echo "No canary build right now: a new one is being published. Try again in a few minutes." >&2
+    exit 1
+}
 curl -fsSL "$base/$asset.sha256" -o "$work/$asset.sha256"
 
 # The published file names the asset, so verify from inside the folder.
