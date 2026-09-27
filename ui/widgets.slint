@@ -678,6 +678,7 @@ component NoteLineView inherits Rectangle {
         font-size: Theme.font-body;
         font-weight: 700;
     }
+
     Rectangle {
         visible: line.kind == 1;
         x: scope.preferred-width + Theme.space-m;
@@ -712,6 +713,7 @@ component NoteLineView inherits Rectangle {
         font-size: line.kind == 4 ? Theme.font-small : Theme.font-body;
         wrap: word-wrap;
     }
+
     meta := Text {
         visible: line.meta != "";
         x: text-x;
@@ -769,12 +771,14 @@ export component ReleaseNotes inherits VerticalLayout {
                         font-size: Theme.font-title;
                         font-weight: 700;
                     }
+
                     if card.date != "": Text {
                         text: card.date;
                         color: Theme.text-2;
                         font-size: Theme.font-small;
                     }
                 }
+
                 if card.badge != "": VerticalLayout {
                     alignment: start;
 
@@ -798,6 +802,7 @@ export component ReleaseNotes inherits VerticalLayout {
                     }
                 }
             }
+
             for line in card.lines: NoteLineView {
                 line: line;
             }
