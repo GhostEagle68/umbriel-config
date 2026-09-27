@@ -350,14 +350,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     let configured_outputs = !outputs::configured(&shell.borrow().doc).is_empty();
     let landing = nav
         .iter()
-        .find(|entry| !entry.is_header && (configured_outputs || entry.id != catalog::OUTPUTS_ID));
-    if let Some(first) = landing {
-        let (title, description) = sections::page_meta(&first.id);
-        app.set_current_section(first.id.clone());
-        app.set_page_title(title.into());
-        app.set_page_description(description.into());
-        sections::refill_page(&app, &shell.borrow(), &first.id);
-    }
+        .find(|entry| !entry.is_header && (configured_outputs || entry.id != catalog::OUTPUTS_ID))
+        .map(|entry| entry.id.clone());
     app.set_sections(Rc::new(VecModel::from(nav)).into());
     {
         // Shader builder: the palette of step kinds the Add-an-effect
@@ -442,6 +436,11 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     guide::install_guide(&app, &shell, &env);
     rows::install_value_editing(&app, &shell);
     rows::install_color_math(&app);
+    // Open the landing page the way a click does (Outputs scans the
+    // live monitors on open).
+    if let Some(id) = landing {
+        app.invoke_section_selected(id);
+    }
 
     {
         let weak = app.as_weak();
