@@ -130,7 +130,7 @@ fn canary_verdict(build: Option<&str>, release: Option<Release>) -> Verdict {
     }
 }
 
-fn short(sha: &str) -> &str {
+pub fn short(sha: &str) -> &str {
     &sha[..7.min(sha.len())]
 }
 
@@ -297,21 +297,55 @@ pub fn rollback() -> Result<PathBuf, String> {
     Ok(exe)
 }
 
-/// Notes of an installed canary, shown once by the build that replaces
-/// this one (every canary shares a version, so the changelog can't).
-pub fn save_canary_notes(env: &discovery::Env, notes: &str) {
-    let path = state_path(env, "canary-notes.md");
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+/// How many canary updates the changelog keeps notes for.
+const CANARY_KEPT: usize = 5;
+
+/// Notes of an installed canary, by its short commit: the build that
+/// replaces this one shows them once, and the changelog lists the last
+/// few (every canary shares a version, so the bundled changelog can't).
+pub fn save_canary_notes(env: &discovery::Env, sha: &str, notes: &str) {
+    let dir = state_path(env, "canary-notes");
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(format!("{sha}.md")), notes);
+    for (old, _) in canary_notes(env).into_iter().skip(CANARY_KEPT) {
+        let _ = std::fs::remove_file(dir.join(format!("{old}.md")));
     }
-    let _ = std::fs::write(path, notes);
 }
 
-pub fn take_canary_notes(env: &discovery::Env) -> Option<String> {
-    let path = state_path(env, "canary-notes.md");
-    let notes = std::fs::read_to_string(&path).ok()?;
-    let _ = std::fs::remove_file(path);
-    (!notes.trim().is_empty()).then_some(notes)
+/// The saved canary notes, newest first: (short commit, notes).
+pub fn canary_notes(env: &discovery::Env) -> Vec<(String, String)> {
+    let Ok(entries) = std::fs::read_dir(state_path(env, "canary-notes")) else {
+        return Vec::new();
+    };
+    let mut saved: Vec<(SystemTime, String, String)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let sha = path.file_stem()?.to_str()?.to_owned();
+            let saved_at = entry.metadata().ok()?.modified().ok()?;
+            let notes = std::fs::read_to_string(&path).ok()?;
+            (!notes.trim().is_empty()).then_some((saved_at, sha, notes))
+        })
+        .collect();
+    saved.sort_by_key(|(saved_at, _, _)| std::cmp::Reverse(*saved_at));
+    saved
+        .into_iter()
+        .map(|(_, sha, notes)| (sha, notes))
+        .collect()
+}
+
+/// The running canary's notes, the first time it runs.
+pub fn take_canary_notes(env: &discovery::Env, build: &str) -> Option<String> {
+    let sha = short(build);
+    let shown = state_path(env, "canary-notes-shown");
+    if std::fs::read_to_string(&shown).is_ok_and(|seen| seen == sha) {
+        return None;
+    }
+    let notes = std::fs::read_to_string(state_path(env, "canary-notes").join(format!("{sha}.md")))
+        .ok()
+        .filter(|notes| !notes.trim().is_empty())?;
+    let _ = std::fs::write(shown, sha);
+    Some(notes)
 }
 
 /// Lowercase hex SHA-256, the form published in `<asset>.sha256`.
@@ -486,6 +520,39 @@ mod tests {
         assert!(notice_should_show(&env));
         notice_mark_shown(&env);
         assert!(!notice_should_show(&env));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn canary_notes_keep_the_last_few_and_show_once() {
+        let root = std::env::temp_dir().join(format!("umbriel-canary-{}", std::process::id()));
+        let env = discovery::Env {
+            xdg_state_home: Some(root.clone().into_os_string()),
+            ..Default::default()
+        };
+        let dir = state_path(&env, "canary-notes");
+        for n in 0..7 {
+            save_canary_notes(&env, &format!("aaaaaa{n}"), &format!("- change {n}"));
+            // Newest first goes by save time; make each one distinct.
+            let file = std::fs::File::options()
+                .write(true)
+                .open(dir.join(format!("aaaaaa{n}.md")))
+                .unwrap();
+            file.set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1000 + n))
+                .unwrap();
+        }
+        save_canary_notes(&env, "aaaaaa6", "- change 6");
+        let saved: Vec<String> = canary_notes(&env).into_iter().map(|(sha, _)| sha).collect();
+        assert_eq!(saved.len(), CANARY_KEPT);
+        assert_eq!(saved[0], "aaaaaa6");
+        assert!(!saved.contains(&"aaaaaa0".to_owned()));
+        assert_eq!(
+            take_canary_notes(&env, "aaaaaa6ffff").as_deref(),
+            Some("- change 6")
+        );
+        assert_eq!(take_canary_notes(&env, "aaaaaa6ffff"), None);
+        // Still listed for the changelog after What's new showed it.
+        assert_eq!(canary_notes(&env).len(), CANARY_KEPT);
         std::fs::remove_dir_all(&root).ok();
     }
 

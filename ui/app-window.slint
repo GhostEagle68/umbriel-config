@@ -141,6 +141,9 @@ export component AppWindow inherits Window {
     in property <[NotesCard]> whatsnew-cards;
     // true while it shows every release: hides "Show full changelog".
     in property <bool> whatsnew-full;
+    // A canary build's commits since the last release, linked from the
+    // changelog; empty for other builds.
+    in property <string> whatsnew-canary-url;
     // One-time notice above the notes; empty once it has been read.
     in-out property <string> whatsnew-notice;
     callback view-changelog();
@@ -1136,6 +1139,24 @@ export component AppWindow inherits Window {
                                 }
                             }
                         }
+                    }
+                }
+
+                if root.whatsnew-full && root.whatsnew-canary-url != "": HorizontalLayout {
+                    spacing: Theme.space-m;
+
+                    Text {
+                        text: "This canary build also has changes since the last release.";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        wrap: TextWrap.word-wrap;
+                        horizontal-stretch: 1;
+                    }
+
+                    ActionButton {
+                        text: "Commits on GitHub";
+                        clicked => { root.open-url(root.whatsnew-canary-url); }
                     }
                 }
 

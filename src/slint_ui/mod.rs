@@ -293,7 +293,18 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         app.set_include_note(shell.includes.notes.join("; ").into());
     }
     app.set_dirty(false);
-    app.set_app_version(env!("CARGO_PKG_VERSION").into());
+    // Every canary shares the version; its commit tells them apart.
+    app.set_app_version(
+        match update::BUILD_SHA {
+            Some(sha) => format!(
+                "{} (canary {})",
+                env!("CARGO_PKG_VERSION"),
+                update::short(sha)
+            ),
+            None => env!("CARGO_PKG_VERSION").to_owned(),
+        }
+        .into(),
+    );
     app.set_check_updates_on_start(settings.check_updates_on_start);
     let channel = app_settings::Channel::ALL
         .iter()
@@ -389,9 +400,9 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         // A canary build shows the notes saved when it was installed; the
         // changelog is per version, and every canary shares one.
         let canary_notes = update::BUILD_SHA
-            .and_then(|sha| update::take_canary_notes(&env).map(|notes| (sha, notes)));
+            .and_then(|sha| update::take_canary_notes(&env, sha).map(|notes| (sha, notes)));
         if let Some((sha, notes)) = canary_notes {
-            let title = format!("Canary {}", &sha[..7.min(sha.len())]);
+            let title = format!("Canary {}", update::short(sha));
             page_settings::show_notes(
                 &app,
                 "What's new",

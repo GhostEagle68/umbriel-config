@@ -174,10 +174,10 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
                             app.set_update_note(
                                 format!("Installed {version}. Restart to use it.").into(),
                             );
-                            if tag == "canary" {
+                            if let Some(sha) = version.strip_prefix("canary ") {
                                 // Every canary shares a version, so the new
                                 // build shows these instead of the changelog.
-                                update::save_canary_notes(&env, &app.get_update_notes());
+                                update::save_canary_notes(&env, sha, &app.get_update_notes());
                                 app.set_update_strip(
                                     format!("Updated to {version}. Restart to use it").into(),
                                 );
@@ -374,13 +374,30 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
     }
     {
         let weak = app.as_weak();
+        let env = env.clone();
         app.on_view_changelog(move || {
             let Some(app) = weak.upgrade() else { return };
+            // The canary updates you installed, each with what it added,
+            // above the releases.
+            let canaries = update::canary_notes(&env)
+                .into_iter()
+                .map(|(sha, notes)| notes_card(format!("Canary {sha}"), "", "Canary", &notes));
             let sections = changelog::parse(changelog::bundled());
+            // A canary build's changes since the last release are its
+            // commits, which GitHub lists.
+            if let (Some(sha), Some(release)) = (update::BUILD_SHA, sections.first()) {
+                app.set_whatsnew_canary_url(
+                    format!(
+                        "https://github.com/GhostEagle68/umbriel-config/compare/v{}...{sha}",
+                        release.version
+                    )
+                    .into(),
+                );
+            }
             show_notes(
                 &app,
                 "Changelog",
-                sections.iter().map(release_card).collect(),
+                canaries.chain(sections.iter().map(release_card)).collect(),
                 true,
             );
         });
