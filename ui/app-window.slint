@@ -1151,7 +1151,7 @@ export component AppWindow inherits Window {
                             cards: root.whatsnew-cards;
                         }
 
-                        if !root.whatsnew-full: HorizontalLayout {
+                        if !root.whatsnew-full && root.whatsnew-cards.length > 0: HorizontalLayout {
                             alignment: center;
                             padding-bottom: Theme.space-s;
 

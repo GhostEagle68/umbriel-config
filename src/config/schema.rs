@@ -538,11 +538,8 @@ pub fn from_umbriel(keys: &[umbriel_schema::Key], docs: &[Entry]) -> Vec<Entry> 
                 // it, else a raw TOML row.
                 (Some(Kind::Raw), Some(kind)) => kind.clone(),
                 (Some(kind), _) => kind,
-                // A table to umbriel that the docs show as a value: the
-                // docs' value.
-                (None, Some(kind)) => kind.clone(),
                 // A table of settings, listed through its own keys.
-                (None, None) => return None,
+                (None, _) => return None,
             };
             let default = key.default.as_ref().and_then(|value| match value {
                 serde_json::Value::Bool(value) => Some(Value::Bool(*value)),

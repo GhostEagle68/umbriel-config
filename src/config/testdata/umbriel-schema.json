@@ -1,6 +1,6 @@
 {
   "version": "0.1.0",
-  "revision": "810711bc8009-dirty",
+  "revision": "e0248d0e3e14",
   "options": [
     {
       "path": "animation",
@@ -31,14 +31,15 @@
       "max": 10000
     },
     {
+      "path": "animation.border.effect",
+      "type": "string",
+      "format": "effect",
+      "default": ""
+    },
+    {
       "path": "animation.border.enabled",
       "type": "bool",
       "default": true
-    },
-    {
-      "path": "animation.border.shader",
-      "type": "string",
-      "format": "path"
     },
     {
       "path": "animation.curve",
@@ -65,17 +66,19 @@
       "path": "animation.dim_unfocused.duration_ms",
       "type": "int",
       "min": 1,
-      "max": 10000
+      "max": 10000,
+      "default": 250
+    },
+    {
+      "path": "animation.dim_unfocused.effect",
+      "type": "string",
+      "format": "effect",
+      "default": ""
     },
     {
       "path": "animation.dim_unfocused.enabled",
       "type": "bool",
       "default": false
-    },
-    {
-      "path": "animation.dim_unfocused.shader",
-      "type": "string",
-      "format": "path"
     },
     {
       "path": "animation.duration_ms",
@@ -102,17 +105,19 @@
       "path": "animation.layers.duration_ms",
       "type": "int",
       "min": 1,
-      "max": 10000
+      "max": 10000,
+      "default": 250
+    },
+    {
+      "path": "animation.layers.effect",
+      "type": "string",
+      "format": "effect",
+      "default": ""
     },
     {
       "path": "animation.layers.enabled",
       "type": "bool",
       "default": false
-    },
-    {
-      "path": "animation.layers.shader",
-      "type": "string",
-      "format": "path"
     },
     {
       "path": "animation.overview",
@@ -130,14 +135,15 @@
       "max": 10000
     },
     {
+      "path": "animation.overview.effect",
+      "type": "string",
+      "format": "effect",
+      "default": ""
+    },
+    {
       "path": "animation.overview.enabled",
       "type": "bool",
       "default": true
-    },
-    {
-      "path": "animation.overview.shader",
-      "type": "string",
-      "format": "path"
     },
     {
       "path": "animation.overview.workspace_curve",
@@ -172,6 +178,12 @@
       "max": 10000
     },
     {
+      "path": "animation.scratchpad.effect",
+      "type": "string",
+      "format": "effect",
+      "default": ""
+    },
+    {
       "path": "animation.scratchpad.enabled",
       "type": "bool",
       "default": true
@@ -194,11 +206,6 @@
       "default": 0.0
     },
     {
-      "path": "animation.scratchpad.shader",
-      "type": "string",
-      "format": "path"
-    },
-    {
       "path": "animation.springs",
       "type": "map"
     },
@@ -219,6 +226,15 @@
       "max": 10000.0
     },
     {
+      "path": "animation.windows_drag",
+      "type": "table"
+    },
+    {
+      "path": "animation.windows_drag.physics",
+      "type": "bool",
+      "default": false
+    },
+    {
       "path": "animation.windows_in",
       "type": "table"
     },
@@ -234,6 +250,12 @@
       "max": 10000
     },
     {
+      "path": "animation.windows_in.effect",
+      "type": "string",
+      "format": "effect",
+      "default": ""
+    },
+    {
       "path": "animation.windows_in.enabled",
       "type": "bool",
       "default": true
@@ -244,11 +266,6 @@
       "min": 0.1,
       "max": 1.0,
       "default": 0.5
-    },
-    {
-      "path": "animation.windows_in.shader",
-      "type": "string",
-      "format": "path"
     },
     {
       "path": "animation.windows_in.style",
@@ -278,14 +295,15 @@
       "max": 10000
     },
     {
+      "path": "animation.windows_move.effect",
+      "type": "string",
+      "format": "effect",
+      "default": ""
+    },
+    {
       "path": "animation.windows_move.enabled",
       "type": "bool",
       "default": true
-    },
-    {
-      "path": "animation.windows_move.shader",
-      "type": "string",
-      "format": "path"
     },
     {
       "path": "animation.windows_out",
@@ -303,6 +321,12 @@
       "max": 10000
     },
     {
+      "path": "animation.windows_out.effect",
+      "type": "string",
+      "format": "effect",
+      "default": ""
+    },
+    {
       "path": "animation.windows_out.enabled",
       "type": "bool",
       "default": true
@@ -313,11 +337,6 @@
       "min": 0.1,
       "max": 1.0,
       "default": 0.8
-    },
-    {
-      "path": "animation.windows_out.shader",
-      "type": "string",
-      "format": "path"
     },
     {
       "path": "animation.windows_out.style",
@@ -346,14 +365,15 @@
       "max": 10000
     },
     {
+      "path": "animation.workspaces.effect",
+      "type": "string",
+      "format": "effect",
+      "default": ""
+    },
+    {
       "path": "animation.workspaces.enabled",
       "type": "bool",
       "default": true
-    },
-    {
-      "path": "animation.workspaces.shader",
-      "type": "string",
-      "format": "path"
     },
     {
       "path": "appearance",
@@ -590,6 +610,123 @@
       "format": "pci_address"
     },
     {
+      "path": "effects",
+      "type": "table"
+    },
+    {
+      "path": "effects.border",
+      "type": "string",
+      "format": "effect",
+      "default": ""
+    },
+    {
+      "path": "effects.cursor",
+      "type": "string",
+      "format": "effect",
+      "default": ""
+    },
+    {
+      "path": "effects.in_capture",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "path": "effects.max_fps",
+      "type": "int",
+      "min": 0,
+      "max": 240,
+      "default": 0
+    },
+    {
+      "path": "effects.preset",
+      "type": "map"
+    },
+    {
+      "path": "effects.preset.<name>",
+      "type": "table"
+    },
+    {
+      "path": "effects.preset.<name>.animated",
+      "type": "bool"
+    },
+    {
+      "path": "effects.preset.<name>.kind",
+      "type": "enum",
+      "values": [
+        "animation",
+        "border",
+        "window",
+        "screen",
+        "cursor"
+      ]
+    },
+    {
+      "path": "effects.preset.<name>.light",
+      "type": "table"
+    },
+    {
+      "path": "effects.preset.<name>.light.intensity",
+      "type": "float",
+      "min": 0.0,
+      "max": 4.0
+    },
+    {
+      "path": "effects.preset.<name>.light.spread",
+      "type": "int",
+      "min": 1,
+      "max": 256
+    },
+    {
+      "path": "effects.preset.<name>.light.threshold",
+      "type": "float",
+      "min": 0.0,
+      "max": 1.0
+    },
+    {
+      "path": "effects.preset.<name>.overlay",
+      "type": "string",
+      "format": "effect"
+    },
+    {
+      "path": "effects.preset.<name>.padding",
+      "type": "int",
+      "min": 0,
+      "max": 1024
+    },
+    {
+      "path": "effects.preset.<name>.palette",
+      "type": "bool"
+    },
+    {
+      "path": "effects.preset.<name>.radius",
+      "type": "int",
+      "min": 0,
+      "max": 4096
+    },
+    {
+      "path": "effects.preset.<name>.shader",
+      "type": "string",
+      "format": "path"
+    },
+    {
+      "path": "effects.preset.<name>.speed",
+      "type": "float",
+      "min": 0.0,
+      "max": 10.0
+    },
+    {
+      "path": "effects.screen",
+      "type": "string",
+      "format": "effect",
+      "default": ""
+    },
+    {
+      "path": "effects.window",
+      "type": "string",
+      "format": "effect",
+      "default": ""
+    },
+    {
       "path": "environment",
       "type": "table"
     },
@@ -761,6 +898,11 @@
       "type": "table"
     },
     {
+      "path": "input.client_window_drag",
+      "type": "bool",
+      "default": true
+    },
+    {
       "path": "input.cursor",
       "type": "table"
     },
@@ -826,6 +968,10 @@
     {
       "path": "input.device[].layout",
       "type": "string"
+    },
+    {
+      "path": "input.device[].left_handed",
+      "type": "bool"
     },
     {
       "path": "input.device[].name",
@@ -969,6 +1115,10 @@
       "format": "accel_profile"
     },
     {
+      "path": "input.mouse.left_handed",
+      "type": "bool"
+    },
+    {
       "path": "input.mouse.natural_scroll",
       "type": "bool"
     },
@@ -1035,6 +1185,20 @@
       "default": ""
     },
     {
+      "path": "input.touch",
+      "type": "table"
+    },
+    {
+      "path": "input.touch.enabled",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "path": "input.touch.map_to_output",
+      "type": "string",
+      "default": ""
+    },
+    {
       "path": "input.touchpad",
       "type": "table"
     },
@@ -1061,6 +1225,10 @@
     },
     {
       "path": "input.touchpad.disable_while_typing",
+      "type": "bool"
+    },
+    {
+      "path": "input.touchpad.left_handed",
       "type": "bool"
     },
     {
@@ -1335,6 +1503,18 @@
       "type": "table"
     },
     {
+      "path": "output.<name>.bit_depth",
+      "type": "int",
+      "min": 8,
+      "max": 10,
+      "default": 8
+    },
+    {
+      "path": "output.<name>.cyclic_workspaces",
+      "type": "bool",
+      "default": false
+    },
+    {
       "path": "output.<name>.direct_scanout",
       "type": "bool",
       "default": true
@@ -1392,6 +1572,11 @@
       "type": "float",
       "min": 0.25,
       "max": 4.0
+    },
+    {
+      "path": "output.<name>.screen_effect",
+      "type": "string",
+      "format": "effect"
     },
     {
       "path": "output.<name>.sdr_white",
@@ -1502,6 +1687,15 @@
       "type": "string"
     },
     {
+      "path": "screencast",
+      "type": "table"
+    },
+    {
+      "path": "screencast.disable_dynamic_confirmation",
+      "type": "bool",
+      "default": false
+    },
+    {
       "path": "security_context_rule",
       "type": "array_of_tables"
     },
@@ -1557,6 +1751,11 @@
     {
       "path": "window_rule[].border_color_unfocused",
       "type": "color"
+    },
+    {
+      "path": "window_rule[].border_effect",
+      "type": "string",
+      "format": "effect"
     },
     {
       "path": "window_rule[].border_width",
@@ -1647,7 +1846,8 @@
         "left",
         "right",
         "center"
-      ]
+      ],
+      "default": "center"
     },
     {
       "path": "window_rule[].default_position.x",
@@ -1788,6 +1988,11 @@
         "always",
         "fullscreen"
       ]
+    },
+    {
+      "path": "window_rule[].window_effect",
+      "type": "string",
+      "format": "effect"
     },
     {
       "path": "workspace",

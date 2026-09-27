@@ -661,11 +661,25 @@ closes after ten seconds; an error remains until the next successful reload.
 Check a file without starting the compositor:
 
 ```sh
-umbriel validate
+umbriel config validate
 ```
 
 The command prints every diagnostic with its file, line, and column, and exits
 nonzero when it finds a problem.
+
+List every configuration key the installed binary accepts:
+
+```sh
+umbriel config schema
+umbriel config schema --json
+```
+
+Without `--json` it prints how many options each section has. With `--json` it
+prints each key's path, type, range, accepted values, format, and built-in
+default, plus the binary's `version` and `revision` (`null` for a build outside
+git). `name[]` marks the entries of an array of tables, such as
+`window_rule[].match.app_id`, and `<name>` a name you choose, such as
+`output.<name>.scale`.
 
 ## Include
 
@@ -1094,7 +1108,7 @@ to integrate with Umbriel.
 5. Use [window rules](window-rules.md) for application-specific behavior.
 
 Umbriel reloads most configuration changes when you save the file. Errors and
-warnings appear on screen, and `umbriel validate` can check a configuration
+warnings appear on screen, and `umbriel config validate` can check a configuration
 without a running session.
 
 ## Features
@@ -1709,7 +1723,8 @@ umbriel subscribe workspaces |
 
 `umbriel outputs`, `umbriel color`, `umbriel tearing`, `umbriel layers`, and
 `umbriel keyboard-layouts` print human-readable state. Each accepts `--json`.
-`umbriel validate` checks a configuration without a running compositor.
+`umbriel config validate` checks a configuration and `umbriel config schema`
+lists the keys it accepts, both without a running compositor.
 
 <!-- umbriel-config page: keybinds.md -->
 # Keybinds
