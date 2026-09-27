@@ -195,6 +195,16 @@ pub(super) fn blank_row(key: String, label: &str, home: i32) -> SettingRow {
     }
 }
 
+/// A field its file doesn't set, drawn like an unset settings row:
+/// dimmed, no file badge, "—" unless umbriel's default fills it.
+pub(super) fn mark_unset(row: &mut SettingRow) {
+    row.available = true;
+    row.home = -1;
+    if row.value.is_empty() {
+        row.value = "—".into();
+    }
+}
+
 pub(super) fn status_line(shell: &Shell) -> SharedString {
     if !shell.healthy {
         let reason = shell.load_error.as_deref().unwrap_or("unknown error");

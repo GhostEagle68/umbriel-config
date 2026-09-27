@@ -142,6 +142,14 @@ fn builtin() -> Vec<Field> {
             FieldKind::Toggle,
             Some(DefaultValue::Bool(true)),
         ),
+        // umbriel's schema says 8 to 10, but its parser takes only
+        // these two.
+        field(
+            "bit_depth",
+            "Bit depth",
+            choice(&["8", "10"]),
+            Some(DefaultValue::Integer(8)),
+        ),
         // Omitted workspaces mean dynamic.
         field(
             "workspaces",
@@ -177,6 +185,9 @@ fn from_umbriel(keys: &[umbriel_schema::Key]) -> Vec<Field> {
                 ("table", _) => return None,
                 ("bool", _) => FieldKind::Toggle,
                 ("enum", _) => FieldKind::Choice(key.values.clone()),
+                (_, Some(builtin)) if matches!(builtin.kind, FieldKind::Choice(_)) => {
+                    builtin.kind.clone()
+                }
                 ("float", _) if bounded => FieldKind::Float {
                     min: key.min.unwrap_or_default(),
                     max: key.max.unwrap_or_default(),

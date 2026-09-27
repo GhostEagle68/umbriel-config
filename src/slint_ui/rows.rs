@@ -161,6 +161,16 @@ fn update_row(app: &AppWindow, key: &str, update: impl FnOnce(&mut SettingRow) -
 /// Rebuild a row and overwrite it even when the text is unchanged — for
 /// when a sibling edit changes this row's options (resolution → refresh).
 pub(super) fn rebuild_row(app: &AppWindow, shell: &Shell, key: &str, force: bool) {
+    // Adding or removing a variable changes the rows themselves.
+    if key == super::sections::ENVIRONMENT_ADD || key.starts_with("environment.") {
+        super::sections::refill_page(app, shell, "environment");
+        return;
+    }
+    // The Outputs page keeps its rows in the monitor cards, not `cards`.
+    if key.starts_with("output.") && app.get_page() == Page::Outputs {
+        super::page_outputs::rebuild_outputs(app, shell);
+        return;
+    }
     let sets = chain_path_sets(shell);
     let labels = setting_labels(shell);
     let row = if let Some(entry) = shell
@@ -626,6 +636,18 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
         let shell = shell.borrow();
         app.set_dirty(shell.any_modified());
         super::page_rules::rebuild_rule_page(app, &shell);
+        return;
+    }
+    if key == super::sections::ENVIRONMENT_ADD || key.starts_with("environment.") {
+        let result = super::sections::set_environment(&mut shell.borrow_mut(), key, raw);
+        if let Err(err) = result {
+            set_row_error(app, key, &err);
+            app.set_status(err.into());
+            return;
+        }
+        let shell = shell.borrow();
+        app.set_dirty(shell.any_modified());
+        refresh_row(app, &shell, key);
         return;
     }
     let formatted = {

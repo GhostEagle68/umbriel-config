@@ -177,6 +177,9 @@ pub(super) fn page_cards(shell: &Shell, page_id: &str) -> Vec<SettingsCard> {
     if page_id == catalog::OUTPUTS_ID {
         return super::page_outputs::output_cards(shell);
     }
+    if page_id == "environment" {
+        return vec![environment_card(shell)];
+    }
     if let Some(page) = catalog::page(page_id) {
         return catalog_page_cards(shell, page);
     }
@@ -246,6 +249,82 @@ fn catalog_page_cards(shell: &Shell, page: &catalog::Page) -> Vec<SettingsCard> 
         cards.push(other);
     }
     cards
+}
+
+/// Row key of the Environment page's "add a variable" box.
+pub(super) const ENVIRONMENT_ADD: &str = "environment:add";
+
+/// The Environment page: one row per variable, edited in the file that
+/// sets it, then a box that adds one.
+fn environment_card(shell: &Shell) -> SettingsCard {
+    let sets = chain_path_sets(shell);
+    let labels = setting_labels(shell);
+    let mut rows: Vec<SettingRow> = Vec::new();
+    for home in 0..=shell.includes.docs.len() {
+        let doc = doc_at(shell, home);
+        let current: BTreeMap<String, String> = doc.leaf_values().into_iter().collect();
+        for name in doc.table_keys(&["environment"]) {
+            let key = format!("environment.{name}");
+            // A variable set in two files shows once, where it wins.
+            if entry_home(&sets, &key) != Some(home) {
+                continue;
+            }
+            let path = ["environment", name.as_str()];
+            let mut row = blank_row(key.clone(), &name, home as i32);
+            row.value = doc
+                .get_string(&path)
+                .or_else(|| doc.get_raw(&path))
+                .unwrap_or_default()
+                .into();
+            row.hint = "Clear the value to remove the variable.".into();
+            row.home_label = labels.get(home).cloned().unwrap_or_default();
+            row.changed =
+                current.get(&key) != shell.saved.get(home).and_then(|values| values.get(&key));
+            rows.push(row);
+        }
+    }
+    let mut add = blank_row(ENVIRONMENT_ADD.to_owned(), "Add a variable", -1);
+    add.hint = "Type NAME=value and press Enter.".into();
+    rows.push(add);
+    let key = "card:environment:Variables";
+    SettingsCard {
+        title: "Variables".into(),
+        key: key.into(),
+        expanded: card_expanded(shell, key, true),
+        rows: Rc::new(VecModel::from(rows)).into(),
+    }
+}
+
+/// Write one Environment page edit: `NAME=value` from the add box, or a
+/// variable's new value, where an empty value removes it.
+pub(super) fn set_environment(shell: &mut Shell, key: &str, raw: &str) -> Result<(), String> {
+    let (name, value) = match key.strip_prefix("environment.") {
+        Some(name) => (name, raw.trim()),
+        None => raw
+            .split_once('=')
+            .map(|(name, value)| (name.trim(), value.trim()))
+            .ok_or("type NAME=value, e.g. MOZ_ENABLE_WAYLAND=1")?,
+    };
+    let valid = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        return Err(format!(
+            "'{name}' is not a variable name (letters, digits, _)"
+        ));
+    }
+    let main = shell.includes.docs.len();
+    // An existing variable is edited where it lives; a new one joins the
+    // file that already sets variables.
+    let target = entry_home(&chain_path_sets(shell), &format!("environment.{name}"))
+        .or_else(|| (0..=main).find(|&i| !doc_at(shell, i).table_keys(&["environment"]).is_empty()))
+        .unwrap_or(main);
+    let doc = doc_at_mut(shell, target);
+    if value.is_empty() && key != ENVIRONMENT_ADD {
+        doc.remove_leaf(&["environment", name]);
+    } else {
+        doc.set_string(&["environment", name], value);
+    }
+    Ok(())
 }
 
 /// A MORE fallback page: every sub-section of one top-level area.
@@ -444,5 +523,40 @@ pub(super) fn install_navigation(
                 refill_page(&app, &shell, app.get_current_section().as_str());
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn environment_edits_land_where_the_variables_live() {
+        let dir = std::env::temp_dir().join(format!("umbriel-env-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let main_path = dir.join("config.toml");
+        std::fs::write(dir.join("env.toml"), "[environment]\nFOO = \"1\"\n").unwrap();
+        std::fs::write(&main_path, "[include]\nfiles = [\"env.toml\"]\n").unwrap();
+        let mut shell = Shell::load(&main_path, &discovery::Env::from_process());
+        let value = |shell: &Shell, name: &str| {
+            shell.includes.docs[0]
+                .doc
+                .get_string(&["environment", name])
+        };
+
+        // A new variable joins the file that already sets variables.
+        set_environment(&mut shell, ENVIRONMENT_ADD, " BAR = x=y ").unwrap();
+        assert_eq!(value(&shell, "BAR").as_deref(), Some("x=y"));
+        set_environment(&mut shell, "environment.FOO", "2").unwrap();
+        assert_eq!(value(&shell, "FOO").as_deref(), Some("2"));
+        let rows = environment_card(&shell).rows;
+        assert_eq!(rows.row_count(), 3);
+        // Clearing a value removes the variable.
+        set_environment(&mut shell, "environment.FOO", "").unwrap();
+        assert_eq!(value(&shell, "FOO"), None);
+        assert!(shell.doc.table_keys(&["environment"]).is_empty());
+        assert!(set_environment(&mut shell, ENVIRONMENT_ADD, "1BAD=x").is_err());
+        assert!(set_environment(&mut shell, ENVIRONMENT_ADD, "no equals").is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

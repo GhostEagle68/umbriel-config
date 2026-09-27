@@ -28,7 +28,7 @@ pub(super) fn rule_target(shell: &Shell, family: &str) -> usize {
 }
 
 /// One rule field as a settings row. Rules have no defaults: unset
-/// fields show blank, choices offer "(unset)", and only what the user
+/// fields show dimmed, choices offer "(unset)", and only what the user
 /// fills in is written. The key carries the chain document so edits
 /// land where the rule lives; the badge opens that file.
 fn rule_row(
@@ -49,6 +49,7 @@ fn rule_row(
         .cloned()
         .unwrap_or_default();
     let text = rules::field_text(doc, family, index, field);
+    let unset = text.is_empty();
     match &field.kind {
         rules::FieldKind::Text
         | rules::FieldKind::List
@@ -110,6 +111,9 @@ fn rule_row(
             row.max = *max as f32;
             row.value = text.into();
         }
+    }
+    if unset {
+        mark_unset(&mut row);
     }
     row
 }

@@ -238,11 +238,18 @@ fn output_field_hint(key: &str) -> &'static str {
         "transform" => "Rotate or flip the display. Recommended: normal.",
         "tearing" => "Allow tearing for lower input lag. Recommended: off.",
         "direct_scanout" => "Send fullscreen apps straight to the display. Recommended: on.",
+        "bit_depth" => {
+            "Render bit depth outside HDR. 10 cuts banding in gradients. Recommended: 8."
+        }
         "workspaces" => "Workspace names for this monitor; dynamic keeps them automatic.",
         "min_workspaces" => "Fewest workspaces a dynamic monitor keeps. Don't combine with names.",
+        "cyclic_workspaces" => "Stepping past the last workspace wraps around to the first.",
         "workspace_axis" => "Whether this monitor's workspaces stack vertically or horizontally.",
         "layout.scrolling.default_extent_fraction" => {
-            "Width of new scrolling columns on this monitor; empty uses the Layout setting."
+            "Width of new scrolling columns on this monitor; unset uses the Layout setting."
+        }
+        "screen_effect" => {
+            "A screen effect just for this monitor, or off. Unset uses Appearance → Effects."
         }
         _ => "",
     }
@@ -290,6 +297,7 @@ pub(super) fn output_row(
             .into();
             row.value = doc
                 .get_string(&path)
+                .or_else(|| doc.get_integer(&path).map(|value| value.to_string()))
                 .filter(|value| !value.is_empty())
                 .unwrap_or(default_text)
                 .into();
@@ -345,6 +353,9 @@ pub(super) fn output_row(
         }
     }
     row.changed = current.get(&key) != shell.saved.get(main).and_then(|values| values.get(&key));
+    if !current.contains_key(&key) {
+        mark_unset(&mut row);
+    }
     row
 }
 
@@ -423,6 +434,18 @@ pub(super) fn format_output_value(shell: &Shell, key: &str, raw: &str) -> Result
                     .map_err(|_| format!("'{raw}' is not an x, y position"))?;
             }
             Ok(format!("[{}, {}]", xy[0], xy[1]))
+        }
+        // A vocabulary of numbers (bit_depth) is written as numbers.
+        outputs::FieldKind::Choice(values)
+            if values.iter().all(|value| value.parse::<i64>().is_ok()) =>
+        {
+            super::rows::commit_value(
+                Some(&schema::Kind::Integer {
+                    min: None,
+                    max: None,
+                }),
+                raw,
+            )
         }
         outputs::FieldKind::Choice(_) | outputs::FieldKind::Text => {
             super::rows::commit_value(Some(&schema::Kind::Text), raw)
