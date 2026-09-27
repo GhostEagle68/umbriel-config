@@ -23,6 +23,9 @@ export component ShadersPage inherits Rectangle {
     in property <[ShaderAssignment]> assignments;
     in property <string> download-note;
     in property <bool> include-missing;
+    // Set while old `shader = "<path>"` assignments remain; umbriel
+    // ignores them.
+    in property <string> legacy-note;
     in property <bool> community-installed;
     in property <bool> update-available;
     in-out property <bool> downloading;
@@ -31,6 +34,7 @@ export component ShadersPage inherits Rectangle {
     // shader list; 0 is "(no shader)".
     callback assign(string, int);
     callback fix-include();
+    callback convert-legacy();
     callback editor-new();
     callback editor-edit(string);
     callback editor-fork(string, string);
@@ -124,6 +128,32 @@ export component ShadersPage inherits Rectangle {
                 ActionButton {
                     text: "Add to includes";
                     clicked => { root.fix-include(); }
+                }
+            }
+        }
+
+        if root.legacy-note != "": Rectangle {
+            background: Theme.bg-1;
+            border-radius: Theme.radius-m;
+            border-width: 1px;
+            border-color: Theme.warning;
+
+            HorizontalLayout {
+                padding: Theme.space-m;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: root.legacy-note;
+                    color: Theme.warning;
+                    font-size: Theme.font-small;
+                    wrap: TextWrap.word-wrap;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                ActionButton {
+                    text: "Convert";
+                    clicked => { root.convert-legacy(); }
                 }
             }
         }

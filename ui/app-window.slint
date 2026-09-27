@@ -132,6 +132,7 @@ export component AppWindow inherits Window {
     // Assignment dropdown pick: (key, choice index); 0 clears.
     callback shader-assign(string, int);
     callback shader-fix-include();
+    callback shader-convert-legacy();
     // What's new / changelog overlay.
     in-out property <bool> show-whatsnew;
     in property <string> whatsnew-title;
@@ -149,6 +150,7 @@ export component AppWindow inherits Window {
     in property <[ShaderAssignment]> shader-assignments;
     in property <string> shader-download-note;
     in property <bool> shader-include-missing;
+    in property <string> shader-legacy-note;
     in property <bool> shader-community-installed;
     in property <bool> shader-update-available;
     in-out property <bool> shader-downloading;
@@ -535,12 +537,14 @@ export component AppWindow inherits Window {
                         assignments: root.shader-assignments;
                         download-note: root.shader-download-note;
                         include-missing: root.shader-include-missing;
+                        legacy-note: root.shader-legacy-note;
                         community-installed: root.shader-community-installed;
                         update-available: root.shader-update-available;
                         downloading <=> root.shader-downloading;
                         download => { root.shaders-download(); }
 
                         fix-include => { root.shader-fix-include(); }
+                        convert-legacy => { root.shader-convert-legacy(); }
                         // Without this wiring the dropdowns silently no-op:
                         // no edit, no dirty flag, nothing to save.
                         assign(k, i) => { root.shader-assign(k, i); }

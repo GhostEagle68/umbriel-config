@@ -180,11 +180,11 @@ fn catalog_page_cards(shell: &Shell, page: &catalog::Page) -> Vec<SettingsCard> 
         let rows: Vec<SettingRow> = shell
             .schema
             .iter()
-            // Shader paths belong to the Shaders page's assignment UI.
+            // Effect selections belong to the Shaders page's assignment UI.
             .filter(|entry| {
                 entry.section == card.section
                     && !(entry.section.starts_with("animation.")
-                        && entry.path.last() == Some(&"shader".to_owned()))
+                        && entry.path.last() == Some(&"effect".to_owned()))
             })
             .map(|entry| schema_row(shell, &sets, &labels, &current, entry))
             .collect();

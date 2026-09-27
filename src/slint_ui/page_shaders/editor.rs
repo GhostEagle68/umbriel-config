@@ -133,10 +133,13 @@ pub(super) fn apply_use_for(shell: &mut Shell, app: &AppWindow, path: &Path) -> 
         };
         let uses = using.contains(event);
         if row.checked && !uses {
-            assign_event(shell, event, Some(path));
-            changes.push(format!("now used for {}", prettify(event)));
+            match assign_event(shell, event, Some(path)) {
+                Ok(()) => changes.push(format!("now used for {}", prettify(event))),
+                Err(err) => changes.push(format!("not used for {}: {err}", prettify(event))),
+            }
         } else if !row.checked && uses {
-            assign_event(shell, event, None);
+            // Clearing never fails.
+            let _ = assign_event(shell, event, None);
             changes.push(format!("no longer used for {}", prettify(event)));
         }
     }
@@ -217,8 +220,10 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             // changes the status wording.
             let creating = shell.borrow().shader_editing.is_none();
             let name = app.get_shader_editor_name().to_string();
-            // Events to repoint when an edited shader is renamed.
+            // Events to repoint when an edited shader is renamed, and
+            // the shader's old path.
             let mut renamed: Vec<(&'static str, usize)> = Vec::new();
+            let mut renamed_from: Option<PathBuf> = None;
             let result = {
                 let shell = shell.borrow();
                 match shell.shader_editing.clone() {
@@ -230,6 +235,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                             let new = shaders::rename_user_shader(&dir, &path, &name)?;
                             if new != path {
                                 renamed = assigned;
+                                renamed_from = Some(path.clone());
                             }
                             Ok(new)
                         }),
@@ -249,18 +255,33 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                         shell.shader_editing = Some(path.clone());
                         shell.shader_editor_baseline = text.clone();
                         shell.shader_editor_baseline_name = name.clone();
-                        // A renamed shader keeps its assignments: each is
-                        // rewritten (unsaved) to the new file, spelled for
-                        // the document it lives in.
-                        let paths = chain_paths(&shell);
-                        let repoints: Vec<_> = renamed
+                        // A renamed shader keeps its assignments: each
+                        // selects the preset under its new name, and the
+                        // include follows the renamed preset file.
+                        scan_shaders(&mut shell);
+                        let renamed_to = shell
+                            .shaders
                             .iter()
-                            .map(|(event, doc)| {
-                                (*event, *doc, Some(shaders::value_for(&path, &paths[*doc])))
-                            })
-                            .collect();
-                        if let Err(err) = write_assignments(&mut shell, &repoints) {
-                            app.set_status(err.into());
+                            .find(|entry| entry.path == path)
+                            .map(|entry| (entry.preset.clone(), entry.preset_file.clone()));
+                        if let (Some((preset, preset_file)), Some(old)) =
+                            (renamed_to, renamed_from.as_deref())
+                        {
+                            let repoints: Vec<_> = renamed
+                                .iter()
+                                .map(|(event, doc)| (*event, *doc, Some(preset.clone())))
+                                .collect();
+                            if let Err(err) =
+                                write_assignments(&mut shell, &repoints).and_then(|()| {
+                                    repoint_include(
+                                        &mut shell,
+                                        &shaders::preset_file_for(old),
+                                        Some(&preset_file),
+                                    )
+                                })
+                            {
+                                app.set_status(err.into());
+                            }
                         }
                         let changes = if apply_use {
                             apply_use_for(&mut shell, &app, &path)

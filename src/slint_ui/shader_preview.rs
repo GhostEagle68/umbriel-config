@@ -13,10 +13,11 @@ use glow::HasContext as _;
 pub const PREVIEW_WIDTH: u32 = 384;
 pub const PREVIEW_HEIGHT: u32 = 216;
 
-/// The fragment prefix umbriel prepends to user code (umbrielfx
-/// `fx_animation_shader_create`), verbatim. The `#line 1` directives make
-/// driver errors carry user-relative line numbers; keep the placement
-/// identical or errors point at the wrong lines.
+/// The fragment prefix umbriel prepends to an animation effect
+/// (umbrielfx `effect_shader.c`: `kPreamble`, `kAnimationSection`, then
+/// `#line 1`), verbatim. The `#line 1` makes driver errors carry
+/// user-relative line numbers; keep the placement identical or errors
+/// point at the wrong lines.
 const PREAMBLE: &str = "\
 precision highp float;
 varying vec2 v_texcoord;
@@ -24,27 +25,44 @@ uniform sampler2D umbriel_texture;
 uniform mat3 umbriel_sample_matrix;
 uniform sampler2D umbriel_previous_texture;
 uniform mat3 umbriel_previous_sample_matrix;
-uniform float umbriel_progress;
-uniform float umbriel_linear_progress;
-uniform float umbriel_direction;
 uniform vec2 umbriel_size;
-uniform vec4 umbriel_random_seed;
-#define umbriel_clamped_progress clamp(umbriel_progress, 0.0, 1.0)
+uniform float umbriel_scale;
+uniform float umbriel_time;
+uniform vec2 umbriel_expand;
+uniform vec4 umbriel_palette[4];
+uniform int umbriel_palette_count;
 vec4 umbriel_sample(vec2 uv) {
   if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec4(0.0);
   vec2 p = (vec3(uv, 1.0) * umbriel_sample_matrix).xy;
   if (any(lessThan(p, vec2(0.0))) || any(greaterThan(p, vec2(1.0)))) return vec4(0.0);
   return texture2D(umbriel_texture, p);
 }
-#line 1
-";
-const PREVIOUS_SAMPLE: &str = "\
 vec4 umbriel_sample_previous(vec2 uv) {
   if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec4(0.0);
   vec2 p = (vec3(uv, 1.0) * umbriel_previous_sample_matrix).xy;
   if (any(lessThan(p, vec2(0.0))) || any(greaterThan(p, vec2(1.0)))) return vec4(0.0);
   return texture2D(umbriel_previous_texture, p);
 }
+vec4 umbriel_palette_at(float t) {
+  if (umbriel_palette_count <= 0) return vec4(0.0);
+  float span = float(umbriel_palette_count);
+  float scaled = fract(t) * span;
+  float index = floor(scaled);
+  float next = mod(index + 1.0, span);
+  vec4 from = umbriel_palette[0];
+  vec4 to = umbriel_palette[0];
+  for (int i = 0; i < 4; i++) {
+    if (i >= umbriel_palette_count) break;
+    if (float(i) == index) from = umbriel_palette[i];
+    if (float(i) == next) to = umbriel_palette[i];
+  }
+  return mix(from, to, scaled - index);
+}
+uniform float umbriel_progress;
+uniform float umbriel_linear_progress;
+uniform float umbriel_direction;
+uniform vec4 umbriel_random_seed;
+#define umbriel_clamped_progress clamp(umbriel_progress, 0.0, 1.0)
 #line 1
 ";
 /// The suffix umbriel appends: main() runs the user function per pixel,
@@ -53,7 +71,7 @@ const SUFFIX: &str = "\nvoid main() { gl_FragColor = animation(v_texcoord); }\n"
 
 /// Full fragment source as umbriel would compile it.
 pub fn full_source(user_code: &str) -> String {
-    format!("{PREAMBLE}{PREVIOUS_SAMPLE}{user_code}{SUFFIX}")
+    format!("{PREAMBLE}{user_code}{SUFFIX}")
 }
 
 /// The preview's own vertex stage: a clip-space quad whose `v_texcoord`
@@ -268,6 +286,8 @@ struct LinkedProgram {
     direction: Option<glow::UniformLocation>,
     size: Option<glow::UniformLocation>,
     random_seed: Option<glow::UniformLocation>,
+    scale: Option<glow::UniformLocation>,
+    time: Option<glow::UniformLocation>,
     sample_matrix: Option<glow::UniformLocation>,
     previous_sample_matrix: Option<glow::UniformLocation>,
 }
@@ -446,6 +466,8 @@ impl PreviewState {
                 direction: loc("umbriel_direction"),
                 size: loc("umbriel_size"),
                 random_seed: loc("umbriel_random_seed"),
+                scale: loc("umbriel_scale"),
+                time: loc("umbriel_time"),
                 sample_matrix: loc("umbriel_sample_matrix"),
                 previous_sample_matrix: loc("umbriel_previous_sample_matrix"),
             }
@@ -486,6 +508,13 @@ impl PreviewState {
             gl.uniform_1_f32(linked.linear_progress.as_ref(), linear);
             gl.uniform_1_f32(linked.direction.as_ref(), direction);
             gl.uniform_2_f32(linked.size.as_ref(), tw as f32, th as f32);
+            // The preview draws at one buffer pixel per logical pixel.
+            gl.uniform_1_f32(linked.scale.as_ref(), 1.0);
+            // umbriel's animation clock, in seconds: the preview has no
+            // clock of its own, so its progress stands in for one.
+            gl.uniform_1_f32(linked.time.as_ref(), linear);
+            // expand stays (0, 0) and palette_count 0, as umbriel sets
+            // them for an animation preset without `palette`.
             gl.uniform_4_f32(
                 linked.random_seed.as_ref(),
                 RANDOM_SEED[0],
@@ -1018,14 +1047,14 @@ mod tests {
     #[test]
     fn full_source_layers_the_umbriel_contract() {
         let source = full_source("vec4 animation(vec2 uv) { MARKER }");
-        let preamble_end = source.find(PREAMBLE.trim_end()).unwrap() + PREAMBLE.trim_end().len();
-        let previous_end = source.find(PREVIOUS_SAMPLE.trim_end()).unwrap();
+        // User code starts right after the one `#line 1`.
+        assert!(source.starts_with(PREAMBLE));
+        assert!(PREAMBLE.ends_with("\n#line 1\n"));
+        assert_eq!(source.matches("#line").count(), 1);
         let marker = source.find("MARKER").unwrap();
         let suffix = source
             .find("void main() { gl_FragColor = animation(v_texcoord); }")
             .unwrap();
-        assert!(preamble_end <= previous_end);
-        assert!(previous_end < marker);
         assert!(marker < suffix);
         // The contract the docs promise is all present.
         for name in [
@@ -1036,6 +1065,10 @@ mod tests {
             "umbriel_sample(",
             "umbriel_sample_previous(",
             "umbriel_linear_progress",
+            "umbriel_scale",
+            "umbriel_time",
+            "umbriel_expand",
+            "umbriel_palette_at(",
         ] {
             assert!(source.contains(name), "missing {name}");
         }
@@ -1146,6 +1179,25 @@ mod tests {
                 def.label
             );
         }
+    }
+
+    /// Code written for umbriel's effect preamble (time, scale, expand,
+    /// palette) compiles in the preview. Skips where no EGL is available.
+    #[test]
+    fn effect_uniforms_compile_in_the_preview() {
+        let Ok(mut state) = PreviewState::new(64, 36) else {
+            return;
+        };
+        state
+            .compile(
+                "vec4 animation(vec2 uv) {\n\
+                 \x20   vec2 at = uv + umbriel_expand * sin(umbriel_time) / umbriel_scale;\n\
+                 \x20   return umbriel_sample(at) + umbriel_palette_at(umbriel_progress) * 0.0;\n\
+                 }",
+            )
+            .expect("effect uniforms compile");
+        let (_, _, pixels) = state.render(0.5, 0.5, 1.0).unwrap();
+        assert!(pixels.iter().any(|&byte| byte != 0));
     }
 
     /// Full GL round-trip; skips silently where no EGL is available (CI,

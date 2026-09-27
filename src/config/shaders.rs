@@ -1,7 +1,10 @@
-//! Shader discovery for umbriel's custom animation shaders. Every
-//! `animation.<event>.shader` key holds a file path (never inline GLSL);
-//! this module scans the places shaders live, validates them by
-//! umbriel's rules, and reads the current per-event assignments.
+//! Umbriel's animation effects. An event runs a shader through a named
+//! preset: `[animation.<event>] effect = "<name>"` selects
+//! `[effects.preset.<name>]`, whose `shader` is a GLSL file relative to
+//! the TOML file defining it; the preset's file must be included. This
+//! module scans the places shaders live, validates them by umbriel's
+//! rules, maps shaders to their presets, and reads the per-event
+//! assignments.
 
 use super::document::ConfigDocument;
 use std::path::{Path, PathBuf};
@@ -20,7 +23,7 @@ pub const EVENTS: &[&str] = &[
     "layers",
 ];
 
-/// Umbriel's limits for a usable shader file (docs/user/animation.md).
+/// Umbriel's limits for a usable shader file (docs/user/effects.md).
 const MAX_SIZE: u64 = 256 * 1024;
 
 /// One discovered shader file.
@@ -29,10 +32,11 @@ pub struct ShaderEntry {
     pub name: String,
     /// Absolute path on disk.
     pub path: PathBuf,
-    /// How the value is written into a config: relative for files under
-    /// the config directory (umbriel resolves relative paths from the
-    /// declaring file's directory), absolute otherwise.
-    pub value: String,
+    /// The preset an event selects to run this shader (`effect = "…"`).
+    pub preset: String,
+    /// The TOML file defining that preset; see [`preset_file_for`]. It
+    /// may not exist yet — assigning the shader writes it.
+    pub preset_file: PathBuf,
     /// Human label for dropdowns and cards.
     pub label: String,
     /// Where it was found.
@@ -46,7 +50,7 @@ pub struct ShaderEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
-    /// Bundled with umbriel (`<data dir>/umbriel/shaders/`).
+    /// Bundled with umbriel (`<data dir>/umbriel/effects/animation/`).
     Bundled,
     /// Under the config directory's `shaders/`.
     ConfigDir,
@@ -65,8 +69,9 @@ impl Source {
 }
 
 /// Scan the well-known shader locations: `<config dir>/shaders/**`
-/// (which contains the community clone) and `<data dir>/umbriel/shaders`
-/// for every XDG data dir. Deduplicated by path, config shaders first.
+/// (which contains the community clone) and umbriel's bundled animation
+/// presets, `<data dir>/umbriel/effects/animation/*/effect.toml`, for
+/// every XDG data dir. Deduplicated by path, config shaders first.
 pub fn scan(config_dir: &Path, data_dirs: &[PathBuf]) -> Vec<ShaderEntry> {
     let mut entries: Vec<ShaderEntry> = Vec::new();
     let mut seen: Vec<PathBuf> = Vec::new();
@@ -77,7 +82,7 @@ pub fn scan(config_dir: &Path, data_dirs: &[PathBuf]) -> Vec<ShaderEntry> {
                 return;
             }
             seen.push(path.clone());
-            entries.push(entry_for(path, source, config_dir));
+            entries.push(entry_for(path, source));
         };
 
     let config_shaders = config_dir.join("shaders");
@@ -90,11 +95,90 @@ pub fn scan(config_dir: &Path, data_dirs: &[PathBuf]) -> Vec<ShaderEntry> {
         push(path, source, &mut entries, &mut seen);
     }
     for data_dir in data_dirs {
-        for path in glsl_files(&data_dir.join("umbriel").join("shaders")) {
+        for path in bundled_shaders(&data_dir.join("umbriel/effects/animation")) {
             push(path, Source::Bundled, &mut entries, &mut seen);
         }
     }
     entries
+}
+
+/// The shader of every bundled animation preset under `dir`, in name
+/// order. Presets of other kinds, or without a shader, are skipped.
+fn bundled_shaders(dir: &Path) -> Vec<PathBuf> {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = read
+        .flatten()
+        .filter_map(|item| {
+            let preset_file = item.path().join("effect.toml");
+            let (_, shader) = read_preset(&preset_file)?;
+            Some(resolve(&shader, &preset_file))
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// The animation preset a preset file defines: its name and `shader`
+/// value, or `None` for a missing file or one without such a preset.
+fn read_preset(preset_file: &Path) -> Option<(String, String)> {
+    let doc: ConfigDocument = std::fs::read_to_string(preset_file).ok()?.parse().ok()?;
+    doc.table_names(&["effects", "preset"])
+        .into_iter()
+        .find_map(|name| {
+            let kind = doc.get_string(&["effects", "preset", &name, "kind"])?;
+            let shader = doc.get_string(&["effects", "preset", &name, "shader"])?;
+            (kind == "animation").then_some((name, shader))
+        })
+}
+
+/// Where a shader's preset is defined: its folder's `effect.toml` when
+/// there is one (umbriel's bundled layout), else a `<stem>.effect.toml`
+/// beside the shader, which the app writes when the shader is assigned.
+pub fn preset_file_for(shader: &Path) -> PathBuf {
+    let folder = shader.with_file_name("effect.toml");
+    if folder.is_file() {
+        folder
+    } else {
+        shader.with_extension("effect.toml")
+    }
+}
+
+/// The preset file the app writes for `entry`'s shader.
+pub fn preset_text(entry: &ShaderEntry) -> String {
+    let shader = entry
+        .path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // Only the preset's own header: its parent tables stay implicit.
+    let mut preset = toml_edit::Table::new();
+    preset["kind"] = toml_edit::value("animation");
+    preset["shader"] = toml_edit::value(shader.as_str());
+    let mut presets = toml_edit::Table::new();
+    presets.set_implicit(true);
+    presets.insert(&entry.preset, toml_edit::Item::Table(preset));
+    let mut effects = toml_edit::Table::new();
+    effects.set_implicit(true);
+    effects.insert("preset", toml_edit::Item::Table(presets));
+    let mut doc = toml_edit::DocumentMut::new();
+    doc.insert("effects", toml_edit::Item::Table(effects));
+    format!(
+        "# Written by umbriel-config: the preset that runs {shader}.\n\
+         # Select it with [animation.<event>] effect = \"{}\".\n{doc}",
+        entry.preset
+    )
+}
+
+/// Write `entry`'s preset file unless it exists (bundled and community
+/// presets, or one written earlier).
+pub fn ensure_preset_file(entry: &ShaderEntry) -> Result<(), String> {
+    if entry.preset_file.exists() {
+        return Ok(());
+    }
+    std::fs::write(&entry.preset_file, preset_text(entry))
+        .map_err(|err| format!("could not write {}: {err}", entry.preset_file.display()))
 }
 
 /// Recursively collect `*.glsl` files, depth-limited, skipping hidden
@@ -140,7 +224,7 @@ fn glsl_walk(dir: &Path, depth: usize, visited: &mut Vec<PathBuf>) -> Vec<PathBu
     out
 }
 
-fn entry_for(path: PathBuf, source: Source, config_dir: &Path) -> ShaderEntry {
+fn entry_for(path: PathBuf, source: Source) -> ShaderEntry {
     let mut name = path
         .file_stem()
         .map(|stem| stem.to_string_lossy().to_string())
@@ -152,16 +236,16 @@ fn entry_for(path: PathBuf, source: Source, config_dir: &Path) -> ShaderEntry {
     {
         name = parent.to_string_lossy().to_string();
     }
-    let value = match path.strip_prefix(config_dir) {
-        Ok(relative) => relative.to_string_lossy().to_string(),
-        Err(_) => path.to_string_lossy().to_string(),
-    };
+    let preset_file = preset_file_for(&path);
+    // An existing preset file names the preset; otherwise the shader does.
+    let preset = read_preset(&preset_file).map_or_else(|| name.clone(), |(preset, _)| preset);
     let invalid = validate(&path);
     let description = readme_description(&path);
     ShaderEntry {
         label: format!("{name} ({})", source.label()),
         name,
-        value,
+        preset,
+        preset_file,
         path,
         source,
         invalid,
@@ -209,13 +293,17 @@ fn readme_description(shader_path: &Path) -> String {
         .to_owned()
 }
 
-/// The current shader assignment for one event: the value from the
-/// winning document (main config overrides includes) plus that
-/// document's index, or `None` when unset (built-in animation).
+/// The preset one event selects: the name from the winning document
+/// (main config overrides includes) plus that document's index, or
+/// `None` when unset (built-in animation).
 pub fn current_assignment(docs: &[&ConfigDocument], event: &str) -> Option<(String, usize)> {
+    winning(docs, event, "effect")
+}
+
+fn winning(docs: &[&ConfigDocument], event: &str, key: &str) -> Option<(String, usize)> {
     let mut found = None;
     for (index, doc) in docs.iter().enumerate() {
-        if let Some(value) = doc.get_string(&["animation", event, "shader"])
+        if let Some(value) = doc.get_string(&["animation", event, key])
             && !value.is_empty()
         {
             found = Some((value, index));
@@ -224,10 +312,65 @@ pub fn current_assignment(docs: &[&ConfigDocument], event: &str) -> Option<(Stri
     found
 }
 
-/// Where umbriel reads an assignment's shader from: absolute values as
+/// Events still assigned by the old `shader = "<path>"` key, which
+/// umbriel no longer reads: event, path value, and its document index.
+pub fn legacy_assignments(docs: &[&ConfigDocument]) -> Vec<(&'static str, String, usize)> {
+    EVENTS
+        .iter()
+        .filter_map(|event| {
+            winning(docs, event, "shader").map(|(value, index)| (*event, value, index))
+        })
+        .collect()
+}
+
+/// The library entry replacing an old `shader = "<path>"` assignment
+/// (`old` resolved): the same file, or for umbriel's old bundled
+/// `…/umbriel/shaders/<name>.glsl` the bundled preset of that name.
+pub fn legacy_target<'a>(entries: &'a [ShaderEntry], old: &Path) -> Option<&'a ShaderEntry> {
+    let key = file_key(old);
+    entries
+        .iter()
+        .find(|entry| file_key(&entry.path) == key)
+        .or_else(|| {
+            let stem = old.file_stem()?.to_str()?;
+            old.parent()?.ends_with("umbriel/shaders").then_some(())?;
+            entries
+                .iter()
+                .find(|entry| entry.source == Source::Bundled && entry.preset == stem)
+        })
+}
+
+/// The shader file umbriel runs for preset `name`: the `shader` of the
+/// last document defining `[effects.preset.<name>]`, resolved from that
+/// document's folder. `paths` parallels `docs`.
+pub fn preset_shader(docs: &[&ConfigDocument], paths: &[PathBuf], name: &str) -> Option<PathBuf> {
+    docs.iter().zip(paths).rev().find_map(|(doc, path)| {
+        let shader = doc.get_string(&["effects", "preset", name, "shader"])?;
+        Some(resolve(&shader, path))
+    })
+}
+
+/// The chain index of a document defining preset `name`, other than the
+/// file `own` — umbriel refuses a preset defined in two files.
+pub fn preset_clash(
+    docs: &[&ConfigDocument],
+    paths: &[PathBuf],
+    name: &str,
+    own: &Path,
+) -> Option<usize> {
+    docs.iter().zip(paths).position(|(doc, path)| {
+        !same_file(path, own)
+            && doc
+                .table_names(&["effects", "preset"])
+                .iter()
+                .any(|n| n == name)
+    })
+}
+
+/// Where umbriel reads a preset's shader from: absolute values as
 /// written, relative ones from the declaring file's directory, then
-/// lexically normalized (`src/config/animation_shader.cpp`). There is
-/// no `~` or `$VAR` expansion — umbriel takes those literally.
+/// lexically normalized (`src/config/effects.cpp`). There is no `~` or
+/// `$VAR` expansion — umbriel takes those literally.
 pub fn resolve(value: &str, declaring_file: &Path) -> PathBuf {
     let path = Path::new(value);
     let joined = if path.is_absolute() {
@@ -283,15 +426,13 @@ pub fn value_for(shader: &Path, declaring_file: &Path) -> String {
     }
 }
 
-/// Why an assignment's value won't load, if it won't: umbriel has no
-/// `~` expansion, and the resolved file must exist.
-pub fn assignment_problem(value: &str, resolved: &Path) -> Option<&'static str> {
-    if value.starts_with('~') {
-        Some("umbriel doesn't expand ~, so use a full path")
-    } else if !resolved.is_file() {
-        Some("file not found")
-    } else {
-        None
+/// Why an assignment won't run, if it won't: no included file defines
+/// the preset, or its shader file is missing.
+pub fn assignment_problem(resolved: Option<&Path>) -> Option<&'static str> {
+    match resolved {
+        None => Some("no included file defines this preset"),
+        Some(path) if !path.is_file() => Some("shader file not found"),
+        Some(_) => None,
     }
 }
 
@@ -303,7 +444,7 @@ pub fn assignment_home(docs: &[&ConfigDocument], event: &str) -> Option<usize> {
 }
 
 /// Where a brand-new assignment starts: the document already holding
-/// the most shader assignments, where the user keeps them (a tie goes
+/// the most effect assignments, where the user keeps them (a tie goes
 /// to the later file, so main wins). With none anywhere, an included
 /// `shaders.toml`, else main (the last doc). `file_names` parallels
 /// `docs`.
@@ -312,7 +453,7 @@ pub fn new_assignment_home(docs: &[&ConfigDocument], file_names: &[&str]) -> usi
     let count = |doc: &ConfigDocument| {
         EVENTS
             .iter()
-            .filter(|event| doc.get_string(&["animation", event, "shader"]).is_some())
+            .filter(|event| doc.get_string(&["animation", event, "effect"]).is_some())
             .count()
     };
     let busiest = (0..docs.len()).max_by_key(|index| count(docs[*index]));
@@ -484,6 +625,13 @@ pub fn rename_user_shader(
     }
     std::fs::rename(path, &target)
         .map_err(|err| format!("could not rename {}: {err}", path.display()))?;
+    // A preset file the app wrote follows its shader, renamed with it.
+    let preset_file = path.with_extension("effect.toml");
+    if preset_file.is_file() {
+        let _ = std::fs::remove_file(&preset_file);
+        let renamed = entry_for(target.clone(), Source::ConfigDir);
+        ensure_preset_file(&renamed)?;
+    }
     Ok(target)
 }
 
@@ -512,7 +660,28 @@ pub fn delete_user_shader(config_dir: &Path, path: &Path) -> Result<(), String> 
             "community shaders are git-managed — update or remove the clone instead".to_owned(),
         );
     }
-    std::fs::remove_file(path).map_err(|err| format!("could not delete {}: {err}", path.display()))
+    std::fs::remove_file(path)
+        .map_err(|err| format!("could not delete {}: {err}", path.display()))?;
+    // The preset file the app wrote for it goes too.
+    let _ = std::fs::remove_file(path.with_extension("effect.toml"));
+    Ok(())
+}
+
+/// Copy the preset files the app wrote under `old` (the community
+/// collection about to be replaced) into `new`, for every shader that
+/// is still there. They may be included, and umbriel rejects the whole
+/// config when an included file is missing.
+pub fn carry_preset_files(old: &Path, new: &Path) {
+    for shader in glsl_files(old) {
+        let preset_file = shader.with_extension("effect.toml");
+        let Ok(relative) = shader.strip_prefix(old) else {
+            continue;
+        };
+        let target = new.join(relative).with_extension("effect.toml");
+        if preset_file.is_file() && new.join(relative).is_file() && !target.exists() {
+            let _ = std::fs::copy(&preset_file, &target);
+        }
+    }
 }
 
 /// The visual effect builder: a stack of named steps the user composes
@@ -1454,13 +1623,25 @@ mod tests {
             GLSL,
         );
         write(&config_dir.join("shaders/reveal.glsl"), GLSL);
-        write(&data_dir.join("umbriel/shaders/squash.glsl"), GLSL);
+        write(
+            &data_dir.join("umbriel/effects/animation/squash/shader.glsl"),
+            GLSL,
+        );
+        write(
+            &data_dir.join("umbriel/effects/animation/squash/effect.toml"),
+            b"[effects.preset.squash]\nkind = \"animation\"\nshader = \"shader.glsl\"\n",
+        );
+        // Other kinds are not animation shaders.
+        write(
+            &data_dir.join("umbriel/effects/border/pulse/shader.glsl"),
+            GLSL,
+        );
         write(
             &config_dir.join("shaders/community/animation/example/README.md"),
             b"# Example\n\nMakes the window shimmer.\n",
         );
 
-        let entries = scan(&config_dir, &[data_dir]);
+        let entries = scan(&config_dir, std::slice::from_ref(&data_dir));
         let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
         // Sorted by path: the community clone sorts before reveal.glsl.
         assert_eq!(names, vec!["example", "reveal", "squash"]);
@@ -1469,10 +1650,18 @@ mod tests {
         assert_eq!(entries[2].source, Source::Bundled);
         assert!(entries.iter().all(|entry| entry.invalid.is_none()));
         assert_eq!(entries[0].description, "Makes the window shimmer.");
-        // Config-dir values are relative to the config dir; bundled are
-        // absolute, matching umbriel's path resolution.
-        assert_eq!(entries[1].value, "shaders/reveal.glsl");
-        assert!(entries[2].value.starts_with('/'));
+        // Presets: named by the shader until a preset file exists; the
+        // bundled one's comes from its effect.toml.
+        assert_eq!(entries[1].preset, "reveal");
+        assert_eq!(
+            entries[1].preset_file,
+            config_dir.join("shaders/reveal.effect.toml")
+        );
+        assert_eq!(entries[2].preset, "squash");
+        assert_eq!(
+            entries[2].preset_file,
+            data_dir.join("umbriel/effects/animation/squash/effect.toml")
+        );
         std::fs::remove_dir_all(&base).ok();
     }
 
@@ -1490,8 +1679,8 @@ mod tests {
             .unwrap();
 
         let entries = scan(&config_dir, &[]);
-        let values: Vec<&str> = entries.iter().map(|entry| entry.value.as_str()).collect();
-        assert_eq!(values, vec!["shaders/mine/glow.glsl"]);
+        let paths: Vec<&Path> = entries.iter().map(|entry| entry.path.as_path()).collect();
+        assert_eq!(paths, vec![config_dir.join("shaders/mine/glow.glsl")]);
         assert_eq!(entries[0].source, Source::ConfigDir);
         std::fs::remove_dir_all(&base).ok();
     }
@@ -1530,7 +1719,7 @@ mod tests {
         let main_path = dir.join("config.toml");
         std::fs::write(
             dir.join("shaders.toml"),
-            "[animation.windows_in]\nshader = \"shaders/reveal.glsl\"\n",
+            "[animation.windows_in]\neffect = \"reveal\"\n",
         )
         .unwrap();
 
@@ -1868,28 +2057,22 @@ vec2 cell_id = floor(uv * 12.0);
     #[test]
     fn assignment_writes_land_quoted_in_the_winning_document() {
         let mut include =
-            ConfigDocument::from_str("[animation.windows_in]\nshader = \"shaders/old.glsl\"\n")
-                .unwrap();
+            ConfigDocument::from_str("[animation.windows_in]\neffect = \"old\"\n").unwrap();
         let main = ConfigDocument::from_str("[general]\nxwayland = true\n").unwrap();
         assert_eq!(assignment_home(&[&include, &main], "windows_in"), Some(0));
         assert_eq!(assignment_home(&[&include, &main], "windows_move"), None);
-        // Paths are not bare TOML: the typed write must quote them.
-        include.set_string(
-            &["animation", "windows_move", "shader"],
-            "shaders/test.glsl",
-        );
-        assert!(include.text().contains("shader = \"shaders/test.glsl\""));
+        // Names with spaces are not bare TOML: the typed write quotes them.
+        include.set_string(&["animation", "windows_move", "effect"], "my effect");
+        assert!(include.text().contains("effect = \"my effect\""));
         assert_eq!(
             current_assignment(&[&include, &main], "windows_move"),
-            Some(("shaders/test.glsl".to_owned(), 0))
+            Some(("my effect".to_owned(), 0))
         );
     }
 
     #[test]
     fn new_assignments_start_where_the_others_live() {
-        let shaders =
-            ConfigDocument::from_str("[animation.windows_in]\nshader = \"shaders/a.glsl\"\n")
-                .unwrap();
+        let shaders = ConfigDocument::from_str("[animation.windows_in]\neffect = \"a\"\n").unwrap();
         let keybinds = ConfigDocument::from_str("[keybinds]\n").unwrap();
         let main = ConfigDocument::from_str("[general]\nxwayland = true\n").unwrap();
         let names = ["keybinds.toml", "shaders.toml", "config.toml"];
@@ -2017,12 +2200,15 @@ vec2 cell_id = floor(uv * 12.0);
         std::fs::remove_dir_all(&base).ok();
         let file = base.join("shaders/a.glsl");
         write(&file, GLSL);
-        assert_eq!(assignment_problem("shaders/a.glsl", &file), None);
+        assert_eq!(assignment_problem(Some(&file)), None);
         assert_eq!(
-            assignment_problem("shaders/b.glsl", &base.join("shaders/b.glsl")),
-            Some("file not found")
+            assignment_problem(Some(&base.join("shaders/b.glsl"))),
+            Some("shader file not found")
         );
-        assert!(assignment_problem("~/a.glsl", &file).unwrap().contains('~'));
+        assert_eq!(
+            assignment_problem(None),
+            Some("no included file defines this preset")
+        );
         // Different spellings of one file match; different files don't.
         assert!(same_file(&file, &base.join("shaders/./a.glsl")));
         assert!(!same_file(&file, &base.join("shaders/b.glsl")));
@@ -2031,22 +2217,138 @@ vec2 cell_id = floor(uv * 12.0);
 
     #[test]
     fn current_assignment_takes_the_winning_document() {
-        let include =
-            ConfigDocument::from_str("[animation.windows_in]\nshader = \"shaders/old.glsl\"\n")
-                .unwrap();
-        let main = ConfigDocument::from_str(
-            "[animation.windows_out]\nshader = \"/usr/share/umbriel/shaders/reveal.glsl\"\n",
+        let include = ConfigDocument::from_str(
+            "[animation.windows_in]\neffect = \"old\"\n\n\
+             [animation.windows_move]\nshader = \"shaders/wobble.glsl\"\n",
         )
         .unwrap();
+        let main =
+            ConfigDocument::from_str("[animation.windows_out]\neffect = \"reveal\"\n").unwrap();
         let docs = [&include, &main];
         assert_eq!(
             current_assignment(&docs, "windows_in"),
-            Some(("shaders/old.glsl".to_owned(), 0))
+            Some(("old".to_owned(), 0))
         );
         assert_eq!(
             current_assignment(&docs, "windows_out"),
-            Some(("/usr/share/umbriel/shaders/reveal.glsl".to_owned(), 1))
+            Some(("reveal".to_owned(), 1))
+        );
+        // The old key is no assignment any more, only a legacy one.
+        assert_eq!(current_assignment(&docs, "windows_move"), None);
+        assert_eq!(
+            legacy_assignments(&docs),
+            vec![("windows_move", "shaders/wobble.glsl".to_owned(), 0)]
         );
         assert_eq!(current_assignment(&docs, "workspaces"), None);
+    }
+
+    #[test]
+    fn presets_resolve_from_the_file_defining_them() {
+        let preset = ConfigDocument::from_str(
+            "[effects.preset.reveal]\nkind = \"animation\"\nshader = \"shader.glsl\"\n",
+        )
+        .unwrap();
+        let main =
+            ConfigDocument::from_str("[animation.windows_in]\neffect = \"reveal\"\n").unwrap();
+        let paths = [
+            PathBuf::from("/usr/share/umbriel/effects/animation/reveal/effect.toml"),
+            PathBuf::from("/home/u/.config/umbriel/config.toml"),
+        ];
+        let docs = [&preset, &main];
+        assert_eq!(
+            preset_shader(&docs, &paths, "reveal"),
+            Some(PathBuf::from(
+                "/usr/share/umbriel/effects/animation/reveal/shader.glsl"
+            ))
+        );
+        assert_eq!(preset_shader(&docs, &paths, "squash"), None);
+        // Defining it again anywhere else would clash; its own file doesn't.
+        assert_eq!(preset_clash(&docs, &paths, "reveal", &paths[0]), None);
+        assert_eq!(
+            preset_clash(&docs, &paths, "reveal", Path::new("/elsewhere.toml")),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn a_community_update_keeps_preset_files_for_surviving_shaders() {
+        let base = std::env::temp_dir().join(format!("umbriel-carry-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let (old, new) = (base.join("community"), base.join(".staging"));
+        for name in ["kept", "gone"] {
+            write(&old.join(format!("animation/{name}/shader.glsl")), GLSL);
+            write(
+                &old.join(format!("animation/{name}/shader.effect.toml")),
+                b"# preset\n",
+            );
+        }
+        write(&new.join("animation/kept/shader.glsl"), GLSL);
+        carry_preset_files(&old, &new);
+        assert!(new.join("animation/kept/shader.effect.toml").is_file());
+        assert!(!new.join("animation/gone").exists());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn preset_files_are_written_renamed_and_deleted_with_their_shader() {
+        let base = std::env::temp_dir().join(format!("umbriel-presetfile-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let config_dir = base.join("config");
+        let shader = config_dir.join("shaders/wobble.glsl");
+        write(&shader, GLSL);
+        let entry = entry_for(shader.clone(), Source::ConfigDir);
+        ensure_preset_file(&entry).unwrap();
+        // Just the preset's own table, no empty parent headers.
+        let text = std::fs::read_to_string(&entry.preset_file).unwrap();
+        assert!(
+            text.ends_with(
+                "[effects.preset.wobble]\nkind = \"animation\"\nshader = \"wobble.glsl\"\n"
+            ),
+            "{text}"
+        );
+        // What the app writes is the preset umbriel reads back.
+        assert_eq!(
+            read_preset(&entry.preset_file),
+            Some(("wobble".to_owned(), "wobble.glsl".to_owned()))
+        );
+        let renamed = rename_user_shader(&config_dir, &shader, "jelly").unwrap();
+        assert!(!entry.preset_file.exists());
+        assert_eq!(
+            read_preset(&config_dir.join("shaders/jelly.effect.toml")),
+            Some(("jelly".to_owned(), "jelly.glsl".to_owned()))
+        );
+        delete_user_shader(&config_dir, &renamed).unwrap();
+        assert!(!config_dir.join("shaders/jelly.effect.toml").exists());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn legacy_paths_map_to_their_presets() {
+        let base = std::env::temp_dir().join(format!("umbriel-legacy-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let config_dir = base.join("config");
+        let data_dir = base.join("data");
+        write(&config_dir.join("shaders/test.glsl"), GLSL);
+        write(
+            &data_dir.join("umbriel/effects/animation/reveal/shader.glsl"),
+            GLSL,
+        );
+        write(
+            &data_dir.join("umbriel/effects/animation/reveal/effect.toml"),
+            b"[effects.preset.reveal]\nkind = \"animation\"\nshader = \"shader.glsl\"\n",
+        );
+        let entries = scan(&config_dir, std::slice::from_ref(&data_dir));
+        // Your own file maps to itself.
+        let own = legacy_target(&entries, &config_dir.join("shaders/test.glsl")).unwrap();
+        assert_eq!(own.preset, "test");
+        // Umbriel's old bundled path maps to the bundled preset.
+        let old_bundled = data_dir.join("umbriel/shaders/reveal.glsl");
+        assert_eq!(
+            legacy_target(&entries, &old_bundled).unwrap().preset,
+            "reveal"
+        );
+        // Anything else can't be converted automatically.
+        assert!(legacy_target(&entries, Path::new("/tmp/nowhere.glsl")).is_none());
+        std::fs::remove_dir_all(&base).ok();
     }
 }

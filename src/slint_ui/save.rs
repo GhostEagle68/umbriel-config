@@ -10,6 +10,7 @@ use super::*;
 pub(super) fn build_save_entries(shell: &Shell) -> Vec<SaveEntry> {
     let main = shell.includes.docs.len();
     let labels = setting_labels(shell);
+    let destinations = save_destinations(shell);
     let mut entries: Vec<SaveEntry> = Vec::new();
     for i in 0..=main {
         let saved = shell.saved.get(i);
@@ -27,19 +28,47 @@ pub(super) fn build_save_entries(shell: &Shell) -> Vec<SaveEntry> {
                     None if !key.contains('.') => prettify(&key),
                     None => key.clone(),
                 });
-            // The popup's ComboBox indexes the main-first destinations
-            // model, not the chain: 0 = main, include i = i + 1.
-            let dest_index = if i == main { 0 } else { i + 1 };
+            // The popup's ComboBox indexes the destinations model, not
+            // the chain.
+            let dest_label = labels.get(i).cloned().unwrap_or_default();
+            let dest_index = destinations
+                .iter()
+                .position(|dest| *dest == dest_label)
+                .map_or(-1, |index| index as i32);
             entries.push(SaveEntry {
                 key: key.clone().into(),
                 label: label.into(),
                 value: value.unwrap_or_else(|| "(removed)".to_owned()).into(),
-                dest_label: labels.get(i).cloned().unwrap_or_default(),
-                dest_index: dest_index as i32,
+                dest_label,
+                dest_index,
             });
         }
     }
     entries
+}
+
+/// The files a changed setting can be saved to, main first. Preset-only
+/// files are left out: umbriel's bundled ones are read-only, and the
+/// app rewrites its own.
+pub(super) fn save_destinations(shell: &Shell) -> Vec<SharedString> {
+    let labels = setting_labels(shell);
+    let main = shell.includes.docs.len();
+    let includes = shell
+        .includes
+        .docs
+        .iter()
+        .zip(&labels)
+        .filter(|(inc, _)| {
+            let leaves = inc.doc.leaf_values();
+            leaves.is_empty()
+                || !leaves
+                    .iter()
+                    .all(|(key, _)| key.starts_with("effects.preset."))
+        })
+        .map(|(_, label)| label.clone());
+    std::iter::once(labels[main].clone())
+        .chain(includes)
+        .collect()
 }
 
 /// Write every modified doc, validate through umbriel, and surface the
@@ -123,6 +152,8 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
                 app.set_status("Nothing to save.".into());
                 return;
             }
+            // Rebuilt each time: the include list changes as you edit.
+            app.set_destinations(Rc::new(VecModel::from(save_destinations(&shell))).into());
             app.set_save_entries(Rc::new(VecModel::from(entries)).into());
             app.set_show_save_popup(true);
         });
@@ -239,31 +270,12 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
                     continue;
                 }
                 let parts: Vec<&str> = entry.key.split('.').collect();
-                // A relative shader path resolves from its file's folder:
-                // re-spell it for the destination so it still points at
-                // the same shader after the move.
-                let paths = chain_paths(&shell);
-                let shader_value = (entry.key.starts_with("animation.")
-                    && entry.key.ends_with(".shader"))
-                .then(|| doc_at(&shell, home).get_string(&parts))
-                .flatten()
-                .map(|value| {
-                    let resolved = shaders::resolve(&value, &paths[home]);
-                    shaders::value_for(&resolved, &paths[dest])
-                });
                 let target = if dest == main {
                     &mut shell.doc
                 } else {
                     &mut shell.includes.docs[dest].doc
                 };
-                let written = match &shader_value {
-                    Some(value) => {
-                        target.set_string(&parts, value);
-                        true
-                    }
-                    None => target.set_leaf_text(&entry.key, &entry.value),
-                };
-                if written {
+                if target.set_leaf_text(&entry.key, &entry.value) {
                     let source = if home == main {
                         &mut shell.doc
                     } else {

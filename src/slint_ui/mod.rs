@@ -285,15 +285,6 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     }
     app.set_sections(Rc::new(VecModel::from(nav)).into());
     {
-        // Destination picker model, main first: index 0 = main, i = include i-1.
-        let shell = shell.borrow();
-        let labels = common::setting_labels(&shell);
-        let main = labels.len() - 1;
-        let mut destinations = vec![labels[main].clone()];
-        destinations.extend(labels[..main].iter().cloned());
-        app.set_destinations(Rc::new(VecModel::from(destinations)).into());
-    }
-    {
         // Shader builder: the palette of step kinds the Add-an-effect
         // dropdown offers.
         let kinds: Vec<slint::SharedString> = shaders::builder::STEP_DEFS

@@ -138,7 +138,9 @@ pub(super) fn download_community_shaders(target: &Path) -> Result<String, String
         }
     }
 
-    // Everything landed: swap the old collection for the fresh one.
+    // Everything landed: swap the old collection for the fresh one,
+    // keeping the preset files assignments rely on.
+    shaders::carry_preset_files(target, &staging);
     if target.exists()
         && let Err(err) = std::fs::remove_dir_all(target)
     {
