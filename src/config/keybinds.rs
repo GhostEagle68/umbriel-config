@@ -752,7 +752,7 @@ pub fn action_group(action: &str) -> &'static str {
     } else if name.starts_with("cheatsheet") {
         "Cheatsheet"
     } else if name == "spawn" {
-        "Launch apps"
+        "Commands"
     } else if matches!(
         name,
         "dpms-off"
@@ -772,11 +772,11 @@ pub fn action_group(action: &str) -> &'static str {
 
 /// A bind's page section: its action's group, except that commands on
 /// media and hardware keys (volume, playback, brightness) get their own
-/// section instead of crowding "Launch apps".
+/// section instead of crowding "Commands".
 pub fn bind_group(chord: &str, action: &str) -> &'static str {
     let group = action_group(action);
     let key = chord.rsplit(['+', ',']).next().unwrap_or(chord);
-    if group == "Launch apps" && key.starts_with("XF86") {
+    if group == "Commands" && key.starts_with("XF86") {
         "Media keys"
     } else {
         group
@@ -879,7 +879,7 @@ pub fn command_presets(chord: &str) -> Vec<(&'static str, &'static str)> {
 /// Display order for the keybind page's groups; unknown groups land at
 /// the end via `Other`.
 pub const GROUP_ORDER: &[&str] = &[
-    "Launch apps",
+    "Commands",
     "Media keys",
     "Focus",
     "Move windows",
@@ -1136,7 +1136,7 @@ mod tests {
             bind_group("Mod+XF86AudioNext", "spawn:playerctl next"),
             "Media keys"
         );
-        assert_eq!(bind_group("Mod+Return", "spawn:kitty"), "Launch apps");
+        assert_eq!(bind_group("Mod+Return", "spawn:kitty"), "Commands");
         assert_eq!(bind_group("Mod+Q", "window-close"), "Window state & size");
     }
 

@@ -175,7 +175,7 @@ pub(super) fn rebuild_keybind_rows(
         if first_of_group {
             let count = entries.iter().filter(|e| e.family == entry.family).count();
             rows.push(KeybindRow {
-                chord: entry.family.to_uppercase().into(),
+                chord: entry.family.into(),
                 is_header: true,
                 expanded,
                 count: count as i32,
@@ -534,10 +534,9 @@ pub(super) fn install_keybinds(
         let rebuild = rebuild.clone();
         let view = Rc::clone(view);
         state.on_toggle_group(move |title| {
-            // Headers show the group upper-cased; match it back.
             let Some(group) = keybinds::GROUP_ORDER
                 .iter()
-                .find(|group| group.to_uppercase() == title.as_str())
+                .find(|group| **group == title.as_str())
             else {
                 return;
             };

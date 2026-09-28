@@ -1,8 +1,14 @@
-// Backups page: settings-style cards for retention/location, the list of
-// backups, and the selected backup's diff. Results arrive as toasts.
+// Backups page: location and retention rows, the list of backups, and
+// the selected backup's diff. Results arrive as toasts.
 
 import { LineEdit } from "std-widgets.slint";
-import { ActionButton, NavRow } from "../widgets.slint";
+import {
+    ActionButton,
+    NavRow,
+    PageHeader,
+    PrefRow,
+    SectionHeader,
+} from "../widgets.slint";
 import { Theme } from "../theme.slint";
 
 export component BackupsPage inherits Rectangle {
@@ -21,194 +27,140 @@ export component BackupsPage inherits Rectangle {
     callback browse-location();
 
     VerticalLayout {
-        padding: Theme.space-l;
-        spacing: Theme.space-l;
+        padding-left: Theme.space-xl;
+        padding-right: Theme.space-xl;
+        padding-top: 28px;
+        padding-bottom: 28px;
+        spacing: 28px;
         alignment: start;
 
-        Text {
-            text: "Backups";
-            color: Theme.text-1;
-            font-size: Theme.font-title;
-            font-weight: 700;
+        PageHeader {
+            title: "Backups";
+            description: "Every save snapshots your config first. Restoring backs up the current files too, so a restore can be undone.";
+
+            ActionButton {
+                text: "Back up now";
+                clicked => { root.backup-now(); }
+            }
         }
 
-        Text {
-            text: "Every save snapshots your config before it is overwritten. Restoring first backs up the current files, so a restore is itself reversible. Press Enter in a field to apply it.";
-            color: Theme.text-2;
-            font-size: Theme.font-small;
-            wrap: TextWrap.word-wrap;
-        }
-
-        // ── backup settings ─────────────────────────────────
+        // ── where and how many ──────────────────────────────
         VerticalLayout {
-            spacing: Theme.space-xs;
+            spacing: Theme.space-s;
 
-            Text {
-                text: "Backup settings";
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                font-weight: 700;
+            SectionHeader {
+                title: "Settings";
             }
 
-            Rectangle {
-                background: Theme.bg-1;
-                border-radius: Theme.radius-m;
+            VerticalLayout {
+                PrefRow {
+                    title: "Save backups to";
+                    subtitle: "Press Enter to apply a typed path.";
 
-                VerticalLayout {
-                    padding: Theme.space-m;
-                    spacing: Theme.space-s;
-
-                    HorizontalLayout {
-                        min-height: 32px;
-                        spacing: Theme.space-m;
-
-                        Text {
-                            text: "Save backups to";
-                            min-width: 130px;
-                            max-width: 260px;
-                            horizontal-stretch: 1;
-                            wrap: TextWrap.word-wrap;
-                            vertical-alignment: center;
-                        }
-
-                        LineEdit {
-                            horizontal-stretch: 1;
-                            text <=> root.dir-text;
-                            placeholder-text: "default location";
-                            accepted(t) => { root.dir-chosen(t); }
-                        }
-
-                        ActionButton {
-                            text: "Browse…";
-                            clicked => { root.browse-location(); }
-                        }
+                    LineEdit {
+                        width: 260px;
+                        text <=> root.dir-text;
+                        placeholder-text: "default location";
+                        accepted(t) => { root.dir-chosen(t); }
                     }
 
-                    HorizontalLayout {
-                        min-height: 32px;
-                        spacing: Theme.space-m;
-
-                        Text {
-                            text: "Keep";
-                            min-width: 130px;
-                            max-width: 260px;
-                            horizontal-stretch: 1;
-                            wrap: TextWrap.word-wrap;
-                            vertical-alignment: center;
-                        }
-
-                        LineEdit {
-                            width: 72px;
-                            text <=> root.count-text;
-                            input-type: number;
-                            accepted(t) => { root.count-chosen(t); }
-                        }
-
-                        Text {
-                            text: "backups";
-                            color: Theme.text-2;
-                            vertical-alignment: center;
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                        }
+                    ActionButton {
+                        text: "Browse…";
+                        clicked => { root.browse-location(); }
                     }
                 }
-            }
-        }
 
-        // ── backups ─────────────────────────────────────────
-        VerticalLayout {
-            spacing: Theme.space-xs;
+                PrefRow {
+                    title: "Keep";
+                    subtitle: "Older backups are deleted. Press Enter to apply.";
 
-            HorizontalLayout {
-                spacing: Theme.space-m;
-
-                Text {
-                    text: "Backups";
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                }
-
-                Text {
-                    text: root.backup-note;
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    wrap: TextWrap.word-wrap;
-                    horizontal-stretch: 1;
-                }
-
-                ActionButton {
-                    text: "Back up now";
-                    clicked => { root.backup-now(); }
-                }
-            }
-
-            Rectangle {
-                background: Theme.bg-1;
-                border-radius: Theme.radius-m;
-
-                VerticalLayout {
-                    padding: Theme.space-m;
-
-                    for backup[idx] in backups: NavRow {
-                        label: backup;
-                        selected: idx == root.selected-backup;
-                        selected-fired => { root.backup-chosen(idx); }
+                    LineEdit {
+                        width: 72px;
+                        text <=> root.count-text;
+                        input-type: number;
+                        accepted(t) => { root.count-chosen(t); }
                     }
 
                     Text {
-                        text: "No backups yet, they appear here after your first save or \"Back up now\".";
+                        text: "backups";
                         color: Theme.text-2;
-                        font-size: Theme.font-small;
-                        visible: backups.length == 0;
+                        vertical-alignment: center;
                     }
+                }
+            }
+        }
+
+        // ── the list ────────────────────────────────────────
+        VerticalLayout {
+            spacing: Theme.space-s;
+
+            SectionHeader {
+                title: "Your backups";
+            }
+
+            Text {
+                text: root.backup-note;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                wrap: TextWrap.word-wrap;
+            }
+
+            VerticalLayout {
+                padding-top: Theme.space-xs;
+
+                for backup[idx] in backups: NavRow {
+                    label: backup;
+                    selected: idx == root.selected-backup;
+                    selected-fired => { root.backup-chosen(idx); }
+                }
+
+                if backups.length == 0: Text {
+                    text: "No backups yet. They appear here after your first save or \"Back up now\".";
+                    color: Theme.text-2;
+                    wrap: TextWrap.word-wrap;
                 }
             }
         }
 
         // ── restore ─────────────────────────────────────────
         VerticalLayout {
-            spacing: Theme.space-xs;
+            spacing: Theme.space-s;
 
-            Text {
-                text: "Restore";
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                font-weight: 700;
+            HorizontalLayout {
+                spacing: Theme.space-m;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Theme.space-xs;
+
+                    SectionHeader {
+                        title: "Restore";
+                    }
+
+                    Text {
+                        text: "The selected backup compared with your files now.";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    ActionButton {
+                        text: "Restore this backup";
+                        enabled: root.restore-possible;
+                        clicked => { root.restore-backup(); }
+                    }
+                }
             }
 
             Rectangle {
                 background: Theme.bg-1;
-                border-radius: Theme.radius-m;
+                border-radius: Theme.radius-l;
 
                 VerticalLayout {
-                    padding: Theme.space-m;
-                    spacing: Theme.space-s;
-
-                    HorizontalLayout {
-                        spacing: Theme.space-m;
-
-                        Text {
-                            text: "Diff of the selected backup against the current files:";
-                            wrap: TextWrap.word-wrap;
-                            vertical-alignment: center;
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                        }
-
-                        ActionButton {
-                            text: "Restore this backup";
-                            primary: true;
-                            enabled: root.restore-possible;
-                            clicked => { root.restore-backup(); }
-                        }
-                    }
+                    padding: Theme.space-l;
 
                     Text {
                         text: root.restore-diff;

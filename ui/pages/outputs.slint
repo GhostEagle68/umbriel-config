@@ -1,9 +1,16 @@
-// Outputs page: one card per monitor (live-detected first, then
+// Outputs page: one row per monitor (live-detected first, then
 // configured-but-away), the fields underneath, and the add-output card.
 // Removing an output deletes its block — the last one stays.
 
 import { LineEdit } from "std-widgets.slint";
-import { ActionButton, CardHeader, SettingRowView } from "../widgets.slint";
+import {
+    ActionButton,
+    ExpandRow,
+    PageHeader,
+    PrefRow,
+    SectionHeader,
+    SettingRowView,
+} from "../widgets.slint";
 import { MonitorCard } from "../types.slint";
 import { Theme } from "../theme.slint";
 
@@ -24,63 +31,54 @@ export component OutputsPage inherits Rectangle {
     callback view-file(int);
 
     VerticalLayout {
-        padding: Theme.space-l;
-        spacing: Theme.space-l;
+        padding-left: Theme.space-xl;
+        padding-right: Theme.space-xl;
+        padding-top: 28px;
+        padding-bottom: 28px;
+        spacing: 28px;
         alignment: start;
 
-        Text {
-            text: root.title;
-            color: Theme.text-1;
-            font-size: Theme.font-title;
-            font-weight: 700;
-        }
+        VerticalLayout {
+            spacing: Theme.space-s;
 
-        if root.description != "": Text {
-            text: root.description;
-            color: Theme.text-2;
-            font-size: Theme.font-small;
-            wrap: TextWrap.word-wrap;
-        }
+            PageHeader {
+                title: root.title;
+                description: root.description;
 
-        HorizontalLayout {
-            spacing: Theme.space-m;
-
-            ActionButton {
-                text: "Refresh";
-                clicked => { root.refresh(); }
+                ActionButton {
+                    text: "Refresh";
+                    clicked => { root.refresh(); }
+                }
             }
 
             if root.live-note != "": Text {
                 text: root.live-note;
                 color: Theme.warning;
                 font-size: Theme.font-small;
-                vertical-alignment: center;
                 wrap: TextWrap.word-wrap;
-                horizontal-stretch: 1;
             }
         }
 
-        for monitor in root.monitors: VerticalLayout {
-            spacing: Theme.space-xs;
+        VerticalLayout {
+            for monitor in root.monitors: VerticalLayout {
+                ExpandRow {
+                    icon: @image-url("../../assets/icons/monitor.svg");
+                    has-icon: true;
+                    title: monitor.name;
+                    caption: monitor.connected ? monitor.info : (monitor.info == "" ? "Not connected" : "Not connected · " + monitor.info);
+                    expanded: monitor.expanded;
+                    toggle => { root.toggle-monitor(monitor.name); }
 
-            CardHeader {
-                title: monitor.name + (monitor.connected ? "" : " (not connected)");
-                caption: monitor.info;
-                expanded: monitor.expanded;
-                toggle => { root.toggle-monitor(monitor.name); }
-
-                if monitor.configured && monitor.removable: ActionButton {
-                    text: "Remove";
-                    clicked => { root.remove(monitor.name); }
+                    if monitor.expanded && monitor.configured && monitor.removable: ActionButton {
+                        text: "Remove";
+                        clicked => { root.remove(monitor.name); }
+                    }
                 }
-            }
 
-            if monitor.expanded: Rectangle {
-                background: Theme.bg-1;
-                border-radius: Theme.radius-m;
-
-                VerticalLayout {
-                    padding: Theme.space-m;
+                // Indented under the monitor's name.
+                if monitor.expanded: VerticalLayout {
+                    padding-left: 30px;
+                    padding-bottom: Theme.space-m;
 
                     for row in monitor.rows: SettingRowView {
                         setting: row;
@@ -92,58 +90,36 @@ export component OutputsPage inherits Rectangle {
                     }
                 }
             }
-        }
 
-        if root.monitors.length == 0: Text {
-            text: "No outputs connected or configured. Add one below to set its mode, scale, or workspaces, umbriel's defaults apply until then.";
-            color: Theme.text-2;
-            font-size: Theme.font-small;
-            wrap: TextWrap.word-wrap;
+            if root.monitors.length == 0: Text {
+                text: "No outputs connected or configured. Add one below to set its mode, scale, or workspaces, umbriel's defaults apply until then.";
+                color: Theme.text-2;
+                wrap: TextWrap.word-wrap;
+            }
         }
 
         // ── add output ──────────────────────────────────────
         VerticalLayout {
-            spacing: Theme.space-xs;
+            spacing: Theme.space-s;
 
-            Text {
-                text: "Add output";
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                font-weight: 700;
+            SectionHeader {
+                title: "Add output";
             }
 
-            Rectangle {
-                background: Theme.bg-1;
-                border-radius: Theme.radius-m;
+            PrefRow {
+                title: "Connector name";
+                subtitle: "For a monitor that isn't plugged in right now.";
 
-                HorizontalLayout {
-                    padding: Theme.space-m;
-                    spacing: Theme.space-m;
+                LineEdit {
+                    width: 220px;
+                    text <=> root.add-name;
+                    placeholder-text: "e.g. DP-3 or eDP-1";
+                    accepted(t) => { root.add(t); }
+                }
 
-                    Text {
-                        text: "Connector name";
-                        min-width: 130px;
-                        max-width: 260px;
-                        horizontal-stretch: 1;
-                        vertical-alignment: center;
-                    }
-
-                    LineEdit {
-                        width: 220px;
-                        text <=> root.add-name;
-                        placeholder-text: "e.g. DP-3 or eDP-1";
-                        accepted(t) => { root.add(t); }
-                    }
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
-
-                    ActionButton {
-                        text: "Add";
-                        primary: true;
-                        clicked => { root.add(root.add-name); }
-                    }
+                ActionButton {
+                    text: "Add";
+                    clicked => { root.add(root.add-name); }
                 }
             }
         }

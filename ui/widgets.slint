@@ -212,60 +212,6 @@ export component DraftEdit inherits Rectangle {
     }
 }
 
-// Collapsible card header: disclosure chevron, title, dim caption,
-// then page-specific extras (a Remove button) on the right. Clicking
-// anywhere outside those extras toggles the card.
-export component CardHeader inherits Rectangle {
-    in property <string> title;
-    in property <string> caption;
-    in property <bool> expanded;
-    callback toggle();
-    height: 30px;
-    border-radius: Theme.radius-s;
-    background: ta.has-hover ? Theme.bg-2 : transparent;
-
-    ta := TouchArea {
-        clicked => { root.toggle(); }
-    }
-
-    HorizontalLayout {
-        padding-left: Theme.space-s;
-        padding-right: Theme.space-m;
-        spacing: Theme.space-m;
-
-        Text {
-            width: 18px;
-            text: root.expanded ? "▾" : "▸";
-            color: Theme.text-2;
-            vertical-alignment: center;
-        }
-
-        Text {
-            text: root.title;
-            color: Theme.text-2;
-            font-size: Theme.font-small;
-            font-weight: 700;
-            vertical-alignment: center;
-        }
-
-        if root.caption != "": Text {
-            text: root.caption;
-            color: Theme.text-2;
-            font-size: Theme.font-small;
-            opacity: 0.7;
-            vertical-alignment: center;
-            overflow: elide;
-            horizontal-stretch: 1;
-        }
-
-        if root.caption == "": Rectangle {
-            horizontal-stretch: 1;
-        }
-
-        @children
-    }
-}
-
 // Page title and description, with the page's actions on the right.
 export component PageHeader inherits HorizontalLayout {
     in property <string> title;
@@ -304,6 +250,8 @@ export component PageHeader inherits HorizontalLayout {
 // A section title; collapsible ones toggle on click and show a chevron.
 export component SectionHeader inherits Rectangle {
     in property <string> title;
+    // Grey text after the title: a count, or where things are kept.
+    in property <string> caption;
     in property <bool> collapsible: false;
     in property <bool> expanded: true;
     callback toggle();
@@ -326,6 +274,13 @@ export component SectionHeader inherits Rectangle {
             vertical-alignment: center;
         }
 
+        if root.caption != "": Text {
+            text: root.caption;
+            color: Theme.text-2;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
         if root.collapsible: Image {
             width: 16px;
             height: 16px;
@@ -339,6 +294,96 @@ export component SectionHeader inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
         }
+    }
+}
+
+// One item of a list that opens in place (a monitor, a rule): icon,
+// title and grey caption, the item's own actions, then a chevron. The
+// whole row toggles; its fields go underneath, indented.
+export component ExpandRow inherits Rectangle {
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <string> title;
+    in property <string> caption;
+    in property <bool> expanded;
+    callback toggle();
+    min-height: 56px;
+    border-radius: Theme.radius-m;
+    background: ta.has-hover ? Theme.bg-1 : transparent;
+    animate background { duration: 100ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggle(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-s;
+        padding-right: Theme.space-s;
+        padding-top: Theme.space-s;
+        padding-bottom: Theme.space-s;
+        spacing: Theme.space-m;
+
+        // The row grows with its caption, so center in a layout.
+        if root.has-icon: VerticalLayout {
+            alignment: center;
+
+            Image {
+                width: 18px;
+                height: 18px;
+                source: root.icon;
+                colorize: Theme.text-2;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.title;
+                color: Theme.text-1;
+                font-weight: root.expanded ? 600 : 400;
+                overflow: elide;
+            }
+
+            if root.caption != "": Text {
+                text: root.caption;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                overflow: elide;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: Theme.space-s;
+
+                @children
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            Image {
+                width: 16px;
+                height: 16px;
+                source: @image-url("../assets/icons/chevron-down.svg");
+                colorize: Theme.text-2;
+                transform-rotation: root.expanded ? 180deg : 0deg;
+                animate transform-rotation { duration: 150ms; }
+            }
+        }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.divider;
     }
 }
 

@@ -1,8 +1,14 @@
-// Rule page: one card per rule, Match fields then Settings. Every field
-// starts unset — clearing one (or picking "(unset)") removes it from the
-// config. Rules living in an include show a pointer instead of editors.
+// Rule page: one row per rule that opens to its Match fields, then
+// its Settings. Every field starts unset — clearing one (or picking
+// "(unset)") removes it from the config. Rules living in an include
+// show a pointer instead of editors.
 
-import { ActionButton, CardHeader, SettingRowView } from "../widgets.slint";
+import {
+    ActionButton,
+    ExpandRow,
+    PageHeader,
+    SettingRowView,
+} from "../widgets.slint";
 import { RuleCard } from "../types.slint";
 import { Theme } from "../theme.slint";
 
@@ -20,65 +26,52 @@ export component RulePage inherits Rectangle {
     callback view-file(int);
 
     VerticalLayout {
-        padding: Theme.space-l;
-        spacing: Theme.space-l;
+        padding-left: Theme.space-xl;
+        padding-right: Theme.space-xl;
+        padding-top: 28px;
+        padding-bottom: 28px;
+        spacing: 28px;
         alignment: start;
 
-        Text {
-            text: root.title;
-            color: Theme.text-1;
-            font-size: Theme.font-title;
-            font-weight: 700;
-        }
-
-        if root.description != "": Text {
-            text: root.description;
-            color: Theme.text-2;
-            font-size: Theme.font-small;
-            wrap: TextWrap.word-wrap;
-        }
-
-        HorizontalLayout {
-            spacing: Theme.space-m;
-
-            Rectangle {
-                horizontal-stretch: 1;
-            }
+        PageHeader {
+            title: root.title;
+            description: root.description;
 
             ActionButton {
                 text: "Add rule";
-                primary: true;
                 clicked => { root.add-rule(); }
             }
         }
 
-        for card in root.rule-cards: VerticalLayout {
-            spacing: Theme.space-xs;
+        VerticalLayout {
+            for card in root.rule-cards: VerticalLayout {
+                ExpandRow {
+                    title: card.title;
+                    caption: card.file-label != "" ? "in " + card.file-label : "";
+                    expanded: card.expanded;
+                    toggle => { root.toggle-rule(card.file, card.index); }
 
-            CardHeader {
-                title: card.title;
-                caption: card.file-label != "" ? "in " + card.file-label : "";
-                expanded: card.expanded;
-                toggle => { root.toggle-rule(card.file, card.index); }
-
-                ActionButton {
-                    text: "Remove";
-                    clicked => { root.remove-rule(card.file, card.index); }
+                    // Only on the opened rule: a Remove on every line is noise.
+                    if card.expanded: ActionButton {
+                        text: "Remove";
+                        clicked => { root.remove-rule(card.file, card.index); }
+                    }
                 }
-            }
 
-            if card.expanded: Rectangle {
-                background: Theme.bg-1;
-                border-radius: Theme.radius-m;
+                if card.expanded: VerticalLayout {
+                    padding-left: Theme.space-xl;
+                    padding-top: Theme.space-s;
+                    padding-bottom: Theme.space-m;
 
-                VerticalLayout {
-                    padding: Theme.space-m;
+                    VerticalLayout {
+                        padding-left: Theme.space-s;
 
-                    Text {
-                        text: "Match";
-                        color: Theme.text-2;
-                        font-size: Theme.font-small;
-                        font-weight: 700;
+                        Text {
+                            text: "Match";
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            font-weight: 600;
+                        }
                     }
 
                     for row in card.match-rows: SettingRowView {
@@ -90,11 +83,16 @@ export component RulePage inherits Rectangle {
                         view-file(i) => { root.view-file(i); }
                     }
 
-                    Text {
-                        text: "Settings";
-                        color: Theme.text-2;
-                        font-size: Theme.font-small;
-                        font-weight: 700;
+                    VerticalLayout {
+                        padding-top: Theme.space-l;
+                        padding-left: Theme.space-s;
+
+                        Text {
+                            text: "Settings";
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            font-weight: 600;
+                        }
                     }
 
                     for row in card.setting-rows: SettingRowView {
@@ -107,13 +105,12 @@ export component RulePage inherits Rectangle {
                     }
                 }
             }
-        }
 
-        if root.rule-cards.length == 0: Text {
-            text: "No rules yet. Add one, every field starts unset, and only what you fill in is written.";
-            color: Theme.text-2;
-            font-size: Theme.font-small;
-            wrap: TextWrap.word-wrap;
+            if root.rule-cards.length == 0: Text {
+                text: "No rules yet. Add one, every field starts unset, and only what you fill in is written.";
+                color: Theme.text-2;
+                wrap: TextWrap.word-wrap;
+            }
         }
     }
 }

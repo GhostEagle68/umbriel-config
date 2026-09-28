@@ -8,7 +8,7 @@
 // Every visual piece below is a small component on Theme tokens.
 
 import { CheckBox, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
-import { ActionButton, CardHeader } from "../widgets.slint";
+import { ActionButton, PageHeader, SectionHeader } from "../widgets.slint";
 import {
     ActionChoice,
     AppChoice,
@@ -244,8 +244,8 @@ component PickerRow inherits Rectangle {
 }
 
 component KeybindEditor inherits Rectangle {
-    background: Theme.bg-0;
-    border-radius: Theme.radius-m;
+    background: Theme.bg-1;
+    border-radius: Theme.radius-l;
     border-width: 1px;
     border-color: Theme.accent;
 
@@ -702,9 +702,9 @@ component KeybindEditor inherits Rectangle {
 component BindRow inherits Rectangle {
     in property <KeybindRow> bind;
     in property <bool> selected;
-    min-height: 36px;
-    border-radius: Theme.radius-s;
-    background: root.selected ? Theme.accent-soft : ta.has-hover ? Theme.bg-2 : transparent;
+    min-height: 40px;
+    border-radius: Theme.radius-m;
+    background: root.selected ? Theme.accent-soft : ta.has-hover ? Theme.bg-1 : transparent;
 
     ta := TouchArea {
         mouse-cursor: pointer;
@@ -751,13 +751,28 @@ component BindRow inherits Rectangle {
             vertical-alignment: center;
         }
 
-        // Fixed slot so the controls line up on every row.
+        // Fixed slot so the controls line up on every row. Removing a
+        // bind that replaced a default brings the default back.
         Rectangle {
-            width: 36px;
+            width: 28px;
 
-            if root.bind.is-user: ActionButton {
-                text: root.bind.shadowing ? "↺" : "×";
-                clicked => { KeybindsState.remove(root.bind.index); }
+            if root.bind.is-user: Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: Theme.radius-s;
+                background: remove-ta.has-hover ? Theme.bg-2 : transparent;
+
+                Image {
+                    width: 15px;
+                    height: 15px;
+                    source: root.bind.shadowing ? @image-url("../../assets/icons/reset.svg") : @image-url("../../assets/icons/close.svg");
+                    colorize: remove-ta.has-hover ? Theme.text-1 : Theme.text-2;
+                }
+
+                remove-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { KeybindsState.remove(root.bind.index); }
+                }
             }
         }
     }
@@ -770,22 +785,21 @@ export component KeybindsPage inherits Rectangle {
     }
 
     VerticalLayout {
-        padding: Theme.space-l;
-        spacing: Theme.space-m;
+        padding-left: Theme.space-xl;
+        padding-right: Theme.space-xl;
+        padding-top: 28px;
+        padding-bottom: 28px;
+        spacing: Theme.space-l;
         alignment: start;
 
-        Text {
-            text: "Keybinds";
-            color: Theme.text-1;
-            font-size: Theme.font-title;
-            font-weight: 700;
-        }
+        PageHeader {
+            title: "Keybinds";
+            description: "Your keys override the compositor's defaults while they exist; removing one brings the default back. Changes apply when you save.";
 
-        Text {
-            text: "Your keys override the compositor defaults while they exist; removing one restores the default. Changes apply when you save.";
-            color: Theme.text-2;
-            font-size: Theme.font-small;
-            wrap: word-wrap;
+            ActionButton {
+                text: "Add keybind";
+                clicked => { KeybindsState.add(); }
+            }
         }
 
         // ── toolbar ──
@@ -816,12 +830,6 @@ export component KeybindsPage inherits Rectangle {
             Rectangle {
                 horizontal-stretch: 1;
             }
-
-            ActionButton {
-                text: "Add keybind";
-                primary: true;
-                clicked => { KeybindsState.add(); }
-            }
         }
 
         if KeybindsState.list-note != "": Text {
@@ -832,40 +840,35 @@ export component KeybindsPage inherits Rectangle {
         }
 
         // ── the list ──
-        Rectangle {
-            background: Theme.bg-1;
-            border-radius: Theme.radius-m;
+        VerticalLayout {
+            spacing: 2px;
 
-            VerticalLayout {
-                padding: Theme.space-m;
+            if KeybindsState.editor-open && KeybindsState.editor-anchor == "": KeybindEditor { }
+
+            for row[i] in KeybindsState.rows: VerticalLayout {
                 spacing: 2px;
+                padding-top: row.is-header && i > 0 ? Theme.space-l : 0;
+                padding-bottom: row.is-header ? Theme.space-xs : 0;
 
-                if KeybindsState.editor-open && KeybindsState.editor-anchor == "": KeybindEditor { }
-
-                for row[i] in KeybindsState.rows: VerticalLayout {
-                    spacing: 2px;
-                    padding-top: row.is-header && i > 0 ? Theme.space-m : 0;
-
-                    if row.is-header: CardHeader {
-                        title: row.chord;
-                        caption: row.count;
-                        expanded: row.expanded;
-                        toggle => { KeybindsState.toggle-group(row.chord); }
-                    }
-
-                    if !row.is-header: BindRow {
-                        bind: row;
-                        selected: KeybindsState.editor-open && KeybindsState.editor-anchor == row.chord;
-                    }
-
-                    if !row.is-header && KeybindsState.editor-open && KeybindsState.editor-anchor == row.chord: KeybindEditor { }
+                if row.is-header: SectionHeader {
+                    title: row.chord;
+                    caption: row.count;
+                    collapsible: true;
+                    expanded: row.expanded;
+                    toggle => { KeybindsState.toggle-group(row.chord); }
                 }
 
-                if KeybindsState.rows.length == 0: Text {
-                    text: "No keybinds match.";
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
+                if !row.is-header: BindRow {
+                    bind: row;
+                    selected: KeybindsState.editor-open && KeybindsState.editor-anchor == row.chord;
                 }
+
+                if !row.is-header && KeybindsState.editor-open && KeybindsState.editor-anchor == row.chord: KeybindEditor { }
+            }
+
+            if KeybindsState.rows.length == 0: Text {
+                text: "No keybinds match.";
+                color: Theme.text-2;
             }
         }
     }
