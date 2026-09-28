@@ -111,15 +111,28 @@ fn value_tokens(text: &str, out: &mut Vec<(String, Token)>) {
 }
 
 /// The line (0-based) that sets `dotted`: the key itself, else the
-/// closest table or key above it (an inline table, an array of tables).
+/// closest table or key above it (an inline table). An array of tables
+/// is addressed by entry: `window_rule[2].match` is in the third
+/// `[[window_rule]]`.
 pub fn key_line(text: &str, dotted: &str) -> Option<usize> {
     let want: Vec<&str> = dotted.split('.').collect();
     let mut table: Vec<String> = Vec::new();
+    let mut entries: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut best: Option<(usize, usize)> = None;
     for (number, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         let path: Vec<String> = if trimmed.starts_with('[') && !value_line(trimmed) {
-            table = parts(trimmed.trim_matches(['[', ']']));
+            // The header ends at its last `]`; a comment may follow.
+            let header = &trimmed[..trimmed.rfind(']').map_or(trimmed.len(), |i| i + 1)];
+            let name = header.trim_matches(['[', ']']);
+            table = parts(name);
+            if header.starts_with("[[") {
+                let entry = entries.entry(name.trim().to_owned()).or_default();
+                if let Some(last) = table.last_mut() {
+                    last.push_str(&format!("[{entry}]"));
+                }
+                *entry += 1;
+            }
             table.clone()
         } else if let Some(eq) = key_end(trimmed) {
             let mut path = table.clone();
@@ -163,6 +176,12 @@ curve.kind = \"spring\"
 
 [[window_rule]]
 match = { app_id = \"foot\" }
+
+[[window_rule]]
+match = { title = \"x\" }
+
+[input] # pointer
+follow = true
 ";
 
     #[test]
@@ -170,11 +189,15 @@ match = { app_id = \"foot\" }
         assert_eq!(key_line(TEXT, "general.mod_key"), Some(3));
         assert_eq!(key_line(TEXT, "animation.windows_in.duration_ms"), Some(6));
         assert_eq!(key_line(TEXT, "animation.windows_in.curve.kind"), Some(7));
-        // Inside an inline table: the line that holds it.
-        assert_eq!(key_line(TEXT, "window_rule.match.app_id"), Some(10));
+        // Inside an inline table: the line that holds it, in the right
+        // entry of an array of tables.
+        assert_eq!(key_line(TEXT, "window_rule[0].match.app_id"), Some(10));
+        assert_eq!(key_line(TEXT, "window_rule[1].match"), Some(13));
+        // A comment after a header doesn't hide its keys.
+        assert_eq!(key_line(TEXT, "input.follow"), Some(16));
         // Unset key: its table's header; unknown table: nothing.
         assert_eq!(key_line(TEXT, "general.autostart"), Some(1));
-        assert_eq!(key_line(TEXT, "input.keyboard.layout"), None);
+        assert_eq!(key_line(TEXT, "cursor.theme"), None);
     }
 
     #[test]

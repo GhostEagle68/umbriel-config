@@ -399,7 +399,7 @@ pub(super) fn write_assignments(
     );
     let paths = chain_paths(shell);
     for (event, doc, value) in edits {
-        let key = ["animation", event, "effect"];
+        let key = shaders::slot_key(event);
         doc_at_mut(shell, *doc)
             .write_through(&paths[*doc], |d| match value {
                 Some(value) => d.set_string(&key, value),
@@ -460,9 +460,9 @@ fn convert_legacy(shell: &mut Shell) -> String {
         match result {
             Ok(()) => {
                 doc_at_mut(shell, doc).remove_leaf(&["animation", event, "shader"]);
-                converted.push(prettify(event));
+                converted.push(slot_label(event));
             }
-            Err(err) => failed.push(format!("{}: {err}", prettify(event))),
+            Err(err) => failed.push(format!("{}: {err}", slot_label(event))),
         }
     }
     let mut status = match converted.len() {
@@ -517,8 +517,10 @@ pub(super) fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &
             let status = if assigned.is_empty() {
                 format!("Deleted {}.", path.display())
             } else {
-                let events: Vec<String> =
-                    assigned.iter().map(|(event, _)| prettify(event)).collect();
+                let events: Vec<String> = assigned
+                    .iter()
+                    .map(|(event, _)| slot_label(event))
+                    .collect();
                 format!(
                     "Deleted {} and cleared it from {}.",
                     path.display(),

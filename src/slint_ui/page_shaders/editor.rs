@@ -303,7 +303,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                         format!("Created {}.", path.display())
                     } else if !renamed.is_empty() {
                         let events: Vec<String> =
-                            renamed.iter().map(|(event, _)| prettify(event)).collect();
+                            renamed.iter().map(|(event, _)| slot_label(event)).collect();
                         format!(
                             "Saved as {} and pointed {} at it.",
                             path.display(),

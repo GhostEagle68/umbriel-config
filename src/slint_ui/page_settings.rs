@@ -335,6 +335,12 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
                     }
                 })
                 .collect();
+            // A rule row's key names its document too; the viewer
+            // already shows that file.
+            let key = match rules::parse_rule_key(&key) {
+                Some((family, _, index, field)) => format!("{family}[{index}].{field}"),
+                None => key.to_string(),
+            };
             let focus = (!key.is_empty())
                 .then(|| toml_lines::key_line(&text, &key))
                 .flatten();
