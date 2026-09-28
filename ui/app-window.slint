@@ -47,6 +47,8 @@ import {
     ShaderInfo,
     ShaderStep,
     ShaderUse,
+    Toast,
+    ToastKind,
 } from "types.slint";
 import { CategoryPage } from "pages/category.slint";
 import { HomePage } from "pages/home.slint";
@@ -84,12 +86,10 @@ export component AppWindow inherits Window {
     in property <[string]> include-files;
     in property <string> sync-note;
     in property <bool> sync-clean: true;
-    in property <string> include-note;
     in property <bool> dirty;
     in property <[SectionNav]> sections;
     in property <string> page-title;
     in property <string> page-description;
-    in property <string> status;
     in-out property <string> current-section;
     in-out property <bool> show-exit-confirm: false;
     in-out property <Page> page: Page.home;
@@ -100,8 +100,13 @@ export component AppWindow inherits Window {
     in property <[string]> destinations;
     in-out property <bool> show-save-popup: false;
     in property <[SaveEntry]> save-entries;
-    // Validation result of the last save (empty = nothing to report).
-    in-out property <string> validate-note;
+    // Bottom-right notes (common::toast) and the one blocking alert
+    // (common::alert); an empty title hides the alert.
+    in property <[Toast]> toasts;
+    callback toast-action(int, string);
+    callback toast-closed(int);
+    in-out property <string> alert-title;
+    in property <string> alert-body;
     in-out property <bool> show-file-popup: false;
     in property <string> popup-file-title;
     in property <string> popup-file-path;
@@ -254,7 +259,6 @@ export component AppWindow inherits Window {
     in-out property <int> backup-selected: 0;
     in property <bool> restore-possible: false;
     in property <string> restore-diff;
-    in property <string> backup-action-note;
     in property <string> backup-note;
     in-out property <string> backup-count-text;
     in-out property <string> backup-dir-text;
@@ -273,8 +277,6 @@ export component AppWindow inherits Window {
     in-out property <int> update-channel: 1;
     in-out property <bool> canary-auto-install: false;
     callback canary-auto-install-toggled(bool);
-    // Set after an automatic canary install; the strip shows it.
-    in-out property <string> update-strip;
     in-out property <bool> dark-mode: true;
     // Standard widgets (LineEdit, CheckBox, ComboBox, AboutSlint) follow
     // Slint's builtin palette, not our tokens — keep it in step.
@@ -302,7 +304,8 @@ export component AppWindow inherits Window {
     callback theme-selected(bool);
     callback open-url(string);
 
-    // First-run onboarding (plain install) + missing-umbriel banner.
+    // First-run onboarding (plain install); umbriel missing also dims
+    // what needs it.
     in-out property <bool> show-onboarding: false;
     in-out property <bool> umbriel-missing: false;
     // No settings could be read from umbriel's docs: the section page
@@ -522,71 +525,6 @@ export component AppWindow inherits Window {
                             clicked => { root.save-requested(); }
                         }
                     }
-                }
-            }
-
-            // include warning strip (only when notes exist)
-            if root.include-note != "": Rectangle {
-                height: 24px;
-                background: Theme.bg-1;
-                Text {
-                    x: Theme.space-l;
-                    text: "⚠ " + root.include-note;
-                    color: Theme.warning;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
-                }
-            }
-
-            // validation result of the last save (errors and warnings)
-            if root.validate-note != "": Rectangle {
-                height: 24px;
-                background: Theme.bg-1;
-                Text {
-                    x: Theme.space-l;
-                    text: "⚠ " + root.validate-note;
-                    color: Theme.warning;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
-                }
-            }
-
-            // an automatic canary install landed: restart to use it
-            if root.update-strip != "": Rectangle {
-                height: 24px;
-                background: Theme.bg-1;
-
-                TouchArea {
-                    clicked => {
-                        root.view-update-notes();
-                        root.update-strip = "";
-                    }
-                }
-
-                Text {
-                    x: Theme.space-l;
-                    text: root.update-strip + " · click for what changed";
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
-                }
-            }
-
-            // quiet banner: umbriel missing but a config exists
-            if root.umbriel-missing: Rectangle {
-                height: 24px;
-                background: Theme.bg-1;
-
-                banner-ta := TouchArea {
-                    clicked => { root.umbriel-missing = false; }
-                }
-
-                Text {
-                    x: Theme.space-l;
-                    text: "Umbriel not detected, validation unavailable · click to dismiss";
-                    color: Theme.warning;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
                 }
             }
 
@@ -837,7 +775,6 @@ export component AppWindow inherits Window {
                         selected-backup: root.backup-selected;
                         restore-possible: root.restore-possible;
                         restore-diff: root.restore-diff;
-                        action-note: root.backup-action-note;
                         // Two-way: one-way bindings detach once the user
                         // edits a field (the slider bug again) — after
                         // that, a reset or Browse could no longer update
@@ -882,13 +819,6 @@ export component AppWindow inherits Window {
                             font-family: Theme.font-mono;
                             font-size: Theme.font-small;
                             wrap: TextWrap.word-wrap;
-                            horizontal-alignment: center;
-                        }
-
-                        if root.status != "": Text {
-                            text: root.status;
-                            color: Theme.success;
-                            font-size: Theme.font-small;
                             horizontal-alignment: center;
                         }
 
@@ -1733,6 +1663,151 @@ export component AppWindow inherits Window {
                         clicked => {
                             root.shader-use-open = false;
                             root.shader-editor-save(true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── alert: something failed and the user must know ──────
+    if root.alert-title != "": Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+
+        TouchArea { }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(parent.width - 64px, 440px);
+            height: alert-layout.preferred-height;
+            border-radius: Theme.radius-xl;
+            background: Theme.bg-3;
+            border-width: 1px;
+            border-color: Theme.border;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: #00000066;
+
+            alert-layout := VerticalLayout {
+                padding: Theme.space-xl;
+                spacing: Theme.space-m;
+
+                Text {
+                    text: root.alert-title;
+                    color: Theme.text-1;
+                    font-size: Theme.font-large;
+                    font-weight: 600;
+                    wrap: TextWrap.word-wrap;
+                }
+
+                Text {
+                    text: root.alert-body;
+                    color: Theme.text-2;
+                    wrap: TextWrap.word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    padding-top: Theme.space-s;
+
+                    ActionButton {
+                        text: "OK";
+                        primary: true;
+                        clicked => { root.alert-title = ""; }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── toasts: bottom-right, newest at the bottom ──────────
+    Rectangle {
+        x: parent.width - self.width - Theme.space-l;
+        y: parent.height - self.height - Theme.space-l;
+        width: min(parent.width - 2 * Theme.space-l, 380px);
+        height: toast-list.preferred-height;
+
+        toast-list := VerticalLayout {
+            spacing: Theme.space-s;
+
+            for toast in root.toasts: Rectangle {
+                // Starts hidden and low; init flips it so the animation
+                // runs as the toast arrives.
+                in-out property <bool> shown: false;
+                init => { self.shown = true; }
+                opacity: self.shown ? 1 : 0;
+                animate opacity { duration: 180ms; }
+                height: toast-row.preferred-height;
+                border-radius: Theme.radius-l;
+                background: Theme.bg-3;
+                border-width: 1px;
+                border-color: Theme.border;
+                drop-shadow-blur: 16px;
+                drop-shadow-offset-y: 4px;
+                drop-shadow-color: #00000055;
+
+                toast-row := HorizontalLayout {
+                    padding-left: Theme.space-m;
+                    padding-right: Theme.space-s;
+                    padding-top: Theme.space-s;
+                    padding-bottom: Theme.space-s;
+                    spacing: Theme.space-s;
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Image {
+                            width: 16px;
+                            height: 16px;
+                            source: toast.kind == ToastKind.success ? @image-url("../assets/icons/check.svg")
+                                : toast.kind == ToastKind.info ? @image-url("../assets/icons/info.svg")
+                                : @image-url("../assets/icons/alert.svg");
+                            colorize: toast.kind == ToastKind.success ? Theme.success
+                                : toast.kind == ToastKind.warning ? Theme.warning
+                                : toast.kind == ToastKind.error ? Theme.danger
+                                : Theme.text-2;
+                        }
+                    }
+
+                    Text {
+                        text: toast.text;
+                        color: Theme.text-1;
+                        wrap: TextWrap.word-wrap;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        min-height: 28px;
+                    }
+
+                    if toast.action != "": VerticalLayout {
+                        alignment: center;
+
+                        ActionButton {
+                            text: toast.action;
+                            clicked => { root.toast-action(toast.id, toast.action); }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Rectangle {
+                            width: 24px;
+                            height: 24px;
+                            border-radius: Theme.radius-s;
+                            background: close-ta.has-hover ? Theme.bg-2 : transparent;
+
+                            Image {
+                                width: 14px;
+                                height: 14px;
+                                source: @image-url("../assets/icons/close.svg");
+                                colorize: Theme.text-2;
+                            }
+
+                            close-ta := TouchArea {
+                                clicked => { root.toast-closed(toast.id); }
+                            }
                         }
                     }
                 }

@@ -305,3 +305,14 @@ export struct DeskStyle {
     extent-h: float,
     mode: string,
 }
+
+export enum ToastKind { info, success, warning, error }
+
+// One note in the bottom-right stack. `action` is a button label and
+// also the name Rust routes the click by; "" means no button.
+export struct Toast {
+    id: int,
+    kind: ToastKind,
+    text: string,
+    action: string,
+}

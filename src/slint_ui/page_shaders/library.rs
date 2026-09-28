@@ -459,7 +459,7 @@ pub(super) fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &
                 if let Err(err) = write_assignments(&mut shell, &clears)
                     .and_then(|()| repoint_include(&mut shell, &preset_file, None))
                 {
-                    app.set_status(err.into());
+                    toast(app, ToastKind::Error, err, "");
                 }
                 scan_shaders(&mut shell);
             }
@@ -477,10 +477,10 @@ pub(super) fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &
                     events.join(", ")
                 )
             };
-            app.set_status(status.into());
+            toast(app, ToastKind::Success, status, "");
         }
         Err(err) if app.get_shader_editor_open() => app.set_shader_editor_note(err.into()),
-        Err(err) => app.set_status(err.into()),
+        Err(err) => toast(app, ToastKind::Error, err, ""),
     }
 }
 
@@ -507,7 +507,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                     None => Ok(()),
                 };
                 if let Err(err) = result {
-                    app.set_status(err.into());
+                    toast(&app, ToastKind::Error, err, "");
                 }
             }
             // Always rebuild so the dropdowns mirror the documents, even
@@ -538,7 +538,12 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                 shell.doc.set_strings(&["include", "files"], &files);
             }
             let shell = shell.borrow();
-            app.set_status("Added shaders.toml to [include] — save to apply.".into());
+            toast(
+                &app,
+                ToastKind::Info,
+                "Added shaders.toml to [include] — save to apply.",
+                "",
+            );
             app.set_dirty(shell.any_modified());
             rebuild_shaders(&app, &shell);
         });
@@ -550,7 +555,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             let Some(app) = weak.upgrade() else { return };
             let status = convert_legacy(&mut shell.borrow_mut());
             let shell = shell.borrow();
-            app.set_status(status.into());
+            toast(&app, ToastKind::Info, status, "");
             app.set_dirty(shell.any_modified());
             rebuild_shaders(&app, &shell);
         });

@@ -527,11 +527,12 @@ pub(super) fn install_outputs(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                 names.contains(&name) || name.is_empty()
             };
             if taken {
-                app.set_status(if name.is_empty() {
-                    "Enter a connector name first, e.g. DP-3.".into()
+                let note = if name.is_empty() {
+                    "Enter a connector name first, e.g. DP-3.".to_owned()
                 } else {
-                    format!("{name} is already listed").into()
-                });
+                    format!("{name} is already listed.")
+                };
+                toast(&app, ToastKind::Warning, note, "");
                 return;
             }
             shell
@@ -563,7 +564,12 @@ pub(super) fn install_outputs(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                 }
             };
             if removed.is_none() {
-                app.set_status("The only configured output cannot be removed.".into());
+                toast(
+                    &app,
+                    ToastKind::Warning,
+                    "The only configured output cannot be removed.",
+                    "",
+                );
                 return;
             }
             let shell = shell.borrow();

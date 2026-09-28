@@ -630,7 +630,7 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
         };
         if let Err(err) = result {
             set_row_error(app, key, &err);
-            app.set_status(err.into());
+            toast(app, ToastKind::Error, err, "");
             return;
         }
         let shell = shell.borrow();
@@ -642,7 +642,7 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
         let result = super::sections::set_environment(&mut shell.borrow_mut(), key, raw);
         if let Err(err) = result {
             set_row_error(app, key, &err);
-            app.set_status(err.into());
+            toast(app, ToastKind::Error, err, "");
             return;
         }
         let shell = shell.borrow();
@@ -669,7 +669,7 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
         Ok(value_text) => value_text,
         Err(err) => {
             set_row_error(app, key, &err);
-            app.set_status(err.into());
+            toast(app, ToastKind::Error, err, "");
             return;
         }
     };
@@ -700,7 +700,7 @@ fn commit_edit(app: &AppWindow, shell: &Rc<RefCell<Shell>>, key: &str, raw: &str
     if !accepted {
         let err = format!("umbriel would reject {key} = {value_text}");
         set_row_error(app, key, &err);
-        app.set_status(err.into());
+        toast(app, ToastKind::Error, err, "");
         return;
     }
     let shell = shell.borrow();

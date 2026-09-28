@@ -88,7 +88,7 @@ pub(super) fn save_all_and_validate(
     for inc in &mut shell.includes.docs {
         if inc.doc.is_modified() {
             if let Err(err) = inc.doc.save(&inc.path) {
-                app.set_status(format!("save failed: {err}").into());
+                alert(app, "Couldn't save", err.to_string());
                 return false;
             }
             saved_files += 1;
@@ -97,7 +97,7 @@ pub(super) fn save_all_and_validate(
     if shell.doc.is_modified() {
         let path = shell.path.clone();
         if let Err(err) = shell.doc.save(&path) {
-            app.set_status(format!("save failed: {err}").into());
+            alert(app, "Couldn't save", err.to_string());
             return false;
         }
         saved_files += 1;
@@ -107,37 +107,50 @@ pub(super) fn save_all_and_validate(
 
     app.set_dirty(false);
     app.set_changed_count(0);
-    match report {
-        Ok(report) if report.diagnostics.is_empty() => {
-            app.set_validate_note(String::new().into());
-            app.set_status(
-                format!("Saved {saved_files} file(s); umbriel has validated the config.").into(),
-            );
-        }
-        Ok(report) => {
-            let messages: Vec<String> = report
-                .diagnostics
-                .iter()
-                .map(|d| d.message().to_owned())
-                .collect();
-            app.set_validate_note(messages.join("; ").into());
-            // Warnings apply with per-setting fallbacks; only errors mean
-            // umbriel kept something out.
-            let verdict = if report.is_ok() {
-                "umbriel noted warnings"
-            } else {
-                "umbriel has complaints"
-            };
-            app.set_status(
-                format!("Saved {saved_files} file(s); {verdict} — see the banner.").into(),
-            );
-        }
-        Err(err) => {
-            app.set_validate_note(format!("umbriel could not be run: {err}").into());
-            app.set_status(format!("Saved {saved_files} file(s) without validation.").into());
-        }
-    }
+    let plural = if saved_files == 1 { "" } else { "s" };
+    report_validation(app, report, &format!("Saved {saved_files} file{plural}"));
     true
+}
+
+/// Tell the user how umbriel took the config just written; `done` says
+/// what happened ("Saved 2 files"). Errors mean umbriel kept something
+/// out, so they get the popup; warnings apply with per-setting fallbacks.
+pub(super) fn report_validation(
+    app: &AppWindow,
+    report: Result<validate::Report, validate::ValidateError>,
+    done: &str,
+) {
+    match report {
+        Ok(report) if report.diagnostics.is_empty() => toast(
+            app,
+            ToastKind::Success,
+            format!("{done}. Umbriel accepted the config."),
+            "",
+        ),
+        Ok(report) => {
+            let messages: Vec<&str> = report.diagnostics.iter().map(|d| d.message()).collect();
+            if report.is_ok() {
+                toast(
+                    app,
+                    ToastKind::Warning,
+                    format!("{done}. Umbriel warns: {}", messages.join("; ")),
+                    "",
+                );
+            } else {
+                alert(
+                    app,
+                    "Umbriel rejected part of the config",
+                    format!("{done}, but umbriel reported:\n\n{}", messages.join("\n")),
+                );
+            }
+        }
+        Err(err) => toast(
+            app,
+            ToastKind::Warning,
+            format!("{done} without validation: {err}."),
+            "",
+        ),
+    }
 }
 
 pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &discovery::Env) {
@@ -149,7 +162,7 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
             let shell = shell.borrow();
             let entries = build_save_entries(&shell);
             if entries.is_empty() {
-                app.set_status("Nothing to save.".into());
+                toast(&app, ToastKind::Info, "Nothing to save.", "");
                 return;
             }
             // Rebuilt each time: the include list changes as you edit.
@@ -226,7 +239,7 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
             let shell = shell.borrow();
             super::sections::refresh_shown_page(&app, &shell);
             app.set_show_save_popup(false);
-            app.set_status("Discarded all unsaved changes.".into());
+            toast(&app, ToastKind::Info, "Discarded all unsaved changes.", "");
         });
     }
     {

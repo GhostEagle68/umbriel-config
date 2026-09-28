@@ -88,6 +88,13 @@ pub(super) fn start_update_check(weak: slint::Weak<AppWindow>, env: Option<disco
                         && kind == update::InstallKind::Tarball
                     {
                         app.invoke_install_update();
+                    } else if automatic {
+                        let action = if kind == update::InstallKind::Tarball {
+                            "Install"
+                        } else {
+                            "Details"
+                        };
+                        toast(&app, ToastKind::Info, app.get_update_note(), action);
                     }
                 }
                 Err(err) => app.set_update_note(format!("Couldn't check: {err}").into()),
@@ -183,19 +190,19 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
                     match result {
                         Ok(()) => {
                             app.set_update_installed(true);
-                            app.set_update_note(
-                                format!("Installed {version}. Restart to use it.").into(),
-                            );
+                            let note = format!("Installed {version}. Restart to use it.");
+                            app.set_update_note(note.clone().into());
+                            toast(&app, ToastKind::Success, note, "Restart");
                             if let Some(sha) = version.strip_prefix("canary ") {
                                 // Every canary shares a version, so the new
                                 // build shows these instead of the changelog.
                                 update::save_canary_notes(&env, sha, &app.get_update_notes());
-                                app.set_update_strip(
-                                    format!("Updated to {version}. Restart to use it").into(),
-                                );
                             }
                         }
-                        Err(err) => app.set_update_note(format!("Install failed: {err}").into()),
+                        Err(err) => {
+                            app.set_update_note(format!("Install failed: {err}").into());
+                            alert(&app, "Update failed", err.to_string());
+                        }
                     }
                 });
             });
@@ -212,11 +219,21 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             // The new binary is already on disk; unsaved edits would be
             // lost with the process, so they stop the restart.
             if app.get_dirty() {
-                app.set_update_note("Save or discard your changes first.".into());
+                toast(
+                    &app,
+                    ToastKind::Warning,
+                    "Save or discard your changes before restarting.",
+                    "",
+                );
                 return;
             }
             let Ok(exe) = &exe else {
-                app.set_update_note("Restart manually to use the new version.".into());
+                toast(
+                    &app,
+                    ToastKind::Warning,
+                    "Restart manually to use the new version.",
+                    "",
+                );
                 return;
             };
             match std::process::Command::new(exe)
@@ -228,7 +245,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
                     store_window_settings(&app, &env);
                     let _ = slint::quit_event_loop();
                 }
-                Err(err) => app.set_update_note(format!("Couldn't restart: {err}").into()),
+                Err(err) => alert(&app, "Couldn't restart", err.to_string()),
             }
         });
     }
@@ -375,8 +392,17 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             shell.schema_source = source;
             app.set_sync_note(note.clone().into());
             app.set_sync_clean(clean);
-            if !drift.is_empty() {
-                app.set_status(note.into());
+            if !drift.added.is_empty() {
+                let count = drift.added.len();
+                let plural = if count == 1 { "" } else { "s" };
+                toast(
+                    &app,
+                    ToastKind::Info,
+                    format!("{count} new setting{plural} synced from umbriel's docs."),
+                    "Review",
+                );
+            } else if !drift.is_empty() {
+                toast(&app, ToastKind::Info, note, "");
             }
             app.set_schema_empty(shell.schema.is_empty());
             app.set_sections(

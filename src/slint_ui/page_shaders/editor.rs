@@ -49,7 +49,7 @@ pub(super) fn open_shader_editor(
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) => {
-            app.set_status(format!("could not read {path}: {err}").into());
+            alert(app, "Couldn't open the shader", format!("{path}: {err}"));
             return;
         }
     };
@@ -280,7 +280,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                                     )
                                 })
                             {
-                                app.set_status(err.into());
+                                toast(&app, ToastKind::Error, err, "");
                             }
                         }
                         let changes = if apply_use {
@@ -316,7 +316,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                             use_changes.join(", ")
                         ));
                     }
-                    app.set_status(status.into());
+                    toast(&app, ToastKind::Success, status, "");
                 }
                 Err(err) => app.set_shader_editor_note(err.into()),
             }

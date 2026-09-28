@@ -1,6 +1,5 @@
 // Backups page: settings-style cards for retention/location, the list of
-// backups, and the selected backup's diff. Feedback is inline on the page
-// (owner directive: no popups, no toasts).
+// backups, and the selected backup's diff. Results arrive as toasts.
 
 import { LineEdit } from "std-widgets.slint";
 import { ActionButton, NavRow } from "../widgets.slint";
@@ -12,7 +11,6 @@ export component BackupsPage inherits Rectangle {
     in-out property <int> selected-backup: 0;
     in property <bool> restore-possible: false;
     in property <string> restore-diff;
-    in property <string> action-note;
     in-out property <string> count-text;
     in-out property <string> dir-text;
     callback backup-now();
@@ -210,14 +208,6 @@ export component BackupsPage inherits Rectangle {
                             enabled: root.restore-possible;
                             clicked => { root.restore-backup(); }
                         }
-                    }
-
-                    Text {
-                        text: root.action-note;
-                        color: Theme.text-2;
-                        font-size: Theme.font-small;
-                        wrap: TextWrap.word-wrap;
-                        visible: root.action-note != "";
                     }
 
                     Text {

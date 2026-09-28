@@ -290,12 +290,13 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     let backup_runs: Rc<RefCell<Vec<backups::RunInfo>>> = Rc::new(RefCell::new(Vec::new()));
 
     let app = AppWindow::new().map_err(|err| anyhow::anyhow!("window creation failed: {err}"))?;
+    app.set_toasts(Rc::new(VecModel::<Toast>::default()).into());
 
     {
         let shell = shell.borrow();
         app.set_config_path(common::pretty_path(&shell.path, &env).into());
         common::refresh_include_files(&app, &shell, &env);
-        app.set_include_note(shell.includes.notes.join("; ").into());
+        common::include_toast(&app, &shell);
     }
     app.set_dirty(false);
     // Every canary shares the version; its commit tells them apart.
@@ -341,7 +342,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
 
     // First-run state: a machine without a config gets the onboarding
     // panel — with the guided walk when umbriel is present. Umbriel
-    // missing additionally arms the quiet banner + empty state.
+    // missing additionally arms a toast + empty state.
     let umbriel_present = discovery::packaged_default(&env).is_some();
     let mode = guide::setup_mode(umbriel_present, path.exists());
     app.set_show_onboarding(matches!(
@@ -349,6 +350,15 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         guide::SetupMode::PlainInstall | guide::SetupMode::FreshWithUmbriel
     ));
     app.set_umbriel_missing(!umbriel_present);
+    // Onboarding already says so.
+    if !umbriel_present && !app.get_show_onboarding() {
+        common::toast(
+            &app,
+            ToastKind::Info,
+            "Umbriel isn't installed, so saves can't be validated.",
+            "",
+        );
+    }
     app.set_schema_empty(shell.borrow().schema.is_empty());
 
     app.set_sections(Rc::new(VecModel::from(sections::section_nav(&shell.borrow(), ""))).into());
@@ -438,6 +448,36 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     rows::install_value_editing(&app, &shell);
     rows::install_color_math(&app);
     app.invoke_home_requested();
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(&shell);
+        app.on_toast_action(move |id, action| {
+            let Some(app) = weak.upgrade() else { return };
+            common::close_toast(&app, id);
+            match action.as_str() {
+                "Restart" => app.invoke_restart_app(),
+                "Install" => app.invoke_install_update(),
+                "Details" => app.invoke_settings_requested(),
+                "Review" => app.invoke_home_requested(),
+                "Show" => {
+                    common::alert(
+                        &app,
+                        "Include file problems",
+                        shell.borrow().includes.notes.join("\n\n"),
+                    );
+                }
+                _ => {}
+            }
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_toast_closed(move |id| {
+            if let Some(app) = weak.upgrade() {
+                common::close_toast(&app, id);
+            }
+        });
+    }
 
     {
         let weak = app.as_weak();

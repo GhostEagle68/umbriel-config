@@ -355,11 +355,11 @@ pub(super) fn install_guide(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &d
                 match std::fs::write(&shell.path, STARTER_CONFIG) {
                     Ok(()) => {
                         app.set_show_onboarding(false);
-                        app.set_status("Created config.toml.".into());
+                        toast(&app, ToastKind::Success, "Created config.toml.", "");
                         true
                     }
                     Err(err) => {
-                        app.set_status(format!("Couldn't create config.toml: {err}").into());
+                        alert(&app, "Couldn't create config.toml", err.to_string());
                         false
                     }
                 }
@@ -404,14 +404,20 @@ pub(super) fn install_guide(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &d
         app.on_guide_relaunch(move || {
             let Some(app) = weak.upgrade() else { return };
             if app.get_dirty() {
-                app.set_status(
-                    "Save or discard your changes before running the guided setup.".into(),
+                toast(
+                    &app,
+                    ToastKind::Warning,
+                    "Save or discard your changes before running the guided setup.",
+                    "",
                 );
                 return;
             }
             if !start_guide(&mut shell.borrow_mut()) {
-                app.set_status(
-                    "Nothing to guide through yet — install umbriel and sync the schema.".into(),
+                toast(
+                    &app,
+                    ToastKind::Info,
+                    "Nothing to guide through yet — install umbriel and sync the schema.",
+                    "",
                 );
                 return;
             }
@@ -436,7 +442,7 @@ pub(super) fn install_guide(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &d
             shell.guide = None;
             app.set_show_guide(false);
             super::sections::refresh_shown_page(&app, &shell);
-            app.set_status("Guided setup cancelled.".into());
+            toast(&app, ToastKind::Info, "Guided setup cancelled.", "");
         });
     }
     {

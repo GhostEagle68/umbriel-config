@@ -174,14 +174,12 @@ fn apply_backup_dir(
     app.set_backup_dir_text(dir.to_owned().into());
     app.set_backup_note(backup_note(&settings, env));
     refresh_backup_runs(app, shell, env, runs_out);
-    app.set_backup_action_note(
-        if dir.is_empty() {
-            "Backups will be saved to the default location.".to_owned()
-        } else {
-            format!("Backups will be saved to {dir}.").to_owned()
-        }
-        .into(),
-    );
+    let note = if dir.is_empty() {
+        "Backups will be saved to the default location.".to_owned()
+    } else {
+        format!("Backups will be saved to {dir}.")
+    };
+    toast(app, ToastKind::Success, note, "");
 }
 
 pub(super) fn install_backups(
@@ -213,14 +211,16 @@ pub(super) fn install_backups(
                 let shell = shell.borrow();
                 write_backup_run(&shell, &env, "manual")
             };
-            app.set_backup_action_note(
-                match result {
-                    Ok(Some(id)) => format!("Backed up as {id}."),
-                    Ok(None) => "Nothing to back up yet, no config on disk.".to_owned(),
-                    Err(err) => format!("Backup failed: {err}"),
-                }
-                .into(),
-            );
+            match result {
+                Ok(Some(id)) => toast(&app, ToastKind::Success, format!("Backed up as {id}."), ""),
+                Ok(None) => toast(
+                    &app,
+                    ToastKind::Info,
+                    "Nothing to back up yet, no config on disk.",
+                    "",
+                ),
+                Err(err) => alert(&app, "Backup failed", err.to_string()),
+            }
             let shell = shell.borrow();
             refresh_backup_runs(&app, &shell, &env, &backup_runs);
         });
@@ -260,7 +260,7 @@ pub(super) fn install_backups(
                 let backup = match backups::read_run(&base, &run_id) {
                     Ok(backup) => backup,
                     Err(err) => {
-                        app.set_backup_action_note(format!("Restore failed: {err}").into());
+                        alert(&app, "Restore failed", err.to_string());
                         return;
                     }
                 };
@@ -284,7 +284,7 @@ pub(super) fn install_backups(
                 let shell = shell.borrow();
                 app.set_config_path(pretty_path(&shell.path, &env).into());
                 refresh_include_files(&app, &shell, &env);
-                app.set_include_note(shell.includes.notes.join("; ").into());
+                include_toast(&app, &shell);
                 app.set_dirty(false);
                 app.set_changed_count(0);
                 app.set_sections(
@@ -298,26 +298,10 @@ pub(super) fn install_backups(
                 super::sections::refill_page(&app, &shell, &section);
                 refresh_backup_runs(&app, &shell, &env, &backup_runs);
             }
-            match validate::validate(&shell.borrow().path) {
-                Ok(report) if report.diagnostics.is_empty() => {
-                    app.set_validate_note(String::new().into())
-                }
-                Ok(report) => app.set_validate_note(
-                    format!(
-                        "umbriel: {}.",
-                        report
-                            .diagnostics
-                            .iter()
-                            .map(|d| d.message())
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    )
-                    .into(),
-                ),
-                Err(err) => app.set_validate_note(format!("validation skipped ({err})").into()),
-            }
-            app.set_backup_action_note(
-                format!("Restored {restored} file(s) from {run_id}.").into(),
+            super::save::report_validation(
+                &app,
+                validate::validate(&shell.borrow().path),
+                &format!("Restored {restored} file(s) from {run_id}"),
             );
         });
     }
@@ -334,11 +318,21 @@ pub(super) fn install_backups(
                     let _ = app_settings::store(&env, &settings);
                     app.set_backup_count_text(count.to_string().into());
                     app.set_backup_note(backup_note(&settings, &env));
-                    app.set_backup_action_note(format!("Keeping {count} backups.").into());
+                    toast(
+                        &app,
+                        ToastKind::Success,
+                        format!("Keeping {count} backups."),
+                        "",
+                    );
                 }
                 None => {
                     app.set_backup_count_text(settings.backup_count.to_string().into());
-                    app.set_backup_action_note("Keep count must be a number of 1 or more.".into());
+                    toast(
+                        &app,
+                        ToastKind::Error,
+                        "Keep count must be a number of 1 or more.",
+                        "",
+                    );
                 }
             }
         });

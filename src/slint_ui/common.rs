@@ -165,6 +165,69 @@ pub(super) fn prettify(name: &str) -> String {
     owned
 }
 
+/// Push a note onto the bottom-right stack. Info and success notes fade
+/// after 5 s; warnings, errors and notes with an `action` button stay
+/// until clicked or closed. At most three show, the oldest leaving first.
+pub(super) fn toast(app: &AppWindow, kind: ToastKind, text: impl Into<SharedString>, action: &str) {
+    static NEXT_ID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+    let text = text.into();
+    let toasts = app.get_toasts();
+    let Some(list) = toasts.as_any().downcast_ref::<VecModel<Toast>>() else {
+        return;
+    };
+    // The same message twice (a rejected value typed again) shows once.
+    if list.iter().any(|shown| shown.text == text) {
+        return;
+    }
+    while list.row_count() >= 3 {
+        list.remove(0);
+    }
+    let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    list.push(Toast {
+        id,
+        kind,
+        text,
+        action: action.into(),
+    });
+    if action.is_empty() && matches!(kind, ToastKind::Info | ToastKind::Success) {
+        let weak = app.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_secs(5), move || {
+            if let Some(app) = weak.upgrade() {
+                close_toast(&app, id);
+            }
+        });
+    }
+}
+
+pub(super) fn close_toast(app: &AppWindow, id: i32) {
+    let toasts = app.get_toasts();
+    if let Some(list) = toasts.as_any().downcast_ref::<VecModel<Toast>>()
+        && let Some(index) = list.iter().position(|shown| shown.id == id)
+    {
+        list.remove(index);
+    }
+}
+
+/// Include files that failed to load, as one short line; Show opens the
+/// full parse errors in the alert.
+pub(super) fn include_toast(app: &AppWindow, shell: &Shell) {
+    let count = shell.includes.notes.len();
+    if count > 0 {
+        let text = if count == 1 {
+            "1 include file has a problem.".to_owned()
+        } else {
+            format!("{count} include files have problems.")
+        };
+        toast(app, ToastKind::Warning, text, "Show");
+    }
+}
+
+/// The one blocking popup, for failures the user must see.
+pub(super) fn alert(app: &AppWindow, title: &str, body: impl Into<SharedString>) {
+    app.set_alert_body(body.into());
+    app.set_alert_title(title.into());
+}
+
 /// A card's expansion: the user's choice wins, else the default
 /// (settings and monitor cards open, rule cards open only when alone).
 pub(super) fn card_expanded(shell: &Shell, key: &str, default: bool) -> bool {
