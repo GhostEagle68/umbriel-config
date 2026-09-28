@@ -274,7 +274,10 @@ pub(super) fn install_backups(
                     }
                 }
                 let path = shell.path.clone();
+                // Wallpapers are read once at startup; the reload keeps them.
+                let wallpapers = std::mem::take(&mut shell.wallpapers);
                 *shell = Shell::load(&path, &env);
+                shell.wallpapers = wallpapers;
                 restored
             };
             {

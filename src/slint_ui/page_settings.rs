@@ -386,8 +386,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
                 )))
                 .into(),
             );
-            let section = app.get_current_section().to_string();
-            super::sections::refill_page(&app, &shell, &section);
+            super::sections::refresh_shown_page(&app, &shell);
         });
     }
     {

@@ -117,6 +117,17 @@ pub(super) fn install_search(
             app.global::<KeybindsState>().set_search(filter);
             keybind_view.borrow_mut().exact = false;
             app.set_current_section("keybinds".into());
+            // The top bar and sidebar follow, as for a sidebar click.
+            let (title, description) = super::sections::page_meta("keybinds");
+            app.set_page_title(title.into());
+            app.set_page_description(description.into());
+            app.set_page_group(
+                catalog::page("keybinds")
+                    .map_or(catalog::MORE_GROUP, |page| page.group)
+                    .into(),
+            );
+            let nav = super::sections::section_nav(&shell.borrow(), "keybinds");
+            app.set_sections(Rc::new(VecModel::from(nav)).into());
             app.set_page(Page::Keybinds);
             let shell = shell.borrow();
             super::page_keybinds::rebuild_keybind_rows(&app, &shell, &kb_actions, &keybind_view);
