@@ -1,6 +1,6 @@
-//! The Shaders page: the library, community downloads with update
-//! checks, the assignment dropdowns, the visual editor with its preview
-//! scrubber. Split by concern; each part registers its own callbacks.
+//! The Shaders page: the library with thumbnails, community downloads
+//! with update checks, the assignment picker, the visual editor with
+//! its preview scrubber. Split by concern; each part registers its own callbacks.
 
 use super::*;
 

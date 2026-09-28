@@ -8,7 +8,12 @@
 // Every visual piece below is a small component on Theme tokens.
 
 import { CheckBox, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
-import { ActionButton, PageHeader, SectionHeader } from "../widgets.slint";
+import {
+    ActionButton,
+    PageHeader,
+    SectionHeader,
+    Segmented,
+} from "../widgets.slint";
 import {
     ActionChoice,
     AppChoice,
@@ -110,42 +115,6 @@ component Keycaps inherits HorizontalLayout {
             font-size: Theme.font-small;
             vertical-alignment: center;
             horizontal-alignment: center;
-        }
-    }
-}
-
-// All · Yours · Defaults.
-component Segmented inherits Rectangle {
-    in property <[string]> options;
-    in-out property <int> selected;
-    callback changed();
-    height: 28px;
-    border-radius: Theme.radius-s;
-    background: Theme.bg-2;
-
-    HorizontalLayout {
-        padding: 2px;
-        spacing: 2px;
-
-        for option[i] in root.options: Rectangle {
-            width: label.preferred-width + 20px;
-            border-radius: Theme.radius-s;
-            background: i == root.selected ? Theme.bg-0 : ta.has-hover ? Theme.border : transparent;
-
-            label := Text {
-                text: option;
-                color: i == root.selected ? Theme.text-1 : Theme.text-2;
-                font-size: Theme.font-small;
-                vertical-alignment: center;
-                horizontal-alignment: center;
-            }
-
-            ta := TouchArea {
-                clicked => {
-                    root.selected = i;
-                    root.changed();
-                }
-            }
         }
     }
 }

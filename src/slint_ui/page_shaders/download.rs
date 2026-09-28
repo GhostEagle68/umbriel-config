@@ -203,6 +203,8 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                                 app.invoke_section_selected("shaders".into());
                             }
                             app.set_shader_update_available(false);
+                            // Thumbnails for the newly arrived shaders.
+                            app.invoke_shader_thumbs_wanted();
                             toast(&app, ToastKind::Success, note, "");
                         }
                         Err(note) => toast(&app, ToastKind::Error, note, ""),

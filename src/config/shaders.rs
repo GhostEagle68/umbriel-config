@@ -37,8 +37,6 @@ pub struct ShaderEntry {
     /// The TOML file defining that preset; see [`preset_file_for`]. It
     /// may not exist yet — assigning the shader writes it.
     pub preset_file: PathBuf,
-    /// Human label for dropdowns and cards.
-    pub label: String,
     /// Where it was found.
     pub source: Source,
     /// Why umbriel would reject the file (missing, empty, too large,
@@ -280,7 +278,6 @@ fn entry_for(path: PathBuf, source: Source) -> ShaderEntry {
     let invalid = validate(&path);
     let description = readme_description(&path);
     ShaderEntry {
-        label: format!("{name} ({})", source.label()),
         name,
         preset,
         preset_file,

@@ -41,6 +41,10 @@ pub struct Settings {
     pub backup_count: u32,
     /// Custom backup location; None = the state-directory default.
     pub backup_dir: Option<String>,
+    /// Shader library and picker: tiles instead of rows.
+    pub shader_grid: bool,
+    /// Hovering a shader plays it.
+    pub shader_hover_preview: bool,
 }
 
 pub const DEFAULT: Settings = Settings {
@@ -53,6 +57,8 @@ pub const DEFAULT: Settings = Settings {
     // Canary while the app is unfinished; Stable once it reaches 1.0.
     channel: Channel::Canary,
     canary_auto_install: false,
+    shader_grid: true,
+    shader_hover_preview: true,
 };
 
 pub fn path(env: &discovery::Env) -> PathBuf {
@@ -102,6 +108,11 @@ fn parse(text: &str) -> Settings {
                 })
             }
             "canary_auto_install" => settings.canary_auto_install = value == "true",
+            "shader_grid" => settings.shader_grid = value.parse().unwrap_or(DEFAULT.shader_grid),
+            "shader_hover_preview" => {
+                settings.shader_hover_preview =
+                    value.parse().unwrap_or(DEFAULT.shader_hover_preview)
+            }
             "backup_count" => settings.backup_count = value.parse().unwrap_or(DEFAULT.backup_count),
             "backup_dir" => settings.backup_dir = (!value.is_empty()).then(|| value.to_owned()),
             _ => {}
@@ -119,7 +130,7 @@ pub fn store(env: &discovery::Env, settings: &Settings) -> std::io::Result<()> {
     std::fs::write(
         path,
         format!(
-            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\ndark = {}\nbackup_count = {}\nbackup_dir = {}\nchannel = {}\ncanary_auto_install = {}\n",
+            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\ndark = {}\nbackup_count = {}\nbackup_dir = {}\nchannel = {}\ncanary_auto_install = {}\nshader_grid = {}\nshader_hover_preview = {}\n",
             settings.check_updates_on_start,
             settings.window_width,
             settings.window_height,
@@ -128,6 +139,8 @@ pub fn store(env: &discovery::Env, settings: &Settings) -> std::io::Result<()> {
             settings.backup_dir.as_deref().unwrap_or(""),
             settings.channel.name(),
             settings.canary_auto_install,
+            settings.shader_grid,
+            settings.shader_hover_preview,
         ),
     )
 }
@@ -161,6 +174,8 @@ mod tests {
                 canary_auto_install: true,
                 backup_count: 3,
                 backup_dir: Some("/tmp/b".to_owned()),
+                shader_grid: false,
+                shader_hover_preview: false,
             },
         )
         .unwrap();
@@ -175,6 +190,8 @@ mod tests {
                 canary_auto_install: true,
                 backup_count: 3,
                 backup_dir: Some("/tmp/b".to_owned()),
+                shader_grid: false,
+                shader_hover_preview: false,
             }
         );
         store(&e, &DEFAULT).unwrap();

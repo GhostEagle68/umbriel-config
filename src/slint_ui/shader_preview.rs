@@ -13,9 +13,9 @@ use glow::HasContext as _;
 pub const PREVIEW_WIDTH: u32 = 384;
 pub const PREVIEW_HEIGHT: u32 = 216;
 
-/// The fragment prefix umbriel prepends to an animation effect
-/// (umbrielfx `effect_shader.c`: `kPreamble`, `kAnimationSection`, then
-/// `#line 1`), verbatim. The `#line 1` makes driver errors carry
+/// The fragment prefix umbriel prepends to every effect, then a
+/// kind's own section (umbrielfx `effect_shader.c`: `kPreamble`, the
+/// kind's section, then `#line 1`), verbatim. The `#line 1` makes driver errors carry
 /// user-relative line numbers; keep the placement identical or errors
 /// point at the wrong lines.
 const PREAMBLE: &str = "\
@@ -58,20 +58,98 @@ vec4 umbriel_palette_at(float t) {
   }
   return mix(from, to, scaled - index);
 }
+";
+
+const ANIMATION: &str = "\
 uniform float umbriel_progress;
 uniform float umbriel_linear_progress;
 uniform float umbriel_direction;
 uniform vec4 umbriel_random_seed;
 #define umbriel_clamped_progress clamp(umbriel_progress, 0.0, 1.0)
-#line 1
 ";
-/// The suffix umbriel appends: main() runs the user function per pixel,
-/// with `v_texcoord` in [0,1]², (0,0) at the window's top-left.
-const SUFFIX: &str = "\nvoid main() { gl_FragColor = animation(v_texcoord); }\n";
+const BORDER: &str = "\
+uniform vec4 umbriel_border_hole;
+uniform vec4 umbriel_border_radius;
+float umbriel_border_distance(vec2 uv) {
+  vec2 half_size = umbriel_border_hole.zw * umbriel_size * 0.5;
+  vec2 p = (uv - umbriel_border_hole.xy) * umbriel_size - half_size;
+  float r = p.y < 0.0 ? (p.x < 0.0 ? umbriel_border_radius.x : umbriel_border_radius.y)
+                      : (p.x < 0.0 ? umbriel_border_radius.w : umbriel_border_radius.z);
+  r = min(r, min(half_size.x, half_size.y));
+  vec2 q = abs(p) - half_size + r;
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+";
+const MASK: &str = "\
+uniform vec4 umbriel_corner_radius;
+float umbriel_mask(vec2 uv) {
+  vec2 half_size = umbriel_size * 0.5;
+  vec2 p = uv * umbriel_size - half_size;
+  float r = p.y < 0.0 ? (p.x < 0.0 ? umbriel_corner_radius.x : umbriel_corner_radius.y)
+                      : (p.x < 0.0 ? umbriel_corner_radius.w : umbriel_corner_radius.z);
+  r = min(r, min(half_size.x, half_size.y));
+  vec2 q = abs(p) - half_size + r;
+  float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+  return 1.0 - smoothstep(-0.5, 0.5, d * umbriel_scale);
+}
+";
+const POINTER: &str = "uniform vec2 umbriel_pointer;\n";
+const LINE: &str = "#line 1\n";
+
+/// The five effect kinds; the entry point a shader defines says which.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Animation,
+    Border,
+    Window,
+    Screen,
+    Cursor,
+}
+
+impl Kind {
+    fn of(code: &str) -> Self {
+        [
+            ("border", Kind::Border),
+            ("window", Kind::Window),
+            ("screen", Kind::Screen),
+            ("cursor", Kind::Cursor),
+        ]
+        .into_iter()
+        .find(|(name, _)| code.contains(&format!("vec4 {name}(")))
+        .map_or(Kind::Animation, |(_, kind)| kind)
+    }
+
+    /// The kind's own uniforms, then the `main()` umbriel appends.
+    fn parts(self) -> (String, &'static str) {
+        match self {
+            Kind::Animation => (
+                ANIMATION.to_owned(),
+                "\nvoid main() { gl_FragColor = animation(v_texcoord); }\n",
+            ),
+            Kind::Border => (
+                BORDER.to_owned(),
+                "\nvoid main() {\n  vec4 c = border(v_texcoord);\n  gl_FragColor = c * smoothstep(-0.5, 0.5, umbriel_border_distance(v_texcoord));\n}\n",
+            ),
+            Kind::Window => (
+                MASK.to_owned(),
+                "\nvoid main() { gl_FragColor = mix(umbriel_sample(v_texcoord), window(v_texcoord), umbriel_mask(v_texcoord)); }\n",
+            ),
+            Kind::Screen => (
+                String::new(),
+                "\nvoid main() { gl_FragColor = screen(v_texcoord); }\n",
+            ),
+            Kind::Cursor => (
+                format!("{MASK}{POINTER}"),
+                "\nvoid main() { gl_FragColor = mix(umbriel_sample(v_texcoord), cursor(v_texcoord), umbriel_mask(v_texcoord)); }\n",
+            ),
+        }
+    }
+}
 
 /// Full fragment source as umbriel would compile it.
 pub fn full_source(user_code: &str) -> String {
-    format!("{PREAMBLE}{user_code}{SUFFIX}")
+    let (section, suffix) = Kind::of(user_code).parts();
+    format!("{PREAMBLE}{section}{LINE}{user_code}{suffix}")
 }
 
 /// The preview's own vertex stage: a clip-space quad whose `v_texcoord`
@@ -136,6 +214,9 @@ pub enum PreviewCommand {
         eased: f32,
         direction: f32,
     },
+    /// Render this source once, mid-animation on the window stand-in,
+    /// as a library thumbnail. The live preview is left as it was.
+    Thumbnail { path: String, source: String },
 }
 
 /// What the worker tells the UI.
@@ -148,6 +229,8 @@ pub enum PreviewEvent {
     Compiled(Option<String>),
     /// A rendered frame: RGBA8, rows top-down.
     Frame(u32, u32, Vec<u8>),
+    /// A thumbnail for the shader at `path`; None when it won't compile.
+    Thumbnail(String, Option<(u32, u32, Vec<u8>)>),
 }
 
 /// UI-side handle to the worker thread. Cheap to keep around; sending on
@@ -208,6 +291,7 @@ fn run_worker(cmd_rx: mpsc::Receiver<PreviewCommand>, evt_tx: mpsc::Sender<Previ
         // sources are already superseded, and their errors would only
         // flash past. The source goes first so the frame uses it.
         let (mut target, mut source, mut render) = (None, None, None);
+        let mut thumbnails = Vec::new();
         for cmd in std::iter::once(first).chain(std::iter::from_fn(|| cmd_rx.try_recv().ok())) {
             match cmd {
                 PreviewCommand::SetTarget(t) => target = Some(t),
@@ -217,6 +301,7 @@ fn run_worker(cmd_rx: mpsc::Receiver<PreviewCommand>, evt_tx: mpsc::Sender<Previ
                     eased,
                     direction,
                 } => render = Some((linear, eased, direction)),
+                PreviewCommand::Thumbnail { path, source } => thumbnails.push((path, source)),
             }
         }
         // Swap frames and compile without drawing, then draw once: the
@@ -242,6 +327,10 @@ fn run_worker(cmd_rx: mpsc::Receiver<PreviewCommand>, evt_tx: mpsc::Sender<Previ
                 }
                 Err(_) => {}
             }
+        }
+        for (path, source) in thumbnails {
+            let frame = state.thumbnail(&source);
+            let _ = evt_tx.send(PreviewEvent::Thumbnail(path, frame));
         }
     }
 }
@@ -271,7 +360,8 @@ struct PreviewState {
     program: Option<LinkedProgram>,
     /// Last render: (linear, eased, direction).
     last: (f32, f32, f32),
-    /// The current target's size (at most the surface's).
+    /// The current target and its size (at most the surface's).
+    target: Target,
     target_size: (u32, u32),
     width: u32,
     height: u32,
@@ -290,6 +380,10 @@ struct LinkedProgram {
     time: Option<glow::UniformLocation>,
     sample_matrix: Option<glow::UniformLocation>,
     previous_sample_matrix: Option<glow::UniformLocation>,
+    border_hole: Option<glow::UniformLocation>,
+    border_radius: Option<glow::UniformLocation>,
+    corner_radius: Option<glow::UniformLocation>,
+    pointer: Option<glow::UniformLocation>,
 }
 
 impl PreviewState {
@@ -397,6 +491,7 @@ impl PreviewState {
             tex_previous,
             program: None,
             last: (0.0, 0.0, 1.0),
+            target: Target::Window,
             target_size: (width, height),
             width,
             height,
@@ -413,6 +508,7 @@ impl PreviewState {
 
     /// Re-upload both textures with `target`'s stand-in frames.
     fn set_target(&mut self, target: Target) {
+        self.target = target;
         let (tw, th) = target.size(self.width, self.height);
         self.target_size = (tw, th);
         let (current, previous) = test_frames(tw, th, target);
@@ -432,6 +528,28 @@ impl PreviewState {
                 );
             }
         }
+    }
+
+    /// Render `source` once at mid-animation on the window stand-in, then
+    /// put the live program, target and position back.
+    fn thumbnail(&mut self, source: &str) -> Option<(u32, u32, Vec<u8>)> {
+        let live = self.program.take();
+        let (last, target) = (self.last, self.target);
+        if target != Target::Window {
+            self.set_target(Target::Window);
+        }
+        let frame = self
+            .compile(source)
+            .ok()
+            .and_then(|()| self.render(0.5, 0.5, 1.0).ok());
+        if let Some(thumb) = std::mem::replace(&mut self.program, live) {
+            unsafe { self.gl.delete_program(thumb.program) };
+        }
+        if target != Target::Window {
+            self.set_target(target);
+        }
+        self.last = last;
+        frame
     }
 
     /// Compile user code exactly as umbriel assembles it. On success the
@@ -470,6 +588,10 @@ impl PreviewState {
                 time: loc("umbriel_time"),
                 sample_matrix: loc("umbriel_sample_matrix"),
                 previous_sample_matrix: loc("umbriel_previous_sample_matrix"),
+                border_hole: loc("umbriel_border_hole"),
+                border_radius: loc("umbriel_border_radius"),
+                corner_radius: loc("umbriel_corner_radius"),
+                pointer: loc("umbriel_pointer"),
             }
         };
         if let Some(old) = self.program.replace(linked) {
@@ -532,6 +654,19 @@ impl PreviewState {
                 false,
                 &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
             );
+            // A border ring 24 px thick around a 12 px rounded client,
+            // and a pointer that sweeps across as the preview plays.
+            let (pad_x, pad_y) = (24.0 / tw as f32, 24.0 / th as f32);
+            gl.uniform_4_f32(
+                linked.border_hole.as_ref(),
+                pad_x,
+                pad_y,
+                1.0 - 2.0 * pad_x,
+                1.0 - 2.0 * pad_y,
+            );
+            gl.uniform_4_f32(linked.border_radius.as_ref(), 12.0, 12.0, 12.0, 12.0);
+            gl.uniform_4_f32(linked.corner_radius.as_ref(), 12.0, 12.0, 12.0, 12.0);
+            gl.uniform_2_f32(linked.pointer.as_ref(), 0.2 + 0.6 * linear, 0.5);
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.quad));
             gl.enable_vertex_attrib_array(0);
             gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 8, 0);
@@ -1049,8 +1184,8 @@ mod tests {
         let source = full_source("vec4 animation(vec2 uv) { MARKER }");
         // User code starts right after the one `#line 1`.
         assert!(source.starts_with(PREAMBLE));
-        assert!(PREAMBLE.ends_with("\n#line 1\n"));
         assert_eq!(source.matches("#line").count(), 1);
+        assert!(source.contains("\n#line 1\nvec4 animation"));
         let marker = source.find("MARKER").unwrap();
         let suffix = source
             .find("void main() { gl_FragColor = animation(v_texcoord); }")
@@ -1071,6 +1206,22 @@ mod tests {
             "umbriel_palette_at(",
         ] {
             assert!(source.contains(name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn kinds_follow_the_entry_point() {
+        for (code, kind) in [
+            ("vec4 border(vec2 uv) { return vec4(0.0); }", Kind::Border),
+            ("vec4 window(vec2 uv) { return vec4(0.0); }", Kind::Window),
+            ("vec4 screen(vec2 uv) { return vec4(0.0); }", Kind::Screen),
+            ("vec4 cursor(vec2 uv) { return vec4(0.0); }", Kind::Cursor),
+            (
+                "vec4 animation(vec2 uv) { return vec4(0.0); }",
+                Kind::Animation,
+            ),
+        ] {
+            assert!(Kind::of(code) == kind, "{code}");
         }
     }
 
@@ -1231,5 +1382,30 @@ mod tests {
         let alpha = |x: u32, y: u32| pixels[((y * w + x) * 4 + 3) as usize];
         assert_eq!(alpha(1, h / 2), 255);
         assert_eq!(alpha(w / 2, h / 2), 0);
+    }
+
+    #[test]
+    fn thumbnails_leave_the_live_preview_alone() {
+        let Ok(mut state) = PreviewState::new(64, 48) else {
+            return;
+        };
+        state
+            .compile("vec4 animation(vec2 uv) { return umbriel_sample(uv); }")
+            .expect("valid shader compiles");
+        state.set_target(Target::Layer);
+        let before = state.render(0.3, 0.3, 1.0).expect("render");
+        // A thumbnail draws on the window stand-in at full size...
+        let (w, h, _) = state
+            .thumbnail("vec4 animation(vec2 uv) { return vec4(1.0, 0.0, 0.0, 1.0); }")
+            .expect("thumbnail");
+        assert_eq!((w, h), (64, 48));
+        assert!(
+            state
+                .thumbnail("vec4 animation(vec2 uv) { oops }")
+                .is_none()
+        );
+        // ...and the live program, target and position come back.
+        assert_eq!(state.last_position(), (0.3, 0.3, 1.0));
+        assert_eq!(state.render(0.3, 0.3, 1.0).expect("render"), before);
     }
 }

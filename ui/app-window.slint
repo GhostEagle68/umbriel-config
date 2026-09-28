@@ -60,6 +60,7 @@ import { RulePage } from "pages/rules.slint";
 import {
     ShaderBuilderPanel,
     ShaderCodeEditor,
+    ShaderPicker,
     ShaderPreviewRow,
     ShadersPage,
 } from "pages/shaders.slint";
@@ -118,6 +119,8 @@ export component AppWindow inherits Window {
     in property <[DeskMonitor]> home-monitors;
     in property <DeskStyle> home-desk-style;
     callback home-requested();
+    // Shaders page tab (0 Assignments, 1 Library), kept across rebuilds.
+    in-out property <int> shader-tab: 0;
     // The sidebar group of the page on show, for the top bar's icon.
     in property <string> page-group;
     pure function group-icon(group: string) -> image {
@@ -169,7 +172,7 @@ export component AppWindow inherits Window {
     callback toggle-monitor(string);
     callback toggle-rule(int, int);
     callback shaders-download();
-    // Assignment dropdown pick: (key, choice index); 0 clears.
+    // Assign a shader: (key, 0 for none or library index + 1).
     callback shader-assign(string, int);
     callback shader-fix-include();
     callback shader-convert-legacy();
@@ -192,6 +195,22 @@ export component AppWindow inherits Window {
     in-out property <string> outputs-add-name;
     in property <[RuleCard]> rule-cards;
     in property <[ShaderInfo]> shaders;
+    // How many shaders are yours, and the rest, for the grid.
+    in property <int> shader-own-count;
+    in property <int> shader-other-count;
+    // Library and picker view, remembered in the app's settings.
+    in-out property <bool> shader-grid: true;
+    in-out property <bool> shader-hover-preview: true;
+    callback shader-view-changed();
+    // Draw thumbnails for library shaders that don't have one yet.
+    callback shader-thumbs-wanted();
+    // Play library shader (index) in the live preview as event (index).
+    callback shader-preview-file(int, int);
+    // The shader picker: for an assignment key, or "" to just look.
+    in-out property <bool> shader-picker-open;
+    in-out property <string> shader-picker-key;
+    in-out property <string> shader-picker-title;
+    in-out property <int> shader-picker-selected;
     in property <[ShaderAssignment]> shader-assignments;
     in property <string> shader-download-note;
     in property <bool> shader-include-missing;
@@ -650,13 +669,37 @@ export component AppWindow inherits Window {
                         community-installed: root.shader-community-installed;
                         update-available: root.shader-update-available;
                         downloading <=> root.shader-downloading;
+                        tab <=> root.shader-tab;
+                        own-count: root.shader-own-count;
+                        other-count: root.shader-other-count;
+                        grid <=> root.shader-grid;
+                        hover-preview <=> root.shader-hover-preview;
+                        live-image: root.shader-preview-image;
                         download => { root.shaders-download(); }
 
                         fix-include => { root.shader-fix-include(); }
                         convert-legacy => { root.shader-convert-legacy(); }
-                        // Without this wiring the dropdowns silently no-op:
-                        // no edit, no dirty flag, nothing to save.
-                        assign(k, i) => { root.shader-assign(k, i); }
+                        pick(key, event, current) => {
+                            root.shader-picker-key = key;
+                            root.shader-picker-title = "Shader for " + root.shader-assignments[event].label;
+                            root.shader-picker-selected = current;
+                            root.shader-preview-event = event;
+                            root.shader-picker-open = true;
+                            if (current >= 0) {
+                                root.shader-preview-file(current, event);
+                            }
+                        }
+                        open-preview(index) => {
+                            root.shader-picker-key = "";
+                            root.shader-picker-title = "Shaders";
+                            root.shader-picker-selected = index;
+                            root.shader-picker-open = true;
+                            root.shader-preview-file(index, root.shader-preview-event);
+                        }
+                        play(index) => { root.shader-preview-file(index, 0); }
+                        scrub(v) => { root.shader-preview-scrub(v); }
+                        view-changed => { root.shader-view-changed(); }
+                        thumbs-wanted => { root.shader-thumbs-wanted(); }
                         editor-new => { root.shader-editor-new(); }
                         editor-edit(p) => { root.shader-editor-edit(p); }
                         editor-fork(p, n) => { root.shader-editor-fork(p, n); }
@@ -1399,7 +1442,9 @@ export component AppWindow inherits Window {
             x: (parent.width - self.width) / 2;
             y: 24px;
             background: Theme.bg-1;
-            border-radius: Theme.radius-l;
+            border-radius: Theme.radius-xl;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: #00000066;
             border-width: 1px;
             border-color: Theme.border;
 
@@ -1680,6 +1725,44 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
+    }
+
+    // ── shader picker (opened from an assignment or the library) ──
+    if root.shader-picker-open: ShaderPicker {
+        title: root.shader-picker-title;
+        key: root.shader-picker-key;
+        shaders: root.shaders;
+        own-count: root.shader-own-count;
+        other-count: root.shader-other-count;
+        grid <=> root.shader-grid;
+        hover-preview <=> root.shader-hover-preview;
+        selected <=> root.shader-picker-selected;
+        preview-image: root.shader-preview-image;
+        preview-ready: root.shader-preview-ready;
+        preview-note: root.shader-preview-note;
+        direction-in: root.shader-preview-direction > 0;
+        progress <=> root.shader-preview-progress;
+        events: root.shader-preview-events;
+        event-index <=> root.shader-preview-event;
+        configured-ms: root.shader-preview-length-ms;
+        close => { root.shader-picker-open = false; }
+        assign(index) => {
+            root.shader-assign(root.shader-picker-key, index + 1);
+            root.shader-picker-open = false;
+        }
+        show(index) => { root.shader-preview-file(index, root.shader-preview-event); }
+        event-picked(i) => { root.shader-preview-event-picked(i); }
+        scrub(v) => { root.shader-preview-scrub(v); }
+        toggle-direction => { root.shader-preview-direction-toggled(); }
+        view-changed => { root.shader-view-changed(); }
+        edit(index) => {
+            root.shader-picker-open = false;
+            root.shader-editor-edit(root.shaders[index].path);
+        }
+        fork(index) => {
+            root.shader-picker-open = false;
+            root.shader-editor-fork(root.shaders[index].path, root.shaders[index].name);
         }
     }
 

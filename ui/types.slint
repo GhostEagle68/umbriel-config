@@ -147,6 +147,12 @@ export struct ShaderInfo {
     is-own: bool,
     // Events assigned this shader ("Windows out, Overview"), or "".
     used-by: string,
+    // A still frame mid-animation, once the preview worker has drawn it.
+    thumb: image,
+    has-thumb: bool,
+    // Position within its section (yours, or built-in and community),
+    // for laying out the grid.
+    slot: int,
 }
 
 // A code-editor key's result: the new text and the selection to restore
@@ -194,11 +200,10 @@ export struct ShaderAssignment {
     // Dotted schema key, e.g. animation.windows_in.shader.
     key: string,
     label: string,
-    // Dropdown: index 0 = built-in, then shaders in order, then (when
-    // the value matches no library shader) one trailing entry for it.
-    choices: [string],
-    // Index into choices of the event's current shader.
+    // The event's shader: 0 none, 1.. library shader (index + 1), past
+    // the library a value that matches none of it.
     current: int,
+    current-name: string,
     // The raw current value, for the warning.
     current-value: string,
     // Why umbriel won't load the value ("file not found", ...), or "".

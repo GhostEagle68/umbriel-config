@@ -252,6 +252,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                     // What the "Use for" step switched on or off.
                     let use_changes = {
                         let mut shell = shell.borrow_mut();
+                        forget_thumbnail(&mut shell, &path);
                         shell.shader_editing = Some(path.clone());
                         shell.shader_editor_baseline = text.clone();
                         shell.shader_editor_baseline_name = name.clone();
@@ -291,6 +292,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                         scan_shaders(&mut shell);
                         changes
                     };
+                    request_thumbnails(&app, &shell);
                     let shell = shell.borrow();
                     app.set_dirty(shell.any_modified());
                     rebuild_shaders(&app, &shell);

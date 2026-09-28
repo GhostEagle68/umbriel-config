@@ -1,5 +1,5 @@
 //! The library and its assignments: scanning shader files, drawing the page's
-//! cards and dropdowns, resolving and writing `animation.<event>.effect`
+//! library and assignment rows, resolving and writing `animation.<event>.effect`
 //! (with the preset file and its include), and deleting shaders.
 
 use super::super::common::*;
@@ -37,40 +37,56 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
         .iter()
         .map(|entry| shaders::file_key(&entry.path))
         .collect();
+    // Each section numbers its own shaders, for the grid's positions.
+    let (mut own_count, mut other_count) = (0, 0);
     let infos: Vec<ShaderInfo> = shell
         .shaders
         .iter()
         .zip(&entry_keys)
-        .map(|(entry, entry_key)| ShaderInfo {
-            name: entry.name.clone().into(),
-            value: entry.preset.clone().into(),
-            source: entry.source.label().into(),
-            description: entry.description.clone().into(),
-            invalid: entry.invalid.clone().unwrap_or_default().into(),
-            path: entry.path.display().to_string().into(),
-            is_own: entry.source == shaders::Source::ConfigDir,
-            used_by: shaders::EVENTS
-                .iter()
-                .zip(&assigned)
-                .filter(|(_, current)| {
-                    current
-                        .as_ref()
-                        .is_some_and(|current| current.key == *entry_key)
-                })
-                .map(|(event, _)| prettify(event))
-                .collect::<Vec<_>>()
-                .join(", ")
-                .into(),
+        .map(|(entry, entry_key)| {
+            let is_own = entry.source == shaders::Source::ConfigDir;
+            let count = if is_own {
+                &mut own_count
+            } else {
+                &mut other_count
+            };
+            let slot = *count;
+            *count += 1;
+            let thumb = shell.shader_thumbs.get(&entry.path);
+            ShaderInfo {
+                name: entry.name.clone().into(),
+                value: entry.preset.clone().into(),
+                source: entry.source.label().into(),
+                description: entry.description.clone().into(),
+                invalid: entry.invalid.clone().unwrap_or_default().into(),
+                path: entry.path.display().to_string().into(),
+                is_own,
+                used_by: shaders::EVENTS
+                    .iter()
+                    .zip(&assigned)
+                    .filter(|(_, current)| {
+                        current
+                            .as_ref()
+                            .is_some_and(|current| current.key == *entry_key)
+                    })
+                    .map(|(event, _)| prettify(event))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+                    .into(),
+                thumb: thumb.cloned().unwrap_or_default(),
+                has_thumb: thumb.is_some(),
+                slot,
+            }
         })
         .collect();
     app.set_shaders(Rc::new(VecModel::from(infos)).into());
+    app.set_shader_own_count(own_count);
+    app.set_shader_other_count(other_count);
 
     let rows: Vec<ShaderAssignment> = shaders::EVENTS
         .iter()
         .zip(assigned)
         .map(|(event, current)| {
-            let mut choices: Vec<SharedString> = vec!["(no shader)".into()];
-            choices.extend(shell.shaders.iter().map(|entry| entry.label.clone().into()));
             // Match by the file umbriel would actually read, so
             // "./shaders/x.glsl" and an absolute path both find x.glsl.
             let index = current.as_ref().and_then(|current| {
@@ -85,26 +101,19 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
                 None => "",
             };
             let current = current.map(|current| current.value);
-            // A value outside the library gets its own trailing entry, so
-            // the dropdown shows it and "(no shader)" is a real change.
-            let current_index = match (index, &current) {
-                (Some(position), _) => position + 1,
-                (None, Some(value)) => {
-                    let label = if warning.is_empty() {
-                        format!("{value} (outside the library)")
-                    } else {
-                        format!("⚠ {value} (missing)")
-                    };
-                    choices.push(label.into());
-                    choices.len() - 1
-                }
-                (None, None) => 0,
+            // 0 is no shader, 1.. the library; a value outside the
+            // library sits just past it, so picking "No shader" is a
+            // real change.
+            let (current_index, current_name) = match (index, &current) {
+                (Some(position), _) => (position + 1, shell.shaders[position].name.clone()),
+                (None, Some(value)) => (shell.shaders.len() + 1, value.clone()),
+                (None, None) => (0, "No shader".to_owned()),
             };
             ShaderAssignment {
                 key: format!("animation.{event}.effect").into(),
                 label: prettify(event).into(),
-                choices: Rc::new(VecModel::from(choices)).into(),
                 current: current_index as i32,
+                current_name: current_name.into(),
                 current_value: current.unwrap_or_default().into(),
                 warning: warning.into(),
             }
@@ -145,7 +154,7 @@ pub(super) struct Resolved {
 }
 
 /// Every event's assignment (in `shaders::EVENTS` order), resolved once.
-/// The single place assignment paths are interpreted: the dropdowns,
+/// The single place assignment paths are interpreted: the assignment rows,
 /// the delete confirm and the Use-for checklist all read from it.
 pub(super) fn resolved_assignments(shell: &Shell) -> Vec<Option<Resolved>> {
     let docs = chain_docs(shell);
@@ -501,7 +510,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             };
             {
                 let mut shell = shell.borrow_mut();
-                // Resolve the pick against the list the dropdown was built
+                // Resolve the pick against the list the picker was built
                 // from; an index past it changes nothing.
                 let shader = match usize::try_from(index) {
                     Ok(0) | Err(_) => None,
@@ -516,8 +525,8 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                     toast(&app, ToastKind::Error, err, "");
                 }
             }
-            // Always rebuild so the dropdowns mirror the documents, even
-            // when the pick changed nothing.
+            // Always rebuild so the assignment rows mirror the documents,
+            // even when the pick changed nothing.
             let shell = shell.borrow();
             app.set_dirty(shell.any_modified());
             rebuild_shaders(&app, &shell);

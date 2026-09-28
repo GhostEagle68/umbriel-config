@@ -212,6 +212,43 @@ export component DraftEdit inherits Rectangle {
     }
 }
 
+// A row of mutually exclusive choices: the keybind filter, the
+// Shaders page's tabs.
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> selected;
+    callback changed();
+    height: 28px;
+    border-radius: Theme.radius-s;
+    background: Theme.bg-2;
+
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+
+        for option[i] in root.options: Rectangle {
+            width: label.preferred-width + 20px;
+            border-radius: Theme.radius-s;
+            background: i == root.selected ? Theme.bg-0 : ta.has-hover ? Theme.border : transparent;
+
+            label := Text {
+                text: option;
+                color: i == root.selected ? Theme.text-1 : Theme.text-2;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+
+            ta := TouchArea {
+                clicked => {
+                    root.selected = i;
+                    root.changed();
+                }
+            }
+        }
+    }
+}
+
 // Page title and description, with the page's actions on the right.
 export component PageHeader inherits HorizontalLayout {
     in property <string> title;

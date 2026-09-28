@@ -2,8 +2,14 @@
 // discovered GLSL effects, the per-event assignment rows, the visual
 // effect builder, and the live preview row.
 
-import { ComboBox, ScrollView, Slider } from "std-widgets.slint";
-import { ActionButton } from "../widgets.slint";
+import { ComboBox, ScrollView, Slider, Switch } from "std-widgets.slint";
+import {
+    ActionButton,
+    PageHeader,
+    PrefRow,
+    SectionHeader,
+    Segmented,
+} from "../widgets.slint";
 import {
     CodeEdit,
     ShaderAssignment,
@@ -12,14 +18,488 @@ import {
 } from "../types.slint";
 import { Theme } from "../theme.slint";
 
-// Shaders page: the library plus the per-event assignment rows.
-// Assignments write straight into the owning document (dirty → Save →
-// validate); "(no shader)" removes the key so umbriel's default
-// animation applies.
+// A warning that needs one click to fix: icon, text, the fix.
+component Notice inherits Rectangle {
+    in property <string> text;
+    in property <string> action;
+    callback clicked();
+    border-radius: Theme.radius-l;
+    background: Theme.bg-1;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        padding: Theme.space-m;
+        spacing: Theme.space-m;
+
+        VerticalLayout {
+            alignment: center;
+
+            Image {
+                width: 16px;
+                height: 16px;
+                source: @image-url("../../assets/icons/alert.svg");
+                colorize: Theme.warning;
+            }
+        }
+
+        Text {
+            text: root.text;
+            color: Theme.text-1;
+            wrap: TextWrap.word-wrap;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            ActionButton {
+                text: root.action;
+                clicked => { root.clicked(); }
+            }
+        }
+    }
+}
+
+// A shader's picture: its still thumbnail, or the live preview while
+// it plays. Before a thumbnail exists (or when the shader won't
+// compile) a quiet placeholder stands in.
+component ShaderThumb inherits Rectangle {
+    in property <ShaderInfo> shader;
+    in property <bool> live;
+    in property <image> live-image;
+    // The "No shader" entry: umbriel's built-in animation.
+    in property <bool> none;
+    border-radius: Theme.radius-m;
+    background: Theme.bg-2;
+    clip: true;
+
+    if root.live || root.shader.has-thumb: Image {
+        width: 100%;
+        height: 100%;
+        image-fit: ImageFit.cover;
+        source: root.live ? root.live-image : root.shader.thumb;
+    }
+
+    if !root.live && !root.shader.has-thumb: Image {
+        width: min(24px, parent.height / 3);
+        height: self.width;
+        source: root.none ? @image-url("../../assets/icons/windows.svg")
+            : root.shader.invalid != "" ? @image-url("../../assets/icons/alert.svg")
+            : @image-url("../../assets/icons/sparkle.svg");
+        colorize: root.shader.invalid != "" ? Theme.warning : Theme.text-2;
+    }
+}
+
+// One tile of the grid: the picture, then the name and who uses it.
+component ShaderTile inherits Rectangle {
+    in property <ShaderInfo> shader;
+    in property <bool> selected;
+    in property <bool> live;
+    in property <image> live-image;
+    in property <bool> none;
+    callback clicked();
+    callback hovered(bool);
+    border-radius: Theme.radius-l;
+    background: root.selected ? Theme.accent-soft : ta.has-hover ? Theme.bg-1 : transparent;
+    border-width: root.selected ? 1.5px : 0px;
+    border-color: Theme.accent;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        changed has-hover => { root.hovered(self.has-hover); }
+    }
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 6px;
+        alignment: start;
+
+        ShaderThumb {
+            height: self.width * 9 / 16;
+            shader: root.shader;
+            live: root.live;
+            live-image: root.live-image;
+            none: root.none;
+        }
+
+        VerticalLayout {
+            padding-left: 2px;
+            padding-right: 2px;
+            spacing: 1px;
+
+            Text {
+                text: root.shader.name;
+                color: Theme.text-1;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.shader.invalid != "" ? "Won't load" : root.shader.used-by != "" ? "Used by " + root.shader.used-by : root.shader.source;
+                color: root.shader.invalid != "" ? Theme.warning : root.shader.used-by != "" ? Theme.accent : Theme.text-2;
+                font-size: Theme.font-small;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+// One row of the list: a small picture, the name with who uses it,
+// what it does, and (in the library) its actions.
+component ShaderListRow inherits Rectangle {
+    in property <ShaderInfo> shader;
+    in property <bool> selected;
+    in property <bool> live;
+    in property <image> live-image;
+    in property <bool> none;
+    in property <bool> actions;
+    callback clicked();
+    callback hovered(bool);
+    callback edit();
+    callback fork();
+    callback delete();
+    min-height: 64px;
+    border-radius: Theme.radius-m;
+    background: root.selected ? Theme.accent-soft : ta.has-hover ? Theme.bg-1 : transparent;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        changed has-hover => { root.hovered(self.has-hover); }
+    }
+
+    HorizontalLayout {
+        padding: Theme.space-s;
+        spacing: Theme.space-m;
+
+        VerticalLayout {
+            alignment: center;
+
+            ShaderThumb {
+                width: 88px;
+                height: 50px;
+                shader: root.shader;
+                live: root.live;
+                live-image: root.live-image;
+                none: root.none;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+
+                Text {
+                    text: root.shader.name;
+                    color: Theme.text-1;
+                }
+
+                if root.shader.used-by != "": Text {
+                    text: "used by " + root.shader.used-by;
+                    color: Theme.accent;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+            }
+
+            if root.shader.invalid != "": Text {
+                text: root.shader.invalid + ". Umbriel will use the built-in animation.";
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                wrap: TextWrap.word-wrap;
+            }
+
+            if root.shader.invalid == "" && root.shader.description != "": Text {
+                text: root.shader.description;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                wrap: TextWrap.word-wrap;
+            }
+        }
+
+        if root.actions: VerticalLayout {
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: Theme.space-s;
+
+                if root.shader.is-own: ActionButton {
+                    text: "Edit";
+                    clicked => { root.edit(); }
+                }
+
+                // Two clicks: deleting a file can't be undone.
+                if root.shader.is-own: ActionButton {
+                    property <bool> confirming: false;
+                    text: !self.confirming ? "Delete" : root.shader.used-by == "" ? "Really delete?" : "Delete? It's in use";
+                    clicked => {
+                        if (self.confirming) {
+                            root.delete();
+                        } else {
+                            self.confirming = true;
+                        }
+                    }
+                }
+
+                if !root.shader.is-own: ActionButton {
+                    text: "Fork";
+                    clicked => { root.fork(); }
+                }
+            }
+        }
+    }
+}
+
+// The library's shaders as a list or a grid, in two collapsible
+// sections: yours, then built-in and community. Shared by the Library
+// tab and the picker. Hovering can play a shader: in the library the
+// hovered picture plays itself (this runs the clock); the picker plays
+// it in its big preview instead.
+component ShaderGallery inherits VerticalLayout {
+    in property <[ShaderInfo]> shaders;
+    in property <int> own-count;
+    in property <int> other-count;
+    in property <bool> grid;
+    in property <bool> hover-preview;
+    // Picker: a "No shader" entry first, selection, no row actions.
+    in property <bool> picking;
+    // Index into `shaders`; -1 is "No shader", below that nothing.
+    in property <int> selected: -2;
+    in property <image> live-image;
+    in property <bool> inline-play;
+    callback activate(int);
+    callback hover(int);
+    callback scrub(float);
+    callback edit(int);
+    callback fork(int);
+    callback delete(int);
+
+    property <int> hovered: -2;
+    property <bool> own-open: true;
+    property <bool> other-open: true;
+    // The grid: as many ~200px columns as fit.
+    property <length> gap: Theme.space-s;
+    property <int> columns: max(1, floor((self.width + self.gap) / (200px + self.gap)));
+    property <length> tile-width: (self.width - (self.columns - 1) * self.gap) / self.columns;
+    property <length> tile-height: self.tile-width * 9 / 16 + 60px;
+    property <ShaderInfo> none-info: { name: "No shader", source: "Umbriel's built-in animation" };
+
+    // Plays the hovered picture: a loop with a short hold on the end.
+    property <float> play: 0;
+    property <int> hold-ms: 0;
+    Timer {
+        interval: 16ms;
+        running: root.inline-play && root.hover-preview && root.hovered >= 0;
+        triggered => {
+            if (root.hold-ms > 0) {
+                root.hold-ms -= 16;
+                if (root.hold-ms <= 0) {
+                    root.play = 0;
+                }
+            } else {
+                root.play = min(1, root.play + 16 / 900);
+                if (root.play >= 1) {
+                    root.hold-ms = 400;
+                }
+            }
+            root.scrub(root.play);
+        }
+    }
+
+    function hovered-changed(index: int, on: bool) {
+        if (on) {
+            root.hovered = index;
+            root.play = 0.3;
+            root.hold-ms = 0;
+            root.hover(index);
+        } else if (root.hovered == index) {
+            root.hovered = -2;
+            root.hover(-2);
+        }
+    }
+
+    function live(index: int) -> bool {
+        return root.inline-play && root.hover-preview && root.hovered == index;
+    }
+
+    spacing: 28px;
+
+    if root.picking: VerticalLayout {
+        if root.grid: HorizontalLayout {
+            alignment: start;
+
+            ShaderTile {
+                width: root.tile-width;
+                height: root.tile-height;
+                shader: root.none-info;
+                none: true;
+                selected: root.selected == -1;
+                clicked => { root.activate(-1); }
+            }
+        }
+
+        if !root.grid: ShaderListRow {
+            shader: root.none-info;
+            none: true;
+            selected: root.selected == -1;
+            clicked => { root.activate(-1); }
+        }
+    }
+
+    if root.own-count > 0: VerticalLayout {
+        spacing: Theme.space-s;
+
+        SectionHeader {
+            title: "Your shaders";
+            caption: root.own-count;
+            collapsible: true;
+            expanded: root.own-open;
+            toggle => { root.own-open = !root.own-open; }
+        }
+
+        if root.own-open && root.grid: Rectangle {
+            height: ceil(root.own-count / root.columns) * (root.tile-height + root.gap) - root.gap;
+
+            for shader[i] in root.shaders: Rectangle {
+                if shader.is-own: ShaderTile {
+                    x: mod(shader.slot, root.columns) * (root.tile-width + root.gap);
+                    y: floor(shader.slot / root.columns) * (root.tile-height + root.gap);
+                    width: root.tile-width;
+                    height: root.tile-height;
+                    shader: shader;
+                    selected: root.selected == i;
+                    live: root.live(i);
+                    live-image: root.live-image;
+                    clicked => { root.activate(i); }
+                    hovered(on) => { root.hovered-changed(i, on); }
+                }
+            }
+        }
+
+        if root.own-open && !root.grid: VerticalLayout {
+            for shader[i] in root.shaders: VerticalLayout {
+                if shader.is-own: ShaderListRow {
+                    shader: shader;
+                    selected: root.selected == i;
+                    live: root.live(i);
+                    live-image: root.live-image;
+                    actions: !root.picking;
+                    clicked => { root.activate(i); }
+                    hovered(on) => { root.hovered-changed(i, on); }
+                    edit => { root.edit(i); }
+                    delete => { root.delete(i); }
+                }
+            }
+        }
+    }
+
+    if root.other-count > 0: VerticalLayout {
+        spacing: Theme.space-s;
+
+        SectionHeader {
+            title: "Built-in and community";
+            caption: root.other-count;
+            collapsible: true;
+            expanded: root.other-open;
+            toggle => { root.other-open = !root.other-open; }
+        }
+
+        if root.other-open && root.grid: Rectangle {
+            height: ceil(root.other-count / root.columns) * (root.tile-height + root.gap) - root.gap;
+
+            for shader[i] in root.shaders: Rectangle {
+                if !shader.is-own: ShaderTile {
+                    x: mod(shader.slot, root.columns) * (root.tile-width + root.gap);
+                    y: floor(shader.slot / root.columns) * (root.tile-height + root.gap);
+                    width: root.tile-width;
+                    height: root.tile-height;
+                    shader: shader;
+                    selected: root.selected == i;
+                    live: root.live(i);
+                    live-image: root.live-image;
+                    clicked => { root.activate(i); }
+                    hovered(on) => { root.hovered-changed(i, on); }
+                }
+            }
+        }
+
+        if root.other-open && !root.grid: VerticalLayout {
+            for shader[i] in root.shaders: VerticalLayout {
+                if !shader.is-own: ShaderListRow {
+                    shader: shader;
+                    selected: root.selected == i;
+                    live: root.live(i);
+                    live-image: root.live-image;
+                    actions: !root.picking;
+                    clicked => { root.activate(i); }
+                    hovered(on) => { root.hovered-changed(i, on); }
+                    fork => { root.fork(i); }
+                }
+            }
+        }
+    }
+
+    if root.own-count + root.other-count == 0: Text {
+        text: "No shaders found. Download the community shaders, or copy .glsl files into a shaders/ folder next to your config.";
+        color: Theme.text-2;
+        wrap: TextWrap.word-wrap;
+    }
+}
+
+// List or grid, and whether hovering plays: shared by the Library tab
+// and the picker, remembered in the app's settings.
+component GalleryOptions inherits HorizontalLayout {
+    in-out property <bool> grid;
+    in-out property <bool> hover-preview;
+    callback changed();
+    spacing: Theme.space-l;
+
+    Segmented {
+        options: ["List", "Grid"];
+        selected: root.grid ? 1 : 0;
+        changed => {
+            root.grid = self.selected == 1;
+            root.changed();
+        }
+    }
+
+    HorizontalLayout {
+        spacing: Theme.space-s;
+
+        Text {
+            text: "Play on hover";
+            color: Theme.text-2;
+            vertical-alignment: center;
+        }
+
+        Switch {
+            checked: root.hover-preview;
+            toggled => {
+                root.hover-preview = self.checked;
+                root.changed();
+            }
+        }
+    }
+}
+
+// Shaders page, in two tabs: Assignments (which shader each event
+// plays; a row opens the picker) and Library (your shaders and the
+// others, as a list or a grid). Assignments write straight into the
+// owning document (dirty → Save → validate); "No shader" removes the
+// key so umbriel's default animation applies.
 export component ShadersPage inherits Rectangle {
     in property <string> title;
     in property <string> description;
     in property <[ShaderInfo]> shaders;
+    in property <int> own-count;
+    in property <int> other-count;
     in property <[ShaderAssignment]> assignments;
     in property <string> download-note;
     in property <bool> include-missing;
@@ -29,293 +509,174 @@ export component ShadersPage inherits Rectangle {
     in property <bool> community-installed;
     in property <bool> update-available;
     in-out property <bool> downloading;
+    // 0 Assignments, 1 Library; kept by the window across rebuilds.
+    in-out property <int> tab: 0;
+    in-out property <bool> grid;
+    in-out property <bool> hover-preview;
+    in property <image> live-image;
     callback download();
-    // (key, choice index): Rust resolves the index against its own
-    // shader list; 0 is "(no shader)".
-    callback assign(string, int);
     callback fix-include();
     callback convert-legacy();
     callback editor-new();
     callback editor-edit(string);
     callback editor-fork(string, string);
     callback editor-delete(string);
+    // Open the picker for an assignment row: (key, event index, the
+    // row's current shader: index into `shaders`, -1 none, -2 other).
+    callback pick(string, int, int);
+    // Open the picker to look at library shader `index`.
+    callback open-preview(int);
+    callback play(int);
+    callback scrub(float);
+    callback view-changed();
+    callback thumbs-wanted();
+
+    init => { root.thumbs-wanted(); }
 
     VerticalLayout {
-        padding: Theme.space-l;
-        spacing: Theme.space-l;
+        padding-left: Theme.space-xl;
+        padding-right: Theme.space-xl;
+        padding-top: 28px;
+        padding-bottom: 28px;
+        spacing: Theme.space-xl;
         alignment: start;
 
-        Text {
-            text: root.title;
-            color: Theme.text-1;
-            font-size: Theme.font-title;
-            font-weight: 700;
-        }
-
-        if root.description != "": Text {
-            text: root.description;
-            color: Theme.text-2;
-            font-size: Theme.font-small;
-            wrap: TextWrap.word-wrap;
-        }
-
-        HorizontalLayout {
-            spacing: Theme.space-m;
+        PageHeader {
+            title: root.title;
+            description: root.description;
 
             ActionButton {
                 text: "New shader";
                 clicked => { root.editor-new(); }
             }
-
-            ActionButton {
-                text: root.downloading
-                    ? "Downloading…"
-                    : (root.community-installed ? "Update community shaders" : "Download community shaders");
-                enabled: !root.downloading;
-                clicked => { root.download(); }
-            }
-
-            if root.download-note != "": Text {
-                text: root.download-note;
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                vertical-alignment: center;
-                wrap: TextWrap.word-wrap;
-                horizontal-stretch: 1;
-            }
-
-            // Persistent confirmation once the collection is on disk;
-            // steps aside while a result note is showing.
-            if root.download-note == "" && root.community-installed && !root.update-available: Text {
-                text: "✓ community shaders installed";
-                color: Theme.success;
-                font-size: Theme.font-small;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-            }
-
-            if root.download-note == "" && root.community-installed && root.update-available: Text {
-                text: "✓ installed · update available — Update fetches the newest effects";
-                color: Theme.warning;
-                font-size: Theme.font-small;
-                vertical-alignment: center;
-                wrap: TextWrap.word-wrap;
-                horizontal-stretch: 1;
-            }
         }
 
-        // A shaders.toml the include chain never loads — umbriel would
+        // A shaders.toml the include chain never loads: umbriel would
         // silently ignore every assignment in it.
-        if root.include-missing: Rectangle {
-            background: Theme.bg-1;
-            border-radius: Theme.radius-m;
-            border-width: 1px;
-            border-color: Theme.warning;
-
-            HorizontalLayout {
-                padding: Theme.space-m;
-                spacing: Theme.space-m;
-
-                Text {
-                    text: "shaders.toml in your config folder is not in your [include] list so umbriel will ignore it.";
-                    color: Theme.warning;
-                    font-size: Theme.font-small;
-                    wrap: TextWrap.word-wrap;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-
-                ActionButton {
-                    text: "Add to includes";
-                    clicked => { root.fix-include(); }
-                }
-            }
+        if root.include-missing: Notice {
+            text: "shaders.toml in your config folder isn't in your [include] list, so umbriel ignores it.";
+            action: "Add to includes";
+            clicked => { root.fix-include(); }
         }
 
-        if root.legacy-note != "": Rectangle {
-            background: Theme.bg-1;
-            border-radius: Theme.radius-m;
-            border-width: 1px;
-            border-color: Theme.warning;
+        if root.legacy-note != "": Notice {
+            text: root.legacy-note;
+            action: "Convert";
+            clicked => { root.convert-legacy(); }
+        }
 
-            HorizontalLayout {
-                padding: Theme.space-m;
-                spacing: Theme.space-m;
+        HorizontalLayout {
+            spacing: Theme.space-l;
 
-                Text {
-                    text: root.legacy-note;
-                    color: Theme.warning;
-                    font-size: Theme.font-small;
-                    wrap: TextWrap.word-wrap;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
+            Segmented {
+                options: ["Assignments", "Library"];
+                selected <=> root.tab;
+            }
 
-                ActionButton {
-                    text: "Convert";
-                    clicked => { root.convert-legacy(); }
-                }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            if root.tab == 1: GalleryOptions {
+                grid <=> root.grid;
+                hover-preview <=> root.hover-preview;
+                changed => { root.view-changed(); }
             }
         }
 
         // ── assignments ─────────────────────────────────────
-        VerticalLayout {
-            spacing: Theme.space-xs;
+        if root.tab == 0: VerticalLayout {
+            for row[event] in root.assignments: PrefRow {
+                property <int> index: row.current >= 1 && row.current <= root.shaders.length ? row.current - 1 : row.current == 0 ? -1 : -2;
+                title: row.label;
+                subtitle: row.warning == "" ? "" : row.current-name + ": " + row.warning;
+                subtitle-color: Theme.warning;
 
-            Text {
-                text: "Assignments";
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                font-weight: 700;
-            }
+                // The current shader; click to pick another.
+                Rectangle {
+                    width: 280px;
+                    height: 44px;
+                    border-radius: Theme.radius-m;
+                    background: pick-ta.has-hover ? Theme.bg-2 : Theme.bg-1;
+                    border-width: 1px;
+                    border-color: Theme.border;
 
-            Rectangle {
-                background: Theme.bg-1;
-                border-radius: Theme.radius-m;
+                    pick-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.pick(row.key, event, index); }
+                    }
 
-                VerticalLayout {
-                    padding: Theme.space-m;
-                    spacing: Theme.space-s;
+                    HorizontalLayout {
+                        padding: 5px;
+                        padding-right: Theme.space-s;
+                        spacing: Theme.space-s;
 
-                    for row in root.assignments: HorizontalLayout {
-                        min-height: 32px;
-                        spacing: Theme.space-m;
+                        ShaderThumb {
+                            width: 60px;
+                            shader: index >= 0 ? root.shaders[index] : { name: row.current-name };
+                            none: index == -1;
+                        }
 
                         Text {
-                            text: row.label;
-                            min-width: 130px;
-                            max-width: 260px;
-                            horizontal-stretch: 1;
-                            wrap: TextWrap.word-wrap;
+                            text: row.current-name;
+                            color: index == -1 ? Theme.text-2 : Theme.text-1;
                             vertical-alignment: center;
-                        }
-
-                        ComboBox {
-                            width: 300px;
-                            model: row.choices;
-                            current-index: row.current;
-                            selected => { root.assign(row.key, self.current-index); }
-                        }
-
-                        if row.warning != "": Text {
-                            text: "⚠ " + row.current-value + " — " + row.warning;
-                            color: Theme.warning;
-                            font-size: Theme.font-small;
-                            vertical-alignment: center;
-                            wrap: TextWrap.word-wrap;
                             horizontal-stretch: 1;
+                            overflow: elide;
                         }
 
-                        Rectangle {
-                            horizontal-stretch: 1;
+                        VerticalLayout {
+                            alignment: center;
+
+                            Image {
+                                width: 16px;
+                                height: 16px;
+                                source: @image-url("../../assets/icons/chevron-right.svg");
+                                colorize: Theme.text-2;
+                            }
                         }
                     }
                 }
             }
         }
 
-        // ── the library ─────────────────────────────────────
-        VerticalLayout {
-            spacing: Theme.space-xs;
+        // ── library ─────────────────────────────────────────
+        if root.tab == 1: VerticalLayout {
+            spacing: 28px;
 
-            Text {
-                text: "Available shaders";
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                font-weight: 700;
+            PrefRow {
+                title: "Community shaders";
+                subtitle: root.download-note != "" ? root.download-note
+                    : !root.community-installed ? "A shared collection of effects from the umbriel community."
+                    : root.update-available ? "Installed. An update is available with the newest effects."
+                    : "Installed and up to date.";
+                subtitle-color: root.community-installed && root.update-available ? Theme.warning : Theme.text-2;
+
+                ActionButton {
+                    text: root.downloading ? "Downloading…" : root.community-installed ? "Update" : "Download";
+                    enabled: !root.downloading;
+                    clicked => { root.download(); }
+                }
             }
 
-            for shader in root.shaders: VerticalLayout {
-                spacing: Theme.space-xs;
-
-                Text {
-                    text: shader.name;
-                    color: Theme.text-2;
-                    font-size: Theme.font-small;
-                    font-weight: 700;
-                }
-
-                Rectangle {
-                    background: Theme.bg-1;
-                    border-radius: Theme.radius-m;
-
-                    VerticalLayout {
-                        padding: Theme.space-m;
-                        spacing: Theme.space-s;
-
-                        if shader.description != "": Text {
-                            text: shader.description;
-                            color: Theme.text-1;
-                            wrap: TextWrap.word-wrap;
-                        }
-
-                        HorizontalLayout {
-                            spacing: Theme.space-m;
-
-                            Text {
-                                text: shader.source;
-                                color: Theme.text-2;
-                                font-size: Theme.font-small;
-                                vertical-alignment: center;
-                            }
-
-                            Rectangle {
-                                horizontal-stretch: 1;
-                            }
-
-                            Text {
-                                text: shader.value;
-                                color: Theme.text-2;
-                                font-family: Theme.font-mono;
-                                font-size: Theme.font-small;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-                        }
-
-                        if shader.invalid != "": Text {
-                            text: "⚠ " + shader.invalid + " — umbriel will use the built-in animation";
-                            color: Theme.warning;
-                            font-size: Theme.font-small;
-                            wrap: TextWrap.word-wrap;
-                        }
-
-                        HorizontalLayout {
-                            spacing: Theme.space-s;
-                            alignment: start;
-
-                            if shader.is-own: ActionButton {
-                                text: "Edit";
-                                clicked => { root.editor-edit(shader.path); }
-                            }
-
-                            // Two clicks: deleting a file can't be undone.
-                            if shader.is-own: ActionButton {
-                                property <bool> confirming: false;
-                                text: !self.confirming ? "Delete" : shader.used-by == "" ? "Really delete?" : "Delete? Used by " + shader.used-by;
-                                clicked => {
-                                    if (self.confirming) {
-                                        root.editor-delete(shader.path);
-                                    } else {
-                                        self.confirming = true;
-                                    }
-                                }
-                            }
-
-                            if !shader.is-own: ActionButton {
-                                text: "Fork";
-                                clicked => { root.editor-fork(shader.path, shader.name); }
-                            }
-                        }
+            ShaderGallery {
+                shaders: root.shaders;
+                own-count: root.own-count;
+                other-count: root.other-count;
+                grid: root.grid;
+                hover-preview: root.hover-preview;
+                live-image: root.live-image;
+                inline-play: true;
+                activate(i) => { root.open-preview(i); }
+                hover(i) => {
+                    if (i >= 0 && root.hover-preview) {
+                        root.play(i);
                     }
                 }
-            }
-
-            if root.shaders.length == 0: Text {
-                text: "No shaders found. Download the community shaders, or copy .glsl files into a shaders/ folder next to your config.";
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                wrap: TextWrap.word-wrap;
+                scrub(v) => { root.scrub(v); }
+                edit(i) => { root.editor-edit(root.shaders[i].path); }
+                fork(i) => { root.editor-fork(root.shaders[i].path, root.shaders[i].name); }
+                delete(i) => { root.editor-delete(root.shaders[i].path); }
             }
         }
     }
@@ -572,11 +933,14 @@ export component ShaderPreviewRow inherits Rectangle {
     callback event-picked(int);
     callback scrub(float);
     callback toggle-direction();
+    in property <string> hint: "Scrub or play the animation on a stand-in for the chosen event, with that event's curve and timing from your config. Saving asks which events should use the shader.";
+    // Start playing on open (the picker); the editor starts paused.
+    in property <bool> autoplay: false;
 
     // Playback: a frame tick advances the scrubber over the chosen
     // length, holds briefly on the last frame, then loops. Dragging the
     // scrubber takes over and pauses.
-    property <bool> playing: false;
+    property <bool> playing: root.autoplay;
     property <[string]> lengths: ["As set (" + root.configured-ms + " ms)", "0.3 s", "0.6 s", "1.2 s"];
     property <int> length-index: 0;
     property <float> length-ms: root.length-index == 0 ? max(1, root.configured-ms) : root.length-index == 1 ? 300 : root.length-index == 2 ? 600 : 1200;
@@ -647,6 +1011,7 @@ export component ShaderPreviewRow inherits Rectangle {
             min-width: 150px;
             horizontal-stretch: 2;
             spacing: Theme.space-xs;
+            alignment: start;
 
             Text {
                 text: "Preview";
@@ -656,7 +1021,7 @@ export component ShaderPreviewRow inherits Rectangle {
             }
 
             Text {
-                text: "Scrub or play the animation on a stand-in for the chosen event, with that event's curve and timing from your config. Saving asks which events should use the shader.";
+                text: root.hint;
                 color: Theme.text-2;
                 font-size: Theme.font-small;
                 wrap: word-wrap;
@@ -853,6 +1218,174 @@ export component ShaderCodeEditor inherits Rectangle {
                     } else if (cpos.y + scroll.viewport-y > scroll.visible-height - 32px) {
                         scroll.viewport-y = min(0px, max(scroll.visible-height - scroll.viewport-height, scroll.visible-height - cpos.y - 32px));
                     }
+                }
+            }
+        }
+    }
+}
+
+// Pick a shader for one event, or look through the library: the
+// chosen shader plays in the big preview on top, the library sits
+// below as a list or grid. Hovering (when on) plays the hovered one
+// in the big preview; leaving goes back to the chosen one.
+export component ShaderPicker inherits Rectangle {
+    in property <string> title;
+    // An assignment key; "" is just looking (no Assign).
+    in property <string> key;
+    in property <[ShaderInfo]> shaders;
+    in property <int> own-count;
+    in property <int> other-count;
+    in-out property <bool> grid;
+    in-out property <bool> hover-preview;
+    in-out property <int> selected;
+    // The live preview, as the editor has it.
+    in property <image> preview-image;
+    in property <bool> preview-ready;
+    in property <string> preview-note;
+    in property <bool> direction-in;
+    in-out property <float> progress;
+    in property <[string]> events;
+    in-out property <int> event-index;
+    in property <int> configured-ms;
+    callback close();
+    callback assign(int);
+    // Play library shader `index` in the preview.
+    callback show(int);
+    callback event-picked(int);
+    callback scrub(float);
+    callback toggle-direction();
+    callback view-changed();
+    callback edit(int);
+    callback fork(int);
+
+    width: 100%;
+    height: 100%;
+    background: #00000099;
+
+    TouchArea {
+        clicked => { root.close(); }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(parent.width - 64px, 1040px);
+        height: parent.height - 64px;
+        border-radius: Theme.radius-xl;
+        background: Theme.bg-3;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000066;
+
+        TouchArea { }
+
+        VerticalLayout {
+            padding: Theme.space-xl;
+            spacing: Theme.space-l;
+
+            HorizontalLayout {
+                spacing: Theme.space-l;
+
+                Text {
+                    text: root.title;
+                    color: Theme.text-1;
+                    font-size: Theme.font-large;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                GalleryOptions {
+                    grid <=> root.grid;
+                    hover-preview <=> root.hover-preview;
+                    changed => { root.view-changed(); }
+                }
+            }
+
+            if root.selected >= 0 && root.preview-ready: ShaderPreviewRow {
+                source: root.preview-image;
+                note: root.preview-note;
+                hint: root.shaders[root.selected].description;
+                autoplay: true;
+                direction-in: root.direction-in;
+                progress <=> root.progress;
+                events: root.events;
+                event-index <=> root.event-index;
+                configured-ms: root.configured-ms;
+                event-picked(i) => { root.event-picked(i); }
+                scrub(v) => { root.scrub(v); }
+                toggle-direction() => { root.toggle-direction(); }
+            }
+
+            if root.selected == -1: Text {
+                text: "No shader: umbriel plays its built-in animation for this event.";
+                color: Theme.text-2;
+            }
+
+            if root.selected >= 0 && !root.preview-ready: Text {
+                text: root.preview-note != "" ? root.preview-note : "Starting the preview…";
+                color: Theme.text-2;
+            }
+
+            gsv := ScrollView {
+                vertical-stretch: 1;
+                viewport-height: gallery.preferred-height;
+
+                gallery := ShaderGallery {
+                    width: gsv.visible-width;
+                    shaders: root.shaders;
+                    own-count: root.own-count;
+                    other-count: root.other-count;
+                    grid: root.grid;
+                    hover-preview: root.hover-preview;
+                    picking: root.key != "";
+                    selected: root.selected;
+                    activate(i) => {
+                        root.selected = i;
+                        if (i >= 0) {
+                            root.show(i);
+                        }
+                    }
+                    hover(i) => {
+                        if (!root.hover-preview) {
+                            return;
+                        }
+                        if (i >= 0) {
+                            root.show(i);
+                        } else if (root.selected >= 0) {
+                            root.show(root.selected);
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-s;
+
+                // Just looking: the chosen shader's own action.
+                if root.key == "" && root.selected >= 0 && root.shaders[root.selected].is-own: ActionButton {
+                    text: "Edit";
+                    clicked => { root.edit(root.selected); }
+                }
+
+                if root.key == "" && root.selected >= 0 && !root.shaders[root.selected].is-own: ActionButton {
+                    text: "Fork";
+                    clicked => { root.fork(root.selected); }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                ActionButton {
+                    text: root.key == "" ? "Close" : "Cancel";
+                    clicked => { root.close(); }
+                }
+
+                if root.key != "": ActionButton {
+                    text: "Assign";
+                    primary: true;
+                    enabled: root.selected >= -1;
+                    clicked => { root.assign(root.selected); }
                 }
             }
         }

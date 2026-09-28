@@ -113,6 +113,10 @@ struct Shell {
     // init failure it stays off until the next app run (best-effort).
     shader_preview: Option<shader_preview::PreviewHandle>,
     shader_preview_failed: bool,
+    // Library thumbnails by shader file, and the files already sent to
+    // the worker (a shader that won't compile stays asked, never drawn).
+    shader_thumbs: BTreeMap<PathBuf, slint::Image>,
+    shader_thumbs_asked: BTreeSet<PathBuf>,
     // The event the preview plays as, and that event's timing (curve
     // and length) from the config.
     shader_preview_event: usize,
@@ -233,6 +237,8 @@ impl Shell {
             builder_steps: Vec::new(),
             shader_preview: None,
             shader_preview_failed: false,
+            shader_thumbs: BTreeMap::new(),
+            shader_thumbs_asked: BTreeSet::new(),
             shader_preview_event: 0,
             shader_preview_timeline: umbriel_config::config::curves::Timeline {
                 curve: umbriel_config::config::curves::EASE_OUT,
@@ -318,6 +324,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         .unwrap_or(0);
     app.set_update_channel(channel as i32);
     app.set_canary_auto_install(settings.canary_auto_install);
+    app.set_shader_grid(settings.shader_grid);
+    app.set_shader_hover_preview(settings.shader_hover_preview);
     app.set_dark_mode(settings.dark);
     app.global::<Theme>().set_dark(settings.dark);
     app.set_backup_note(page_backups::backup_note(&settings, &env));
