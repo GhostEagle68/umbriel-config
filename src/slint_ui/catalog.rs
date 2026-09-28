@@ -41,28 +41,21 @@ pub const PAGES: &[Page] = &[
         id: "keybinds",
         title: "Keybinds",
         description: "Your keyboard shortcuts. Edit, add, or restore the compositor defaults.",
-        group: "desktop",
+        group: "input",
         cards: &[],
     },
     Page {
         id: "window-rules",
         title: "Window rules",
         description: "How matching windows open and behave: floating, fullscreen, blur, opacity.",
-        group: "desktop",
+        group: "windows",
         cards: &[],
     },
     Page {
         id: "layer-rules",
         title: "Layer rules",
         description: "The same matching for shell surfaces: bars, launchers, overlays, keyed by namespace.",
-        group: "desktop",
-        cards: &[],
-    },
-    Page {
-        id: "security-contexts",
-        title: "Security contexts",
-        description: "Which Wayland globals sandboxed apps may use, matched by sandbox engine and app id.",
-        group: "desktop",
+        group: "windows",
         cards: &[],
     },
     Page {
@@ -138,10 +131,54 @@ pub const PAGES: &[Page] = &[
         ],
     },
     Page {
+        id: "appearance",
+        title: "Appearance",
+        description: "Window decoration: borders, corners, blur, shadows, effects.",
+        group: "look",
+        cards: &[
+            Card {
+                title: "Basics",
+                section: "appearance",
+            },
+            Card {
+                title: "Blur",
+                section: "appearance.blur",
+            },
+            Card {
+                title: "Shadows",
+                section: "appearance.shadow",
+            },
+            Card {
+                title: "Effects",
+                section: "effects",
+            },
+        ],
+    },
+    Page {
+        id: "colors",
+        title: "Colors",
+        description: "The palette for panels, text, accents, and borders.",
+        group: "look",
+        cards: &[
+            Card {
+                title: "Basics",
+                section: "colors",
+            },
+            Card {
+                title: "Border",
+                section: "colors.border",
+            },
+            Card {
+                title: "Overview",
+                section: "colors.overview",
+            },
+        ],
+    },
+    Page {
         id: "animations",
         title: "Animations",
         description: "How windows and workspaces move.",
-        group: "desktop",
+        group: "look",
         cards: &[
             Card {
                 title: "Basics",
@@ -194,50 +231,6 @@ pub const PAGES: &[Page] = &[
             Card {
                 title: "Springs",
                 section: "animation.springs",
-            },
-        ],
-    },
-    Page {
-        id: "appearance",
-        title: "Appearance",
-        description: "Window decoration: borders, corners, blur, shadows, effects.",
-        group: "look",
-        cards: &[
-            Card {
-                title: "Basics",
-                section: "appearance",
-            },
-            Card {
-                title: "Blur",
-                section: "appearance.blur",
-            },
-            Card {
-                title: "Shadows",
-                section: "appearance.shadow",
-            },
-            Card {
-                title: "Effects",
-                section: "effects",
-            },
-        ],
-    },
-    Page {
-        id: "colors",
-        title: "Colors",
-        description: "The palette for panels, text, accents, and borders.",
-        group: "look",
-        cards: &[
-            Card {
-                title: "Basics",
-                section: "colors",
-            },
-            Card {
-                title: "Border",
-                section: "colors.border",
-            },
-            Card {
-                title: "Overview",
-                section: "colors.overview",
             },
         ],
     },
@@ -364,16 +357,24 @@ pub const PAGES: &[Page] = &[
             section: "events",
         }],
     },
+    Page {
+        id: "security-contexts",
+        title: "Security contexts",
+        description: "Which Wayland globals sandboxed apps may use, matched by sandbox engine and app id.",
+        group: "system",
+        cards: &[],
+    },
 ];
 
 /// Sidebar headers in display order (MORE is appended after these).
-pub const GROUPS: &[&str] = &["outputs", "desktop", "look", "input", "system"];
+pub const GROUPS: &[&str] = &["outputs", "desktop", "windows", "look", "input", "system"];
 
 /// Human header text for a sidebar group id.
 pub fn group_title(group: &str) -> &'static str {
     match group {
         "outputs" => "Outputs",
         "desktop" => "Desktop",
+        "windows" => "Windows",
         "look" => "Look",
         "input" => "Input",
         "system" => "System",

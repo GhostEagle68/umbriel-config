@@ -214,13 +214,19 @@ export struct SaveEntry {
     dest-index: int,
 }
 
-// One sidebar entry: a dimmed header (group caption) or a page row.
-// `label` is what's shown; `id` is what navigation keys off.
+// One sidebar entry: a collapsible group header or a page row.
+// `label` is what's shown; `id` is what navigation keys off (a header's
+// is `group:<group>`, which toggles it). `group` picks the icon; `child`
+// rows sit under an open header, `last` ends its tree line.
 export struct SectionNav {
     label: string,
     id: string,
     new-count: int,
     is-header: bool,
+    group: string,
+    expanded: bool,
+    child: bool,
+    last: bool,
 }
 
 // One line of release notes, split from their markdown in Rust
@@ -244,4 +250,58 @@ export struct NotesCard {
     date: string,
     badge: string,
     lines: [NoteLine],
+}
+
+// Home page: a clickable line that opens a page (an unsaved change, or
+// a page with newly synced settings).
+export struct HomeLink {
+    label: string,
+    detail: string,
+    page-id: string,
+}
+
+// Home desktop drawing: one window, as fractions of its monitor's
+// usable area (gaps are applied when drawn, so they stay visible).
+export struct DeskWindow {
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    focused: bool,
+}
+
+// Home desktop drawing: one monitor in desktop pixels, offset so the
+// layout's top-left is 0, 0.
+export struct DeskMonitor {
+    name: string,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    // Noctalia's wallpaper for this screen, when there is one.
+    wallpaper: image,
+    has-wallpaper: bool,
+    windows: [DeskWindow],
+}
+
+// Home desktop drawing: the config values it renders, in real pixels.
+export struct DeskStyle {
+    gap: float,
+    border: float,
+    radius: float,
+    focused: color,
+    unfocused: color,
+    background: color,
+    // The wallpaper stand-in: a wash of the user's two accents.
+    accent: color,
+    accent-2: color,
+    shadow: bool,
+    strut-top: float,
+    strut-bottom: float,
+    strut-left: float,
+    strut-right: float,
+    // Desktop bounding box, in the same pixels as the monitors.
+    extent-w: float,
+    extent-h: float,
+    mode: string,
 }

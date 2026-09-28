@@ -39,6 +39,14 @@ pub(super) fn store_window_settings(app: &AppWindow, env: &discovery::Env) {
 /// once-a-day stamp.
 pub(super) fn start_update_check(weak: slint::Weak<AppWindow>, env: Option<discovery::Env>) {
     let Some(app) = weak.upgrade() else { return };
+    // A build from a checkout carries no release or canary commit to
+    // compare, so every release would look new.
+    if update::current_install_kind() == update::InstallKind::Source {
+        app.set_update_note(
+            "Development build, running from the source tree: no update checks.".into(),
+        );
+        return;
+    }
     app.set_update_note("Checking…".into());
     // Read the channel here: the worker can't touch the window.
     let channel = app_settings::Channel::ALL[app.get_update_channel() as usize];
@@ -102,32 +110,36 @@ fn fetch_latest_commit() -> Result<String, String> {
     Ok(format!("{sha} • {date} • {message}"))
 }
 
+/// Fetch the compositor's latest commit into the Settings and Home
+/// pages, once per run; the "Checking…" note doubles as the in-flight
+/// guard.
+pub(super) fn fetch_upstream_note(app: &AppWindow) {
+    if !app.get_upstream_note().is_empty() {
+        return;
+    }
+    let weak = app.as_weak();
+    app.set_upstream_note("Checking…".into());
+    std::thread::spawn(move || {
+        let result = fetch_latest_commit();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(app) = weak.upgrade() {
+                let note = match result {
+                    Ok(note) => note,
+                    Err(err) => format!("Couldn't fetch the latest commit: {err}"),
+                };
+                app.set_upstream_note(note.into());
+            }
+        });
+    });
+}
+
 pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &discovery::Env) {
     {
         let weak = app.as_weak();
         app.on_settings_requested(move || {
             let Some(app) = weak.upgrade() else { return };
             app.set_page(Page::Settings);
-            // Fetch the compositor's latest commit once per run; the
-            // "Checking…" note doubles as the in-flight guard.
-            if app.get_upstream_note().is_empty() {
-                let weak = app.as_weak();
-                app.set_upstream_note("Checking…".into());
-                std::thread::spawn(move || {
-                    let result = fetch_latest_commit();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(app) = weak.upgrade() {
-                            let note = match result {
-                                Ok(note) => note,
-                                Err(err) => {
-                                    format!("Couldn't fetch the latest commit: {err}")
-                                }
-                            };
-                            app.set_upstream_note(note.into());
-                        }
-                    });
-                });
-            }
+            fetch_upstream_note(&app);
         });
     }
     {
@@ -367,7 +379,13 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
                 app.set_status(note.into());
             }
             app.set_schema_empty(shell.schema.is_empty());
-            app.set_sections(Rc::new(VecModel::from(super::sections::section_nav(&shell))).into());
+            app.set_sections(
+                Rc::new(VecModel::from(super::sections::section_nav(
+                    &shell,
+                    &app.get_current_section(),
+                )))
+                .into(),
+            );
             let section = app.get_current_section().to_string();
             super::sections::refill_page(&app, &shell, &section);
         });

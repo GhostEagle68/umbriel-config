@@ -285,7 +285,11 @@ pub(super) fn install_backups(
                 app.set_dirty(false);
                 app.set_changed_count(0);
                 app.set_sections(
-                    Rc::new(VecModel::from(super::sections::section_nav(&shell))).into(),
+                    Rc::new(VecModel::from(super::sections::section_nav(
+                        &shell,
+                        &app.get_current_section(),
+                    )))
+                    .into(),
                 );
                 let section = app.get_current_section().to_string();
                 super::sections::refill_page(&app, &shell, &section);

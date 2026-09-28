@@ -19,6 +19,7 @@ pub(super) fn refresh_shown_page(app: &AppWindow, shell: &Shell) {
         Page::Shaders => super::page_shaders::rebuild_shaders(app, shell),
         Page::Outputs => super::page_outputs::rebuild_outputs(app, shell),
         Page::Rules => super::page_rules::rebuild_rule_page(app, shell),
+        Page::Home => super::page_home::rebuild_home(app, shell),
         Page::Keybinds => {
             // Its rows live outside the shell; rerun the page's own search
             // handler once the caller's borrow of the shell has ended.
@@ -53,7 +54,7 @@ pub(super) fn page_id_for_section(section: &str) -> String {
 }
 
 /// NEW-key counts per page id (sidebar badges).
-fn page_new_counts(shell: &Shell) -> BTreeMap<String, i32> {
+pub(super) fn page_new_counts(shell: &Shell) -> BTreeMap<String, i32> {
     let mut counts: BTreeMap<String, i32> = BTreeMap::new();
     for key in &shell.new_keys {
         let page_id = if key.starts_with("output.") {
@@ -85,88 +86,102 @@ pub(super) fn page_meta(page_id: &str) -> (String, String) {
     }
 }
 
-/// The sidebar model: grouped human pages (catalog + MORE fallback) with
-/// small header rows and NEW counts per page.
-pub(super) fn section_nav(shell: &Shell) -> Vec<SectionNav> {
-    fn push_page(
-        nav: &mut Vec<SectionNav>,
-        claimed_tops: &mut Vec<&'static str>,
-        counts: &BTreeMap<String, i32>,
-        page: &'static catalog::Page,
-    ) {
-        for top in catalog::page_top_levels(page) {
-            if !claimed_tops.contains(&top) {
-                claimed_tops.push(top);
-            }
-        }
-        nav.push(SectionNav {
-            label: page.title.into(),
-            id: page.id.into(),
-            new_count: counts.get(page.id).copied().unwrap_or(0),
-            is_header: false,
-        });
-    }
-
-    let counts = page_new_counts(shell);
+/// Every page the sidebar can show, in order, as (group, page id,
+/// label): catalog pages whose settings this umbriel reads (or whose
+/// keys your files set), then the MORE fallback pages for top-level
+/// areas the catalog doesn't claim.
+fn nav_pages(shell: &Shell) -> Vec<(&'static str, String, String)> {
     let sets = chain_path_sets(shell);
-    let mut nav: Vec<SectionNav> = Vec::new();
-    let mut claimed_tops: Vec<&'static str> = Vec::new();
-    // Outputs leads the sidebar and needs no redundant group header.
-    if let Some(page) = catalog::page(catalog::OUTPUTS_ID) {
-        push_page(&mut nav, &mut claimed_tops, &counts, page);
-    }
-    for group in catalog::GROUPS.iter().filter(|group| **group != "outputs") {
-        nav.push(SectionNav {
-            label: catalog::group_title(group).to_uppercase().into(),
-            id: String::new().into(),
-            new_count: 0,
-            is_header: true,
-        });
-        // A page of cards none of which this umbriel reads (a newer
-        // umbriel's settings) would be empty, unless your files set keys
-        // there (`[environment]`'s variables).
-        let readable = |page: &&catalog::Page| {
-            page.cards.is_empty()
-                || page.cards.iter().any(|card| {
-                    let prefix = format!("{}.", card.section);
-                    shell
-                        .schema
+    // A page of cards none of which this umbriel reads (a newer
+    // umbriel's settings) would be empty, unless your files set keys
+    // there (`[environment]`'s variables).
+    let readable = |page: &&catalog::Page| {
+        page.cards.is_empty()
+            || page.cards.iter().any(|card| {
+                let prefix = format!("{}.", card.section);
+                shell
+                    .schema
+                    .iter()
+                    .any(|entry| entry.section == card.section)
+                    || sets
                         .iter()
-                        .any(|entry| entry.section == card.section)
-                        || sets
-                            .iter()
-                            .any(|set| set.iter().any(|key| key.starts_with(&prefix)))
-                })
-        };
+                        .any(|set| set.iter().any(|key| key.starts_with(&prefix)))
+            })
+    };
+    let mut pages: Vec<(&'static str, String, String)> = Vec::new();
+    let mut claimed_tops: Vec<&'static str> = Vec::new();
+    for group in catalog::GROUPS {
         for page in catalog::PAGES
             .iter()
             .filter(|page| page.group == *group)
             .filter(readable)
         {
-            push_page(&mut nav, &mut claimed_tops, &counts, page);
+            claimed_tops.extend(catalog::page_top_levels(page));
+            pages.push((group, page.id.to_owned(), page.title.to_owned()));
         }
     }
-    // Top-level areas the catalog doesn't claim surface under MORE.
-    let more: Vec<SharedString> = section_names(&shell.schema)
-        .into_iter()
-        .filter(|name| !claimed_tops.contains(&name.as_str()))
-        .collect();
-    if !more.is_empty() {
+    for name in section_names(&shell.schema) {
+        if !claimed_tops.contains(&name.as_str()) {
+            pages.push((catalog::MORE_GROUP, name.to_string(), prettify(&name)));
+        }
+    }
+    pages
+}
+
+/// The sidebar model: Outputs, then one collapsible header per group
+/// with its pages under it while open. A group is open when the user
+/// opened it, or, until they choose, when it holds `current`.
+pub(super) fn section_nav(shell: &Shell, current: &str) -> Vec<SectionNav> {
+    let counts = page_new_counts(shell);
+    let pages = nav_pages(shell);
+    let mut nav: Vec<SectionNav> = Vec::new();
+    let mut groups: Vec<&str> = catalog::GROUPS.to_vec();
+    groups.push(catalog::MORE_GROUP);
+    for group in groups {
+        let members: Vec<&(&str, String, String)> =
+            pages.iter().filter(|(g, _, _)| *g == group).collect();
+        let row = |(_, id, label): &(&str, String, String), child: bool, last: bool| SectionNav {
+            label: label.as_str().into(),
+            id: id.as_str().into(),
+            new_count: counts.get(id.as_str()).copied().unwrap_or(0),
+            is_header: false,
+            group: group.into(),
+            expanded: false,
+            child,
+            last,
+        };
+        // Outputs is a group of one: a plain row, no header.
+        if group == "outputs" {
+            nav.extend(members.iter().map(|page| row(page, false, false)));
+            continue;
+        }
+        if members.is_empty() {
+            continue;
+        }
+        let key = format!("group:{group}");
+        let holds_current = members.iter().any(|(_, id, _)| id == current);
+        let expanded = card_expanded(shell, &key, holds_current);
         nav.push(SectionNav {
-            label: catalog::group_title(catalog::MORE_GROUP)
-                .to_uppercase()
-                .into(),
-            id: String::new().into(),
-            new_count: 0,
+            label: catalog::group_title(group).into(),
+            id: key.into(),
+            new_count: members
+                .iter()
+                .map(|(_, id, _)| counts.get(id.as_str()).copied().unwrap_or(0))
+                .sum(),
             is_header: true,
+            group: group.into(),
+            expanded,
+            child: false,
+            last: false,
         });
-        for name in more {
-            nav.push(SectionNav {
-                new_count: counts.get(name.as_str()).copied().unwrap_or(0),
-                label: prettify(&name).into(),
-                id: name.to_string().into(),
-                is_header: false,
-            });
+        if expanded {
+            let last = members.len() - 1;
+            nav.extend(
+                members
+                    .iter()
+                    .enumerate()
+                    .map(|(i, page)| row(page, true, i == last)),
+            );
         }
     }
     nav
@@ -443,6 +458,33 @@ pub(super) fn install_navigation(
         let shell = Rc::clone(shell);
         app.on_section_selected(move |name| {
             let Some(app) = weak.upgrade() else { return };
+            // A group header opens or closes its pages.
+            if name.starts_with("group:") {
+                let open = {
+                    let shell = shell.borrow();
+                    section_nav(&shell, &app.get_current_section())
+                        .iter()
+                        .find(|entry| entry.id == name)
+                        .is_some_and(|entry| !entry.expanded)
+                };
+                shell
+                    .borrow_mut()
+                    .card_expanded
+                    .insert(name.to_string(), open);
+                let nav = section_nav(&shell.borrow(), &app.get_current_section());
+                app.set_sections(Rc::new(VecModel::from(nav)).into());
+                return;
+            }
+            app.set_page_group(
+                catalog::page(&name)
+                    .map_or(catalog::MORE_GROUP, |page| page.group)
+                    .into(),
+            );
+            // The page's group opens with it (unless the user closed it).
+            {
+                let nav = section_nav(&shell.borrow(), &name);
+                app.set_sections(Rc::new(VecModel::from(nav)).into());
+            }
             // Outputs page: its own surface; rescan on open —
             // fast-fails when no compositor is reachable and keeps the
             // last detection.
@@ -481,6 +523,9 @@ pub(super) fn install_navigation(
             // Keybinds page: its own surface, not a CategoryPage.
             if name.as_str() == "keybinds" {
                 app.set_current_section(name.clone());
+                let (title, description) = page_meta(&name);
+                app.set_page_title(title.into());
+                app.set_page_description(description.into());
                 app.set_page(Page::Keybinds);
                 let shell = shell.borrow();
                 super::page_keybinds::rebuild_keybind_rows(

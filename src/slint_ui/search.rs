@@ -32,6 +32,12 @@ pub(super) fn install_search(
             if needle.is_empty() {
                 // Empty box = leave search; restore the section overview.
                 let section = app.get_current_section().to_string();
+                // Searching from Home returns there.
+                if section.is_empty() {
+                    app.set_page(Page::Home);
+                    super::page_home::rebuild_home(&app, &shell);
+                    return;
+                }
                 app.set_page(Page::Section);
                 let (title, description) = super::sections::page_meta(&section);
                 app.set_page_title(title.into());

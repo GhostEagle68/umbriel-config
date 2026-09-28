@@ -40,12 +40,16 @@ import {
     SectionRow,
     SettingsCard,
     CodeEdit,
+    DeskMonitor,
+    DeskStyle,
+    HomeLink,
     ShaderAssignment,
     ShaderInfo,
     ShaderStep,
     ShaderUse,
 } from "types.slint";
 import { CategoryPage } from "pages/category.slint";
+import { HomePage } from "pages/home.slint";
 import { SettingsPage } from "pages/settings.slint";
 import { BackupsPage } from "pages/backups.slint";
 import { KeybindsPage, KeybindsState } from "pages/keybinds.slint";
@@ -64,7 +68,7 @@ import "../assets/fonts/Inter-Regular.ttf";
 import "../assets/fonts/Inter-Bold.ttf";
 import "../assets/fonts/JetBrainsMono-Regular.ttf";
 
-export enum Page { section, search, settings, backups, keybinds, outputs, rules, shaders }
+export enum Page { home, section, search, settings, backups, keybinds, outputs, rules, shaders }
 
 export component AppWindow inherits Window {
     preferred-width: 960px;
@@ -88,7 +92,7 @@ export component AppWindow inherits Window {
     in property <string> status;
     in-out property <string> current-section;
     in-out property <bool> show-exit-confirm: false;
-    in-out property <Page> page: Page.section;
+    in-out property <Page> page: Page.home;
     in property <[SettingsCard]> cards;
     in property <[SectionRow]> search-rows;
     // Keys whose current value differs from the on-disk snapshot.
@@ -103,6 +107,35 @@ export component AppWindow inherits Window {
     in property <string> popup-file-path;
     in property <string> popup-file-text;
     in property <string> file-stats;
+    // Home page models, filled by page_home.rs.
+    in property <[HomeLink]> home-changes;
+    in property <[HomeLink]> home-new-settings;
+    in property <[DeskMonitor]> home-monitors;
+    in property <DeskStyle> home-desk-style;
+    callback home-requested();
+    // The sidebar group of the page on show, for the top bar's icon.
+    in property <string> page-group;
+    pure function group-icon(group: string) -> image {
+        if group == "outputs" {
+            return @image-url("../assets/icons/monitor.svg");
+        }
+        if group == "desktop" {
+            return @image-url("../assets/icons/desktop.svg");
+        }
+        if group == "windows" {
+            return @image-url("../assets/icons/windows.svg");
+        }
+        if group == "look" {
+            return @image-url("../assets/icons/look.svg");
+        }
+        if group == "input" {
+            return @image-url("../assets/icons/input.svg");
+        }
+        if group == "system" {
+            return @image-url("../assets/icons/system.svg");
+        }
+        return @image-url("../assets/icons/more.svg");
+    }
 
     callback search-edited(string);
     callback section-selected(string);
@@ -290,187 +323,318 @@ export component AppWindow inherits Window {
     callback guide-next();
     callback guide-relaunch();
 
-    VerticalLayout {
-        // ── header ─────────────────────────────────────────────
+    HorizontalLayout {
+        // ── sidebar ─────────────────────────────────────────────
         Rectangle {
-            height: 44px;
-            background: Theme.bg-1;
+            width: 248px;
+            background: Theme.bg-0;
 
-            HorizontalLayout {
-                padding-left: Theme.space-l;
-                padding-right: Theme.space-l;
-                spacing: Theme.space-m;
-                alignment: start;
+            Rectangle {
+                x: parent.width - 1px;
+                width: 1px;
+                background: Theme.divider;
+            }
 
-                Text {
-                    text: "Umbriel Config";
-                    color: Theme.text-1;
-                    font-size: Theme.font-large;
-                    font-weight: 700;
-                    vertical-alignment: center;
+            VerticalLayout {
+                padding: Theme.space-m;
+                padding-right: Theme.space-m + 1px;
+                spacing: Theme.space-xs;
+
+                // Brand
+                HorizontalLayout {
+                    height: 44px;
+                    padding-left: 10px;
+                    spacing: 10px;
+
+                    Image {
+                        width: 22px;
+                        height: 22px;
+                        y: (parent.height - self.height) / 2;
+                        source: @image-url("../assets/umbriel-config.svg");
+                    }
+
+                    Text {
+                        text: "Umbriel Config";
+                        color: Theme.text-1;
+                        font-size: Theme.font-large;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Search lives in the sidebar, above what it searches.
+                Rectangle {
+                    height: 36px;
+                    border-radius: Theme.radius-m;
+                    background: Theme.bg-1;
+                    border-width: 1px;
+                    border-color: search-input.has-focus ? Theme.border : Theme.divider;
+
+                    Image {
+                        x: 10px;
+                        width: 16px;
+                        height: 16px;
+                        source: @image-url("../assets/icons/search.svg");
+                        colorize: Theme.text-2;
+                    }
+
+                    search-input := TextInput {
+                        x: 34px;
+                        width: parent.width - 44px;
+                        color: Theme.text-1;
+                        vertical-alignment: center;
+                        single-line: true;
+                        edited => { root.search-edited(self.text); }
+                    }
+
+                    if search-input.text == "": Text {
+                        x: 34px;
+                        text: "Search";
+                        color: Theme.text-2;
+                        vertical-alignment: center;
+                    }
                 }
 
                 Rectangle {
-                    horizontal-stretch: 1;
+                    height: Theme.space-s;
                 }
 
-                // Flexes with the window between a usable minimum and a
-                // compact maximum; the spacer keeps the rest.
-                LineEdit {
-                    min-width: 160px;
-                    max-width: 320px;
-                    horizontal-stretch: 1;
-                    placeholder-text: "Search Settings";
-                    edited(t) => { root.search-edited(t); }
+                NavRow {
+                    label: "Home";
+                    icon: @image-url("../assets/icons/home.svg");
+                    has-icon: true;
+                    selected: root.page == Page.home;
+                    selected-fired => { root.home-requested(); }
                 }
 
-                ActionButton {
-                    text: "Save" + (root.changed-count > 0 ? " · " + root.changed-count : "");
-                    primary: true;
-                    enabled: root.dirty;
-                    clicked => { root.save-requested(); }
-                }
-            }
-        }
-
-        // include warning strip (only when notes exist)
-        if root.include-note != "": Rectangle {
-            height: 24px;
-            background: Theme.bg-1;
-            Text {
-                x: Theme.space-l;
-                text: "⚠ " + root.include-note;
-                color: Theme.warning;
-                font-size: Theme.font-small;
-                vertical-alignment: center;
-            }
-        }
-
-        // validation result of the last save (errors and warnings)
-        if root.validate-note != "": Rectangle {
-            height: 24px;
-            background: Theme.bg-1;
-            Text {
-                x: Theme.space-l;
-                text: "⚠ " + root.validate-note;
-                color: Theme.warning;
-                font-size: Theme.font-small;
-                vertical-alignment: center;
-            }
-        }
-
-        // an automatic canary install landed: restart to use it
-        if root.update-strip != "": Rectangle {
-            height: 24px;
-            background: Theme.bg-1;
-
-            TouchArea {
-                clicked => {
-                    root.view-update-notes();
-                    root.update-strip = "";
-                }
-            }
-
-            Text {
-                x: Theme.space-l;
-                text: root.update-strip + " · click for what changed";
-                color: Theme.text-2;
-                font-size: Theme.font-small;
-                vertical-alignment: center;
-            }
-        }
-
-        // quiet banner: umbriel missing but a config exists
-        if root.umbriel-missing: Rectangle {
-            height: 24px;
-            background: Theme.bg-1;
-
-            banner-ta := TouchArea {
-                clicked => { root.umbriel-missing = false; }
-            }
-
-            Text {
-                x: Theme.space-l;
-                text: "Umbriel not detected, validation unavailable · click to dismiss";
-                color: Theme.warning;
-                font-size: Theme.font-small;
-                vertical-alignment: center;
-            }
-        }
-
-        HorizontalLayout {
-            // ── sidebar ─────────────────────────────────────────
-                        Rectangle {
-                width: 208px;
-                background: Theme.bg-1;
-
-                VerticalLayout {
-                    spacing: Theme.space-xs;
-
-                    ScrollView {
-                        vertical-stretch: 1;
-
-                        VerticalLayout {
-                            padding: Theme.space-s;
-                            spacing: Theme.space-xs;
-                            alignment: start;
-
-                            Text {
-                                text: "Settings";
-                                color: Theme.text-1;
-                                font-size: Theme.font-large;
-                                font-weight: 700;
-                            }
-
-                            for section in root.sections: NavRow {
-                                label: section.label;
-                                count: section.new-count;
-                                header: section.is-header;
-                                selected: !section.is-header
-                                    && section.id == root.current-section
-                                    && (root.page == Page.section
-                                    || root.page == Page.keybinds
-                                    || root.page == Page.outputs
-                                    || root.page == Page.rules);
-                                selected-fired => { root.section-selected(section.id); }
-                            }
-                        }
-                    }
+                ScrollView {
+                    vertical-stretch: 1;
 
                     VerticalLayout {
-                        vertical-stretch: 0;
-                        padding: Theme.space-s;
-                        spacing: Theme.space-xs;
+                        spacing: 2px;
+                        alignment: start;
 
-                        NavRow {
-                            label: "Backups";
-                            selected: root.page == Page.backups;
-                            selected-fired => { root.backups-requested(); }
-                        }
-
-                        NavRow {
-                            label: "Settings" + (root.update-available ? " •" : "");
-                            selected: root.page == Page.settings;
-                            selected-fired => { root.settings-requested(); }
-                        }
-
-                        ActionButton {
-                            text: "Exit";
-                            clicked => {
-                                if (root.dirty) {
-                                    root.show-exit-confirm = true;
-                                } else {
-                                    root.exit-requested();
-                                }
-                            }
+                        for section in root.sections: NavRow {
+                            label: section.label;
+                            icon: root.group-icon(section.group);
+                            has-icon: !section.child;
+                            count: section.new-count;
+                            header: section.is-header;
+                            expanded: section.expanded;
+                            child: section.child;
+                            last: section.last;
+                            selected: !section.is-header
+                                && section.id == root.current-section
+                                && (root.page == Page.section
+                                || root.page == Page.keybinds
+                                || root.page == Page.outputs
+                                || root.page == Page.rules
+                                || root.page == Page.shaders);
+                            selected-fired => { root.section-selected(section.id); }
                         }
                     }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
+                }
+
+                NavRow {
+                    label: "Backups";
+                    icon: @image-url("../assets/icons/backups.svg");
+                    has-icon: true;
+                    selected: root.page == Page.backups;
+                    selected-fired => { root.backups-requested(); }
+                }
+
+                NavRow {
+                    label: "Settings";
+                    icon: @image-url("../assets/icons/settings.svg");
+                    has-icon: true;
+                    count: root.update-available ? 1 : 0;
+                    selected: root.page == Page.settings;
+                    selected-fired => { root.settings-requested(); }
+                }
+
+                NavRow {
+                    label: "Exit";
+                    icon: @image-url("../assets/icons/exit.svg");
+                    has-icon: true;
+                    selected-fired => {
+                        if (root.dirty) {
+                            root.show-exit-confirm = true;
+                        } else {
+                            root.exit-requested();
+                        }
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            // ── top bar: where you are, and Save ────────────────
+            Rectangle {
+                height: 56px;
+                background: Theme.bg-0;
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.divider;
+                }
+
+                HorizontalLayout {
+                    padding-left: Theme.space-xl;
+                    padding-right: Theme.space-xl;
+                    spacing: 10px;
+
+                    Image {
+                        width: 18px;
+                        height: 18px;
+                        y: (parent.height - self.height) / 2;
+                        source: root.page == Page.home ? @image-url("../assets/icons/home.svg")
+                            : root.page == Page.settings ? @image-url("../assets/icons/settings.svg")
+                            : root.page == Page.backups ? @image-url("../assets/icons/backups.svg")
+                            : root.page == Page.search ? @image-url("../assets/icons/search.svg")
+                            : root.group-icon(root.page-group);
+                        colorize: Theme.text-2;
+                    }
+
+                    Text {
+                        text: root.page == Page.home ? "Home"
+                            : root.page == Page.settings ? "Settings"
+                            : root.page == Page.backups ? "Backups"
+                            : root.page == Page.search ? "Search"
+                            : root.page-title;
+                        color: Theme.text-2;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+
+                    // Only while there is something to save.
+                    if root.dirty: VerticalLayout {
+                        alignment: center;
+
+                        ActionButton {
+                            text: "Save " + root.changed-count + " change" + (root.changed-count == 1 ? "" : "s");
+                            primary: true;
+                            clicked => { root.save-requested(); }
+                        }
+                    }
+                }
+            }
+
+            // include warning strip (only when notes exist)
+            if root.include-note != "": Rectangle {
+                height: 24px;
+                background: Theme.bg-1;
+                Text {
+                    x: Theme.space-l;
+                    text: "⚠ " + root.include-note;
+                    color: Theme.warning;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+            }
+
+            // validation result of the last save (errors and warnings)
+            if root.validate-note != "": Rectangle {
+                height: 24px;
+                background: Theme.bg-1;
+                Text {
+                    x: Theme.space-l;
+                    text: "⚠ " + root.validate-note;
+                    color: Theme.warning;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+            }
+
+            // an automatic canary install landed: restart to use it
+            if root.update-strip != "": Rectangle {
+                height: 24px;
+                background: Theme.bg-1;
+
+                TouchArea {
+                    clicked => {
+                        root.view-update-notes();
+                        root.update-strip = "";
+                    }
+                }
+
+                Text {
+                    x: Theme.space-l;
+                    text: root.update-strip + " · click for what changed";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+            }
+
+            // quiet banner: umbriel missing but a config exists
+            if root.umbriel-missing: Rectangle {
+                height: 24px;
+                background: Theme.bg-1;
+
+                banner-ta := TouchArea {
+                    clicked => { root.umbriel-missing = false; }
+                }
+
+                Text {
+                    x: Theme.space-l;
+                    text: "Umbriel not detected, validation unavailable · click to dismiss";
+                    color: Theme.warning;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
                 }
             }
 
             // ── content ─────────────────────────────────────────
             Rectangle {
                 background: Theme.bg-0;
+
+                if root.page == Page.home: hsv := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    viewport-height: home-page.preferred-height;
+
+                    home-page := HomePage {
+                        width: min(1040px, hsv.visible-width);
+                        x: (hsv.visible-width - self.width) / 2;
+                        include-count: root.include-files.length;
+                        include-files: root.include-files;
+                        config-path: root.config-path;
+                        view-file(i) => { root.view-file(i); }
+                        changed-count: root.changed-count;
+                        changes: root.home-changes;
+                        new-settings: root.home-new-settings;
+                        monitors: root.home-monitors;
+                        desk: root.home-desk-style;
+                        umbriel-missing: root.umbriel-missing;
+                        upstream-note: root.upstream-note;
+                        update-available: root.update-available;
+                        update-note: root.update-note;
+                        update-notes: root.update-notes;
+                        update-can-install: root.update-can-install;
+                        update-installed: root.update-installed;
+                        update-hint: root.update-hint;
+                        view-changelog => { root.view-changelog(); }
+                        open-page(id) => {
+                            if id == "" {
+                                root.save-requested();
+                            } else {
+                                root.section-selected(id);
+                            }
+                        }
+                        view-main-file => { root.view-file(root.include-files.length); }
+                        install-update => { root.install-update(); }
+                        restart-app => { root.restart-app(); }
+                        view-update-notes => { root.view-update-notes(); }
+                        open-settings => { root.settings-requested(); }
+                        run-guide => { root.guide-relaunch(); }
+                    }
+                }
 
                 if root.page == Page.keybinds: kbv := ScrollView {
                     width: 100%;

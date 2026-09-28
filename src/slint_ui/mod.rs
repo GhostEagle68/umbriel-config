@@ -38,6 +38,7 @@ mod catalog;
 mod common;
 mod guide;
 mod page_backups;
+mod page_home;
 mod page_keybinds;
 mod page_outputs;
 mod page_rules;
@@ -83,6 +84,9 @@ struct Shell {
     live_note: String,
     // Collapsed/expanded cards by stable key; absent = page default.
     card_expanded: BTreeMap<String, bool>,
+    // Noctalia's wallpaper per monitor ("" = its default), for Home's
+    // desktop drawing; loaded once at startup.
+    wallpapers: BTreeMap<String, slint::Image>,
     // Discovered GLSL shaders + the last download/scan note.
     shaders: Vec<shaders::ShaderEntry>,
     shader_note: String,
@@ -216,6 +220,7 @@ impl Shell {
             guide_monitors: Vec::new(),
             live_note: String::new(),
             card_expanded: BTreeMap::new(),
+            wallpapers: BTreeMap::new(),
             shaders: Vec::new(),
             shader_note: String::new(),
             shaders_installed: false,
@@ -346,13 +351,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     app.set_umbriel_missing(!umbriel_present);
     app.set_schema_empty(shell.borrow().schema.is_empty());
 
-    let nav = sections::section_nav(&shell.borrow());
-    let configured_outputs = !outputs::configured(&shell.borrow().doc).is_empty();
-    let landing = nav
-        .iter()
-        .find(|entry| !entry.is_header && (configured_outputs || entry.id != catalog::OUTPUTS_ID))
-        .map(|entry| entry.id.clone());
-    app.set_sections(Rc::new(VecModel::from(nav)).into());
+    app.set_sections(Rc::new(VecModel::from(sections::section_nav(&shell.borrow(), ""))).into());
     {
         // Shader builder: the palette of step kinds the Add-an-effect
         // dropdown offers.
@@ -428,6 +427,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     search::install_search(&app, &shell, &kb_actions, &keybind_view);
     save::install_save(&app, &shell, &env);
     page_settings::install_settings(&app, &shell, &env);
+    shell.borrow_mut().wallpapers = page_home::noctalia_wallpapers(&env);
+    page_home::install_home(&app, &shell);
     page_backups::install_backups(&app, &shell, &env, &backup_runs);
     page_outputs::install_outputs(&app, &shell);
     page_rules::install_rules(&app, &shell);
@@ -436,11 +437,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     guide::install_guide(&app, &shell, &env);
     rows::install_value_editing(&app, &shell);
     rows::install_color_math(&app);
-    // Open the landing page the way a click does (Outputs scans the
-    // live monitors on open).
-    if let Some(id) = landing {
-        app.invoke_section_selected(id);
-    }
+    app.invoke_home_requested();
 
     {
         let weak = app.as_weak();
@@ -497,6 +494,11 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     // New umbriel options come from its docs; refresh them at most daily.
     if settings.check_updates_on_start && umbriel_docs::is_stale(&env) {
         page_settings::start_docs_download(app.as_weak(), env.clone());
+    }
+    // Home shows the compositor's latest commit; like the checks above,
+    // only when the network on start is allowed.
+    if settings.check_updates_on_start {
+        page_settings::fetch_upstream_note(&app);
     }
 
     app.run()

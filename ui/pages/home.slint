@@ -1,0 +1,594 @@
+// Home page: the start screen. A drawing of the user's own desktop
+// (monitors, wallpaper, windows tiled with their gaps, borders and
+// colors), the numbers behind it, and what's waiting: unsaved changes,
+// an update, newly synced settings.
+
+import { ActionButton } from "../widgets.slint";
+import { DeskMonitor, DeskStyle, HomeLink } from "../types.slint";
+import { Theme } from "../theme.slint";
+
+component SectionTitle inherits Text {
+    color: Theme.text-1;
+    font-size: Theme.font-large;
+    font-weight: 600;
+}
+
+// One overview line: icon, label with a grey caption, and the value
+// on the right.
+component StatRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <string> caption;
+    in property <string> value;
+    // Expandable lines show a chevron and toggle on click.
+    in property <bool> expandable: false;
+    in property <bool> expanded: false;
+    callback toggle();
+    height: 56px;
+    border-radius: Theme.radius-m;
+    background: root.expandable && ta.has-hover ? Theme.bg-1 : transparent;
+
+    ta := TouchArea {
+        enabled: root.expandable;
+        mouse-cursor: root.expandable ? pointer : default;
+        clicked => { root.toggle(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-s;
+        padding-right: Theme.space-m;
+        spacing: Theme.space-m;
+
+        Image {
+            width: 18px;
+            height: 18px;
+            y: (parent.height - self.height) / 2;
+            source: root.icon;
+            colorize: Theme.text-2;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.label;
+                color: Theme.text-1;
+            }
+
+            Text {
+                text: root.caption;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                overflow: elide;
+            }
+        }
+
+        Text {
+            text: root.value;
+            color: Theme.text-2;
+            vertical-alignment: center;
+        }
+
+        if root.expandable: Image {
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+            source: @image-url("../../assets/icons/chevron-down.svg");
+            colorize: Theme.text-2;
+            transform-rotation: root.expanded ? 180deg : 0deg;
+            animate transform-rotation { duration: 150ms; }
+        }
+    }
+
+    // Hairline between lines, like the rest of the page's lists.
+    Rectangle {
+        y: parent.height - 1px;
+        x: Theme.space-s;
+        width: parent.width - 2 * Theme.space-s;
+        height: 1px;
+        background: Theme.divider;
+    }
+}
+
+// One file under the expanded Config files line; opens the viewer.
+component FileLine inherits Rectangle {
+    in property <string> path;
+    in property <string> tag;
+    callback open();
+    height: 34px;
+    border-radius: Theme.radius-m;
+    background: fta.has-hover ? Theme.bg-1 : transparent;
+
+    fta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.open(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 38px;
+        padding-right: Theme.space-m;
+        spacing: Theme.space-m;
+
+        Text {
+            text: root.path;
+            color: fta.has-hover ? Theme.text-1 : Theme.text-2;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.tag;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// A plain list row: icon, title, grey subtitle, a chevron. The whole
+// row is the click target.
+component ListRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> subtitle;
+    callback clicked();
+    height: 56px;
+    border-radius: Theme.radius-m;
+    background: ta.has-hover ? Theme.bg-1 : transparent;
+    animate background { duration: 100ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-s;
+        padding-right: Theme.space-m;
+        spacing: Theme.space-m;
+
+        Image {
+            width: 18px;
+            height: 18px;
+            y: (parent.height - self.height) / 2;
+            source: root.icon;
+            colorize: Theme.text-2;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.title;
+                color: Theme.text-1;
+                overflow: elide;
+            }
+
+            if root.subtitle != "": Text {
+                text: root.subtitle;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                overflow: elide;
+            }
+        }
+
+        Image {
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+            source: @image-url("../../assets/icons/chevron-right.svg");
+            colorize: Theme.text-2;
+            opacity: ta.has-hover ? 1 : 0.5;
+        }
+    }
+}
+
+// A drawing of the user's desktop: their monitors where they sit, with
+// windows tiled in their layout mode using their gap, border width,
+// corner radius and colors. Gaps, borders and corners are drawn 3x
+// their scaled size so an 8px gap still reads at this size.
+component DesktopDrawing inherits Rectangle {
+    in property <[DeskMonitor]> monitors;
+    in property <DeskStyle> desk;
+    callback open-monitor();
+    callback open-windows();
+    property <float> pad: 28;
+    property <length> label-h: 22px;
+    property <float> sc: min((self.width / 1px - 2 * root.pad) / max(root.desk.extent-w, 1), (self.height / 1px - 2 * root.pad - root.label-h / 1px) / max(root.desk.extent-h, 1));
+    property <float> deco: root.sc * 3;
+    property <length> ox: (self.width - root.desk.extent-w * root.sc * 1px) / 2;
+    property <length> oy: (self.height - root.label-h - root.desk.extent-h * root.sc * 1px) / 2;
+    // As tall as the monitors need at this width, within bounds.
+    height: clamp((self.width / 1px - 2 * root.pad) * root.desk.extent-h / max(root.desk.extent-w, 1) * 1px + 2 * root.pad * 1px + root.label-h, 180px, 250px);
+    border-radius: Theme.radius-xl;
+    background: Theme.bg-1;
+
+    for m in root.monitors: Rectangle {
+        x: root.ox + m.x * root.sc * 1px;
+        y: root.oy + m.y * root.sc * 1px;
+        width: m.w * root.sc * 1px;
+        height: m.h * root.sc * 1px + root.label-h;
+
+        // Bezel, then the screen inside it.
+        Rectangle {
+            y: 0;
+            height: parent.height - root.label-h;
+            border-radius: 7px;
+            background: Theme.dark ? #0a0a0d : #2a2c33;
+            drop-shadow-blur: 18px;
+            drop-shadow-offset-y: 6px;
+            drop-shadow-color: #00000066;
+            border-width: 1px;
+            border-color: screen-ta.has-hover ? Theme.accent : #ffffff14;
+            animate border-color { duration: 150ms; }
+
+            screen := Rectangle {
+                x: 3px;
+                y: 3px;
+                width: parent.width - 6px;
+                height: parent.height - 6px;
+                border-radius: 5px;
+                clip: true;
+                background: @linear-gradient(135deg, root.desk.accent.darker(0.55) 0%, root.desk.background 55%, root.desk.accent-2.darker(0.65) 100%);
+
+                if m.has-wallpaper: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: m.wallpaper;
+                    image-fit: cover;
+                }
+
+                screen-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.open-monitor(); }
+                }
+
+                // The usable area: struts, then an outer gap.
+                property <length> g: root.desk.gap * root.deco * 1px;
+                property <length> ux: root.desk.strut-left * root.deco * 1px + self.g / 2;
+                property <length> uy: root.desk.strut-top * root.deco * 1px + self.g / 2;
+                property <length> uw: self.width - self.ux - root.desk.strut-right * root.deco * 1px - self.g / 2;
+                property <length> uh: self.height - self.uy - root.desk.strut-bottom * root.deco * 1px - self.g / 2;
+
+                // Solid windows in the user's window color, each with a
+                // title strip and an app mark, so a tile reads as a window.
+                for w in m.windows: Rectangle {
+                    property <length> border: root.desk.border <= 0 ? 0px : max(1px, root.desk.border * root.deco * 1px);
+                    property <length> strip: clamp(self.height * 0.13, 7px, 14px);
+                    x: screen.ux + w.x * screen.uw + screen.g / 2;
+                    y: screen.uy + w.y * screen.uh + screen.g / 2;
+                    width: max(0px, w.w * screen.uw - screen.g);
+                    height: max(0px, w.h * screen.uh - screen.g);
+                    border-radius: root.desk.radius * root.deco * 1px;
+                    clip: true;
+                    background: window-ta.has-hover ? root.desk.background.brighter(0.55) : root.desk.background.brighter(0.3);
+                    animate background { duration: 120ms; }
+                    drop-shadow-blur: root.desk.shadow ? 8px : 0px;
+                    drop-shadow-offset-y: 2px;
+                    drop-shadow-color: #00000080;
+
+                    // Title strip: an app mark and a name-ish bar.
+                    Rectangle {
+                        y: 0;
+                        height: parent.strip;
+                        background: root.desk.background.brighter(0.6);
+
+                        Rectangle {
+                            x: parent.height * 0.35;
+                            width: parent.height * 0.5;
+                            height: self.width;
+                            border-radius: self.width / 2;
+                            background: w.focused ? root.desk.focused : root.desk.unfocused.brighter(0.8);
+                        }
+
+                        Rectangle {
+                            x: parent.height * 1.1;
+                            width: min(parent.width * 0.3, 40px);
+                            height: max(2px, parent.height * 0.22);
+                            border-radius: self.height / 2;
+                            background: root.desk.background.brighter(1.6);
+                            opacity: 0.6;
+                        }
+                    }
+
+                    // A few lines of content.
+                    for line[i] in 3: Rectangle {
+                        x: parent.strip * 0.6;
+                        y: parent.strip * (1.6 + i * 0.8);
+                        width: (parent.width - parent.strip * 1.2) * (i == 0 ? 0.6 : i == 1 ? 0.85 : 0.45);
+                        height: max(2px, parent.strip * 0.2);
+                        border-radius: self.height / 2;
+                        background: root.desk.background.brighter(1.2);
+                        opacity: 0.35;
+                    }
+
+                    // The border on top of the content. The focused window
+                    // always shows its color, even with no border set.
+                    Rectangle {
+                        border-radius: parent.border-radius;
+                        border-width: w.focused ? max(1.5px, parent.border) : parent.border;
+                        border-color: w.focused ? root.desk.focused : root.desk.unfocused;
+                    }
+
+                    window-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.open-windows(); }
+                    }
+                }
+            }
+        }
+
+        Text {
+            y: parent.height - root.label-h + 4px;
+            width: parent.width;
+            horizontal-alignment: center;
+            text: m.name;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            overflow: elide;
+        }
+    }
+}
+
+export component HomePage inherits Rectangle {
+    in property <int> include-count;
+    in property <[string]> include-files;
+    in property <string> config-path;
+    // The Config files line is open.
+    property <bool> files-open: false;
+    callback view-file(int);
+    in property <int> changed-count;
+    in property <[HomeLink]> changes;
+    in property <[HomeLink]> new-settings;
+    in property <[DeskMonitor]> monitors;
+    in property <DeskStyle> desk;
+    in property <bool> umbriel-missing;
+    in property <string> upstream-note;
+    in property <bool> update-available;
+    in property <string> update-note;
+    in property <string> update-notes;
+    in property <bool> update-can-install;
+    in property <bool> update-installed;
+    in property <string> update-hint;
+    callback open-page(string);
+    callback view-main-file();
+    callback install-update();
+    callback restart-app();
+    callback view-update-notes();
+    callback open-settings();
+    callback run-guide();
+    callback view-changelog();
+
+    VerticalLayout {
+        padding-left: Theme.space-xl;
+        padding-right: Theme.space-xl;
+        padding-top: 28px;
+        padding-bottom: 28px;
+        spacing: 28px;
+        alignment: start;
+
+        // ── heading + the page's one strong action ──
+        HorizontalLayout {
+            spacing: Theme.space-l;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.space-xs;
+
+                Text {
+                    text: "Your desktop";
+                    color: Theme.text-1;
+                    font-size: Theme.font-title;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "Drawn from your config. Click a screen or a window to change how it looks.";
+                    color: Theme.text-2;
+                    wrap: TextWrap.word-wrap;
+                }
+            }
+
+            // Save sits in the top bar on every page.
+            VerticalLayout {
+                alignment: center;
+
+                ActionButton {
+                    text: "View config.toml";
+                    clicked => { root.view-main-file(); }
+                }
+            }
+        }
+
+        DesktopDrawing {
+            monitors: root.monitors;
+            desk: root.desk;
+            open-monitor => { root.open-page("outputs"); }
+            open-windows => { root.open-page("appearance"); }
+        }
+
+        // ── the numbers behind the drawing ──
+        VerticalLayout {
+            spacing: Theme.space-l;
+
+            SectionTitle {
+                text: "Overview";
+            }
+
+            VerticalLayout {
+                StatRow {
+                    icon: @image-url("../../assets/icons/monitor.svg");
+                    label: "Monitors";
+                    caption: root.monitors.length == 1 ? root.monitors[0].name : root.monitors[0].name + " and " + (root.monitors.length - 1) + " more";
+                    value: root.monitors.length;
+                }
+
+                StatRow {
+                    icon: @image-url("../../assets/icons/desktop.svg");
+                    label: "Layout";
+                    caption: "gap " + root.desk.gap + " · border " + root.desk.border + " · radius " + root.desk.radius;
+                    value: root.desk.mode;
+                }
+
+                StatRow {
+                    icon: @image-url("../../assets/icons/file.svg");
+                    label: "Config files";
+                    caption: root.include-count == 0 ? "config.toml, no includes"
+                        : "config.toml + " + root.include-count + " include" + (root.include-count == 1 ? "" : "s") + (root.files-open ? " · click to hide" : " · click to show all");
+                    value: root.include-count + 1;
+                    expandable: root.include-count > 0;
+                    expanded: root.files-open;
+                    toggle => { root.files-open = !root.files-open; }
+                }
+
+                // Every file umbriel reads, in load order; the main
+                // config loads last and wins.
+                if root.files-open: VerticalLayout {
+                    padding-top: Theme.space-xs;
+                    padding-bottom: Theme.space-xs;
+
+                    for file[i] in root.include-files: FileLine {
+                        path: file;
+                        tag: "include " + (i + 1);
+                        open => { root.view-file(i); }
+                    }
+
+                    FileLine {
+                        path: root.config-path;
+                        tag: "main, loads last";
+                        open => { root.view-main-file(); }
+                    }
+                }
+
+                StatRow {
+                    icon: @image-url("../../assets/icons/system.svg");
+                    label: "Umbriel";
+                    caption: root.umbriel-missing ? "Saves can't be validated" : root.upstream-note;
+                    value: root.umbriel-missing ? "Missing" : "Detected";
+                }
+            }
+        }
+
+        // ── what's waiting ──
+        if root.update-available || (root.changed-count > 0 && root.changes.length > 0) || root.new-settings.length > 0: VerticalLayout {
+            spacing: Theme.space-s;
+
+            SectionTitle {
+                text: "Waiting for you";
+            }
+
+            if root.update-available: HorizontalLayout {
+                spacing: Theme.space-m;
+                padding-left: Theme.space-s;
+                height: 56px;
+
+                Image {
+                    width: 18px;
+                    height: 18px;
+                    y: (parent.height - self.height) / 2;
+                    source: @image-url("../../assets/icons/download.svg");
+                    colorize: Theme.accent;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    horizontal-stretch: 1;
+
+                    Text {
+                        text: root.update-note;
+                        color: Theme.text-1;
+                    }
+
+                    Text {
+                        text: root.update-can-install ? "Installs in place; restart to use it." : root.update-hint;
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        overflow: elide;
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-s;
+                    padding-top: 13px;
+                    padding-bottom: 13px;
+
+                    if root.update-notes != "": ActionButton {
+                        text: "What's new";
+                        clicked => { root.view-update-notes(); }
+                    }
+
+                    if root.update-can-install && !root.update-installed: ActionButton {
+                        text: "Install";
+                        clicked => { root.install-update(); }
+                    }
+
+                    if root.update-installed: ActionButton {
+                        text: "Restart";
+                        clicked => { root.restart-app(); }
+                    }
+
+                    if !root.update-can-install: ActionButton {
+                        text: "Details";
+                        clicked => { root.open-settings(); }
+                    }
+                }
+            }
+
+            // The list goes stale after a save; the count doesn't.
+            if root.changed-count > 0: VerticalLayout {
+                for link in root.changes: ListRow {
+                    icon: @image-url("../../assets/icons/file.svg");
+                    title: link.label;
+                    subtitle: link.detail == "" ? "" : "now " + link.detail;
+                    clicked => { root.open-page(link.page-id); }
+                }
+            }
+
+            for link in root.new-settings: ListRow {
+                icon: @image-url("../../assets/icons/sparkle.svg");
+                title: link.label;
+                subtitle: link.detail;
+                clicked => { root.open-page(link.page-id); }
+            }
+        }
+
+        // ── more ──
+        VerticalLayout {
+            spacing: Theme.space-s;
+
+            SectionTitle {
+                text: "More";
+            }
+
+            ListRow {
+                icon: @image-url("../../assets/icons/sparkle.svg");
+                title: "Guided setup";
+                subtitle: "Walk through the settings people change most. Values you set are left alone.";
+                clicked => { root.run-guide(); }
+            }
+
+            ListRow {
+                icon: @image-url("../../assets/icons/file.svg");
+                title: "View config.toml";
+                subtitle: "The file as it will be saved, unsaved edits included.";
+                clicked => { root.view-main-file(); }
+            }
+
+            ListRow {
+                icon: @image-url("../../assets/icons/backups.svg");
+                title: "Changelog";
+                subtitle: "What changed in each version of the app.";
+                clicked => { root.view-changelog(); }
+            }
+        }
+    }
+}

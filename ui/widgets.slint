@@ -21,19 +21,22 @@ export component ActionButton inherits Rectangle {
     in property <bool> enabled: true;
     callback clicked();
 
-    height: 28px;
-    width: label.width + 24px;
-    border-radius: Theme.radius-s;
+    height: 30px;
+    width: label.width + 28px;
+    border-radius: Theme.radius-m;
     background: !root.enabled ? Theme.bg-2
-        : ta.has-hover ? (root.primary ? Theme.accent-hover : Theme.border)
-        : (root.primary ? Theme.accent : Theme.bg-2);
+        : ta.has-hover ? (root.primary ? Theme.primary-hover : Theme.border)
+        : (root.primary ? Theme.primary : Theme.bg-2);
     opacity: root.enabled ? 1.0 : 0.5;
+    animate background { duration: 100ms; }
 
     label := Text {
         text: root.text;
-        // White only rides on the accent; a disabled primary sits on the
-        // neutral card color and must stay readable in both designs.
-        color: root.primary && root.enabled ? white : Theme.text-1;
+        // The primary fill is light on dark (and dark on light); a
+        // disabled primary sits on the neutral card color and must stay
+        // readable in both designs.
+        color: root.primary && root.enabled ? Theme.on-primary : Theme.text-1;
+        font-weight: root.primary ? 600 : 400;
         font-size: Theme.font-body;
         vertical-alignment: center;
         horizontal-alignment: center;
@@ -45,53 +48,92 @@ export component ActionButton inherits Rectangle {
     }
 }
 
-// One sidebar navigation row (group header or page). Headers are small-caps
-// captions (uppercase label comes from the shell); pages indent under them
-// and the selected page carries the accent bar.
+// One sidebar row: a page, a collapsible group header (icon, label,
+// chevron), or a page under an open header, drawn on a tree line. The
+// selected row is a soft filled pill.
 export component NavRow inherits Rectangle {
     in property <string> label;
+    in property <image> icon;
+    in property <bool> has-icon: false;
     in property <bool> selected: false;
     in property <int> count: 0;
     in property <bool> header: false;
+    in property <bool> expanded: false;
+    in property <bool> child: false;
+    // Last child of its group: the tree line stops at this row.
+    in property <bool> last: false;
     callback selected-fired();
 
-    height: root.header ? 22px : 30px;
-    border-radius: Theme.radius-s;
-    background: root.header ? transparent
-        : root.selected ? Theme.accent-soft
-        : ta.has-hover ? Theme.bg-2
-        : transparent;
+    height: 34px;
 
-    // Selected page: accent bar hugging the row's left edge.
-    if root.selected && !root.header: Rectangle {
-        x: 0;
-        width: 3px;
-        border-radius: Theme.radius-s;
-        background: Theme.accent;
+    // Tree line down the open group, under the header's icon.
+    if root.child: Rectangle {
+        x: 18px;
+        y: 0;
+        width: 1px;
+        height: root.last ? parent.height / 2 : parent.height;
+        background: Theme.border;
     }
 
-    Text {
-        x: root.header ? Theme.space-m : Theme.space-m + 16px;
-        text: root.label;
-        color: root.header ? Theme.text-2
-            : root.selected ? Theme.text-1
-            : Theme.text-2;
-        font-size: root.header ? Theme.font-small : Theme.font-body;
-        letter-spacing: root.header ? 1px : 0px;
-        font-weight: root.header ? 700 : 400;
-        vertical-alignment: center;
+    if root.child: Rectangle {
+        x: 18px;
+        y: parent.height / 2;
+        width: 8px;
+        height: 1px;
+        background: Theme.border;
     }
 
-    if root.count > 0 && !root.header: Text {
-        x: parent.width - self.preferred-width - Theme.space-m;
-        text: "· " + root.count;
-        color: Theme.accent;
-        font-size: Theme.font-small;
-        vertical-alignment: center;
+    pill := Rectangle {
+        x: root.child ? 30px : 0;
+        width: parent.width - self.x;
+        border-radius: Theme.radius-m;
+        background: root.selected ? Theme.bg-2 : ta.has-hover ? Theme.bg-1 : transparent;
+        animate background { duration: 100ms; }
+
+        HorizontalLayout {
+            padding-left: root.child ? Theme.space-s : 10px;
+            padding-right: 10px;
+            spacing: 10px;
+
+            if root.has-icon: Image {
+                width: 18px;
+                height: 18px;
+                y: (parent.height - self.height) / 2;
+                source: root.icon;
+                colorize: root.selected ? Theme.text-1 : Theme.text-2;
+            }
+
+            Text {
+                text: root.label;
+                color: root.selected || (root.header && root.expanded) ? Theme.text-1 : Theme.text-2;
+                font-weight: root.selected ? 600 : 400;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+
+            if root.count > 0: Text {
+                text: root.count;
+                color: Theme.accent;
+                font-size: Theme.font-small;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+
+            if root.header: Image {
+                width: 16px;
+                height: 16px;
+                y: (parent.height - self.height) / 2;
+                source: @image-url("../assets/icons/chevron-down.svg");
+                colorize: Theme.text-2;
+                transform-rotation: root.expanded ? 0deg : -90deg;
+                animate transform-rotation { duration: 150ms; }
+            }
+        }
     }
 
     ta := TouchArea {
-        enabled: !root.header;
+        mouse-cursor: pointer;
         clicked => { root.selected-fired(); }
     }
 }
