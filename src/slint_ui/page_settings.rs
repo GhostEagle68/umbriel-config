@@ -350,8 +350,9 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             let fresh_set = schema::key_set(&fresh);
             let mut shell = shell.borrow_mut();
             let drift = schema::diff(&schema::key_set(&shell.schema), &fresh_set);
-            let _ = state::store(&state::snapshot_path(&env), &fresh_set);
+            store_snapshot(&app, &env, &fresh_set);
             shell.new_keys.extend(drift.added.iter().cloned());
+            store_new_keys(&app, &shell, &env);
             let (note, clean) = match (&source, error.is_empty(), drift.is_empty()) {
                 // umbriel's schema decides the keys; the docs only add
                 // labels and units, so their refresh reads as that.

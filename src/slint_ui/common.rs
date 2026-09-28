@@ -176,6 +176,33 @@ pub(super) fn slot_label(slot: &str) -> String {
     }
 }
 
+/// Record umbriel's keys, for the next run to find what's new.
+pub(super) fn store_snapshot(app: &AppWindow, env: &discovery::Env, keys: &BTreeSet<String>) {
+    if let Err(err) = state::store(&state::snapshot_path(env), keys) {
+        toast(
+            app,
+            ToastKind::Warning,
+            format!(
+                "Couldn't record umbriel's settings, so new ones won't be flagged next time: {err}"
+            ),
+            "",
+        );
+    }
+}
+
+/// Remember which new keys are still unseen; a failure is a warning,
+/// since the next run would flag them wrongly.
+pub(super) fn store_new_keys(app: &AppWindow, shell: &Shell, env: &discovery::Env) {
+    if let Err(err) = state::store(&state::new_keys_path(env), &shell.new_keys) {
+        toast(
+            app,
+            ToastKind::Warning,
+            format!("Couldn't remember which new settings you've seen: {err}"),
+            "",
+        );
+    }
+}
+
 /// Push a note onto the bottom-right stack. Info and success notes fade
 /// after 5 s; warnings, errors and notes with an `action` button stay
 /// until clicked or closed. At most three show, the oldest leaving first.

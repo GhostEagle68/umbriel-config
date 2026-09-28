@@ -53,26 +53,42 @@ pub(super) fn page_id_for_section(section: &str) -> String {
     top.to_owned()
 }
 
-/// NEW-key counts per page id (sidebar badges).
+/// The page a key's setting lives on.
+fn key_page(shell: &Shell, key: &str) -> Option<String> {
+    if key.starts_with("output.") {
+        return Some(catalog::OUTPUTS_ID.to_owned());
+    }
+    shell
+        .schema
+        .iter()
+        .find(|entry| entry.dotted() == key)
+        .map(|entry| page_id_for_section(&entry.section))
+}
+
+/// New-key counts per page id (sidebar and Home).
 pub(super) fn page_new_counts(shell: &Shell) -> BTreeMap<String, i32> {
     let mut counts: BTreeMap<String, i32> = BTreeMap::new();
     for key in &shell.new_keys {
-        let page_id = if key.starts_with("output.") {
-            catalog::OUTPUTS_ID.to_owned()
-        } else {
-            match shell
-                .schema
-                .iter()
-                .find(|entry| entry.dotted() == *key)
-                .map(|entry| page_id_for_section(&entry.section))
-            {
-                Some(page_id) => page_id,
-                None => continue,
-            }
-        };
-        *counts.entry(page_id).or_default() += 1;
+        if let Some(page_id) = key_page(shell, key) {
+            *counts.entry(page_id).or_default() += 1;
+        }
     }
     counts
+}
+
+/// Opening a page sees its new keys: they leave the counts (and the
+/// stored list: true when any did) but keep their pills while the page
+/// is open.
+fn see_page(shell: &mut Shell, page_id: &str) -> bool {
+    let seen: BTreeSet<String> = shell
+        .new_keys
+        .iter()
+        .filter(|key| key_page(shell, key).as_deref() == Some(page_id))
+        .cloned()
+        .collect();
+    shell.new_keys.retain(|key| !seen.contains(key));
+    shell.new_on_page = seen;
+    !shell.new_on_page.is_empty()
 }
 
 /// Header title + subtitle for a page.
@@ -448,6 +464,7 @@ fn other_card(
 pub(super) fn install_navigation(
     app: &AppWindow,
     shell: &Rc<RefCell<Shell>>,
+    env: &discovery::Env,
     keybind_view: &Rc<RefCell<super::page_keybinds::KeybindView>>,
     kb_actions: &Arc<Mutex<Vec<keybinds::LiveAction>>>,
 ) {
@@ -456,6 +473,7 @@ pub(super) fn install_navigation(
         let keybind_view = Rc::clone(keybind_view);
         let kb_actions = Arc::clone(kb_actions);
         let shell = Rc::clone(shell);
+        let env = env.clone();
         app.on_section_selected(move |name| {
             let Some(app) = weak.upgrade() else { return };
             // A group header opens or closes its pages.
@@ -480,6 +498,9 @@ pub(super) fn install_navigation(
                     .map_or(catalog::MORE_GROUP, |page| page.group)
                     .into(),
             );
+            if see_page(&mut shell.borrow_mut(), &name) {
+                store_new_keys(&app, &shell.borrow(), &env);
+            }
             // The page's group opens with it (unless the user closed it).
             {
                 let nav = section_nav(&shell.borrow(), &name);
@@ -602,6 +623,34 @@ mod tests {
         assert!(shell.doc.table_keys(&["environment"]).is_empty());
         assert!(set_environment(&mut shell, ENVIRONMENT_ADD, "1BAD=x").is_err());
         assert!(set_environment(&mut shell, ENVIRONMENT_ADD, "no equals").is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn new_keys_last_across_runs_until_their_page_opens() {
+        let dir = std::env::temp_dir().join(format!("umbriel-new-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let main_path = dir.join("config.toml");
+        let env = discovery::Env {
+            xdg_state_home: Some(dir.join("state").into()),
+            ..discovery::Env::from_process()
+        };
+        let shell = Shell::load(&main_path, &env);
+        let entry = &shell.schema[0];
+        let (key, page) = (entry.dotted(), page_id_for_section(&entry.section));
+
+        // Unseen keys come back next run; ones umbriel dropped don't.
+        let stored = BTreeSet::from([key.clone(), "gone.key".to_owned()]);
+        state::store(&state::new_keys_path(&env), &stored).unwrap();
+        let mut shell = Shell::load(&main_path, &env);
+        assert_eq!(shell.new_keys, BTreeSet::from([key.clone()]));
+
+        // Opening another page sees nothing; opening its page sees it,
+        // and its pill stays for the visit.
+        assert!(!see_page(&mut shell, "no-such-page"));
+        assert!(see_page(&mut shell, &page));
+        assert!(shell.new_keys.is_empty());
+        assert_eq!(shell.new_on_page, BTreeSet::from([key]));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

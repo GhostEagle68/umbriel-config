@@ -147,6 +147,8 @@ export component AppWindow inherits Window {
     }
 
     callback search-edited(string);
+    // Home: clear every New pill and count.
+    callback mark-all-seen();
     callback section-selected(string);
     // Open the keybinds page with its filter pre-filled.
     callback keybinds-search-requested(string);
@@ -478,6 +480,7 @@ export component AppWindow inherits Window {
                     icon: @image-url("../assets/icons/settings.svg");
                     has-icon: true;
                     count: root.update-available ? 1 : 0;
+                    neutral-count: true;
                     selected: root.page == Page.settings;
                     selected-fired => { root.settings-requested(); }
                 }
@@ -593,6 +596,7 @@ export component AppWindow inherits Window {
                         view-update-notes => { root.view-update-notes(); }
                         open-settings => { root.settings-requested(); }
                         run-guide => { root.guide-relaunch(); }
+                        mark-all-seen => { root.mark-all-seen(); }
                     }
                 }
 
@@ -753,6 +757,7 @@ export component AppWindow inherits Window {
                         for row in root.search-rows: PointerRow {
                             label: row.label;
                             home-label: row.home-label;
+                            is-new: row.is-new;
                             open => {
                                 // A keybind hit lands on the keybinds page
                                 // filtered to the query (which is the page

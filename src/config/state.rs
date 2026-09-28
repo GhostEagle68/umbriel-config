@@ -1,6 +1,7 @@
 //! Last-seen schema snapshot (one dotted key per line) so the next run can
-//! report what an umbriel update changed. Disposable cache: a missing or
-//! unreadable file simply reads as "nothing seen before".
+//! report what an umbriel update changed, and the new keys whose page
+//! hasn't been opened yet. Disposable cache: a missing or unreadable file
+//! simply reads as "nothing seen before".
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -20,6 +21,11 @@ pub fn snapshot_path(env: &discovery::Env) -> PathBuf {
     base.join("umbriel-config/schema.keys")
 }
 
+/// The new keys not yet seen, next to the snapshot.
+pub fn new_keys_path(env: &discovery::Env) -> PathBuf {
+    snapshot_path(env).with_file_name("new.keys")
+}
+
 /// Keys recorded by the last run; a missing or unreadable file is empty.
 pub fn load(path: &Path) -> BTreeSet<String> {
     std::fs::read_to_string(path)
@@ -32,8 +38,7 @@ pub fn load(path: &Path) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
-/// Record `keys` sorted, creating parent directories. Errors are the
-/// caller's to ignore; the snapshot is a cache, not state we own.
+/// Record `keys` sorted, creating parent directories.
 pub fn store(path: &Path, keys: &BTreeSet<String>) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -72,6 +77,14 @@ mod tests {
         assert_eq!(
             snapshot_path(&env(None, Some("/home/t"))),
             PathBuf::from("/home/t/.local/state/umbriel-config/schema.keys")
+        );
+    }
+
+    #[test]
+    fn new_keys_sit_next_to_the_snapshot() {
+        assert_eq!(
+            new_keys_path(&env(Some("/state"), None)),
+            PathBuf::from("/state/umbriel-config/new.keys")
         );
     }
 

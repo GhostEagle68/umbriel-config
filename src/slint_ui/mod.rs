@@ -72,9 +72,13 @@ struct Shell {
     // Per chain index: each doc's leaf values as last saved on disk. A row
     // whose current value differs from this snapshot is "changed".
     saved: Vec<BTreeMap<String, String>>,
-    // Keys added by an umbriel update or the last sync: sidebar counts and
-    // NEW badges.
+    // Keys added by an umbriel update or a sync whose page hasn't been
+    // opened yet: sidebar counts, Home's list and New pills. Kept in
+    // state across runs.
     new_keys: BTreeSet<String>,
+    // The open page's keys that were new when it opened: their pills
+    // stay for the visit.
+    new_on_page: BTreeSet<String>,
     // Guided-setup walk (create flow): the sections left to visit.
     guide: Option<guide::Guide>,
     // Monitors detected when the guide was armed: feeds the outputs
@@ -195,18 +199,18 @@ impl Shell {
             output_fields,
             schema_source,
         } = load_schema(env);
-        // Startup drift: keys added since the last snapshot get NEW badges.
-        // No snapshot yet (first run) flags nothing.
+        // New keys: the ones still unseen from earlier runs (if umbriel
+        // still has them), plus the ones added since the last snapshot.
+        // No snapshot yet (first run) flags nothing. `run` stores both.
+        let current = schema::key_set(&schema);
+        let mut new_keys: BTreeSet<String> = state::load(&state::new_keys_path(env))
+            .intersection(&current)
+            .cloned()
+            .collect();
         let seen = state::load(&state::snapshot_path(env));
-        let new_keys = if seen.is_empty() {
-            BTreeSet::new()
-        } else {
-            schema::diff(&seen, &schema::key_set(&schema))
-                .added
-                .into_iter()
-                .collect()
-        };
-        let _ = state::store(&state::snapshot_path(env), &schema::key_set(&schema));
+        if !seen.is_empty() {
+            new_keys.extend(schema::diff(&seen, &current).added);
+        }
         let includes = includes::load_chain(&doc, path);
         let mut shell = Shell {
             path: path.to_path_buf(),
@@ -220,6 +224,7 @@ impl Shell {
             includes,
             saved: Vec::new(),
             new_keys,
+            new_on_page: BTreeSet::new(),
             guide: None,
             guide_monitors: Vec::new(),
             live_note: String::new(),
@@ -297,6 +302,11 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
 
     let app = AppWindow::new().map_err(|err| anyhow::anyhow!("window creation failed: {err}"))?;
     app.set_toasts(Rc::new(VecModel::<Toast>::default()).into());
+    {
+        let shell = shell.borrow();
+        common::store_snapshot(&app, &env, &schema::key_set(&shell.schema));
+        common::store_new_keys(&app, &shell, &env);
+    }
 
     {
         let shell = shell.borrow();
@@ -441,12 +451,12 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     )));
 
     // Every feature registers its own callbacks.
-    sections::install_navigation(&app, &shell, &keybind_view, &kb_actions);
+    sections::install_navigation(&app, &shell, &env, &keybind_view, &kb_actions);
     search::install_search(&app, &shell, &kb_actions, &keybind_view);
     save::install_save(&app, &shell, &env);
     page_settings::install_settings(&app, &shell, &env);
     shell.borrow_mut().wallpapers = page_home::noctalia_wallpapers(&env);
-    page_home::install_home(&app, &shell);
+    page_home::install_home(&app, &shell, &env);
     page_backups::install_backups(&app, &shell, &env, &backup_runs);
     page_outputs::install_outputs(&app, &shell);
     page_rules::install_rules(&app, &shell);

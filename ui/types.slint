@@ -40,6 +40,8 @@ export struct SectionRow {
     // "" = a setting, "page" = a whole page, "keybind" = a chord that
     // opens the keybinds page pre-filtered to the query.
     kind: string,
+    // A setting umbriel added that hasn't been seen yet.
+    is-new: bool,
 }
 export enum ValueKind { unset, boolean, integer, float, text, list, choice, color, curve, open-choice }
 

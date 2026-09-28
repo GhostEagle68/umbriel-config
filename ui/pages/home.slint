@@ -364,6 +364,7 @@ export component HomePage inherits Rectangle {
     callback view-update-notes();
     callback open-settings();
     callback run-guide();
+    callback mark-all-seen();
     callback view-changelog();
 
     VerticalLayout {
@@ -558,6 +559,15 @@ export component HomePage inherits Rectangle {
                 title: link.label;
                 subtitle: link.detail;
                 clicked => { root.open-page(link.page-id); }
+            }
+
+            if root.new-settings.length > 0: HorizontalLayout {
+                alignment: end;
+
+                ActionButton {
+                    text: "Mark all seen";
+                    clicked => { root.mark-all-seen(); }
+                }
             }
         }
 

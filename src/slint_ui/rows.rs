@@ -64,7 +64,7 @@ pub(super) fn schema_row(
         None => entry,
     };
     let mut row = setting_row(doc_at(shell, home.unwrap_or(main)), entry);
-    row.is_new = shell.new_keys.contains(dotted.as_str());
+    row.is_new = shell.new_keys.contains(&dotted) || shell.new_on_page.contains(&dotted);
     row.available = home.is_none();
     row.home = home.map_or(-1, |home| home as i32);
     if let Some(label) = home.and_then(|home| labels.get(home)) {

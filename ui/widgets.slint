@@ -51,12 +51,32 @@ export component ActionButton inherits Rectangle {
 // One sidebar row: a page, a collapsible group header (icon, label,
 // chevron), or a page under an open header, drawn on a tree line. The
 // selected row is a soft filled pill.
+// A small rounded label: "New" on a setting, or a count in the
+// sidebar. Accent for new settings; `neutral` for other counts.
+export component NewPill inherits Rectangle {
+    in property <string> text: "New";
+    in property <bool> neutral: false;
+    width: max(18px, label.preferred-width + 12px);
+    height: 18px;
+    border-radius: 9px;
+    background: root.neutral ? Theme.bg-2 : Theme.accent-soft;
+
+    label := Text {
+        text: root.text;
+        color: root.neutral ? Theme.text-1 : Theme.accent;
+        font-size: 11px;
+        font-weight: 600;
+    }
+}
+
 export component NavRow inherits Rectangle {
     in property <string> label;
     in property <image> icon;
     in property <bool> has-icon: false;
     in property <bool> selected: false;
     in property <int> count: 0;
+    // The count means something other than new settings (updates).
+    in property <bool> neutral-count: false;
     in property <bool> header: false;
     in property <bool> expanded: false;
     in property <bool> child: false;
@@ -112,12 +132,26 @@ export component NavRow inherits Rectangle {
                 overflow: elide;
             }
 
-            if root.count > 0: Text {
-                text: root.count;
-                color: Theme.accent;
-                font-size: Theme.font-small;
-                font-weight: 600;
-                vertical-alignment: center;
+            // An open group's pages carry their own counts; a closed
+            // one just hints with a dot.
+            if root.count > 0 && !root.header: VerticalLayout {
+                alignment: center;
+
+                NewPill {
+                    text: root.count;
+                    neutral: root.neutral-count;
+                }
+            }
+
+            if root.count > 0 && root.header && !root.expanded: VerticalLayout {
+                alignment: center;
+
+                Rectangle {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: Theme.accent;
+                }
             }
 
             if root.header: Image {
@@ -142,6 +176,7 @@ export component NavRow inherits Rectangle {
 export component PointerRow inherits Rectangle {
     in property <string> label;
     in property <string> home-label;
+    in property <bool> is-new;
     callback open();
 
     height: 32px;
@@ -160,6 +195,12 @@ export component PointerRow inherits Rectangle {
         Text {
             text: root.label;
             vertical-alignment: center;
+        }
+
+        if root.is-new: VerticalLayout {
+            alignment: center;
+
+            NewPill { }
         }
 
         Rectangle {
@@ -489,6 +530,16 @@ export component SettingRowView inherits Rectangle {
     callback view-file(int);
     min-height: 56px;
 
+    // A new setting's edge mark, to spot it in a long page.
+    if setting.is-new: Rectangle {
+        x: 0;
+        y: Theme.space-s;
+        width: 3px;
+        height: parent.height - 2 * Theme.space-s;
+        border-radius: 1.5px;
+        background: Theme.accent;
+    }
+
     HorizontalLayout {
         padding-left: Theme.space-s;
         padding-right: Theme.space-s;
@@ -527,19 +578,7 @@ export component SettingRowView inherits Rectangle {
                 if setting.is-new: VerticalLayout {
                     alignment: center;
 
-                    Rectangle {
-                        width: new-text.preferred-width + 12px;
-                        height: 18px;
-                        border-radius: 9px;
-                        background: Theme.accent-soft;
-
-                        new-text := Text {
-                            text: "New";
-                            color: Theme.accent;
-                            font-size: 11px;
-                            font-weight: 600;
-                        }
-                    }
+                    NewPill { }
                 }
 
                 // The file that sets this key: click to read it.

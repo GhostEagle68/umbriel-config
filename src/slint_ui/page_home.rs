@@ -1,7 +1,7 @@
 //! The Home page: the start screen's lists (unsaved changes, newly
 //! synced settings) and one jump tile per sidebar group.
 
-use super::common::{chain_path_sets, doc_at, entry_home};
+use super::common::{chain_path_sets, doc_at, entry_home, store_new_keys};
 use super::rows::{strip_decor, swatch_for};
 use super::sections::{page_id_for_section, page_meta, page_new_counts};
 use super::*;
@@ -343,7 +343,21 @@ pub(super) fn rebuild_home(app: &AppWindow, shell: &Shell) {
     app.set_home_new_settings(Rc::new(VecModel::from(new_settings(shell))).into());
 }
 
-pub(super) fn install_home(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+pub(super) fn install_home(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &discovery::Env) {
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(shell);
+        let env = env.clone();
+        app.on_mark_all_seen(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let mut shell = shell.borrow_mut();
+            shell.new_keys.clear();
+            store_new_keys(&app, &shell, &env);
+            let nav = super::sections::section_nav(&shell, "");
+            app.set_sections(Rc::new(VecModel::from(nav)).into());
+            rebuild_home(&app, &shell);
+        });
+    }
     let weak = app.as_weak();
     let shell = Rc::clone(shell);
     app.on_home_requested(move || {

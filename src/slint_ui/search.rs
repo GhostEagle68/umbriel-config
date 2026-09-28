@@ -57,6 +57,7 @@ pub(super) fn install_search(
                         home_label: "Page".into(),
                         home_section: page.id.into(),
                         kind: "page".into(),
+                        is_new: false,
                     });
                 }
             }
@@ -79,6 +80,7 @@ pub(super) fn install_search(
                         home_label: "Keybind".into(),
                         home_section: "keybinds".into(),
                         kind: "keybind".into(),
+                        is_new: false,
                     });
                 }
             }
@@ -97,6 +99,7 @@ pub(super) fn install_search(
                             home_section: super::sections::page_id_for_section(&entry.section)
                                 .into(),
                             kind: String::new().into(),
+                            is_new: shell.new_keys.contains(&dotted),
                         }
                     }),
             );
