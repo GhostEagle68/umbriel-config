@@ -278,7 +278,7 @@ export component AppWindow inherits Window {
     in-out property <bool> canary-auto-install: false;
     callback canary-auto-install-toggled(bool);
     in-out property <bool> dark-mode: true;
-    // Standard widgets (LineEdit, CheckBox, ComboBox, AboutSlint) follow
+    // Standard widgets (LineEdit, Switch, ComboBox, AboutSlint) follow
     // Slint's builtin palette, not our tokens — keep it in step.
     init => {
         Palette.color-scheme = root.dark-mode ? ColorScheme.dark : ColorScheme.light;
@@ -959,8 +959,7 @@ export component AppWindow inherits Window {
                 }
 
                 gsv := ScrollView {
-                    width: 100%;
-                    height: 100%;
+                    vertical-stretch: 1;
                     viewport-height: guide-page.preferred-height;
 
                     guide-page := CategoryPage {

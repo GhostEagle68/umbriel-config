@@ -209,14 +209,19 @@ impl ConfigDocument {
     /// Replace `key`'s value, transplanting the old value's decoration so
     /// same-line comments and spacing survive; create the key when missing.
     fn store(table: &mut Table, key: &str, mut value: Value) {
-        let decor = table
-            .get_mut(key)
-            .and_then(|item| item.as_value())
-            .map(|old| old.decor().clone());
-        if let Some(decor) = decor {
-            *value.decor_mut() = decor;
+        // Replace in place: `insert` would rebuild the key and drop its
+        // indentation. The old value's spacing and comment carry over.
+        match table.get_mut(key) {
+            Some(item) => {
+                if let Some(old) = item.as_value() {
+                    *value.decor_mut() = old.decor().clone();
+                }
+                *item = Item::Value(value);
+            }
+            None => {
+                table.insert(key, Item::Value(value));
+            }
         }
-        table.insert(key, Item::Value(value));
     }
 
     fn set_value(doc: &mut DocumentMut, path: &[&str], value: Value) {
@@ -728,7 +733,15 @@ impl ConfigDocument {
         if let (Some(saved), Some((last, parents))) = (saved, path.split_last()) {
             return match Self::table_at_or_create(&mut self.doc, parents) {
                 Some(table) => {
-                    table.insert(last, saved);
+                    // In place when the key is still there: `insert`
+                    // would rebuild the key and drop its indentation,
+                    // and the file would never stop counting as modified.
+                    match table.get_mut(last) {
+                        Some(item) => *item = saved,
+                        None => {
+                            table.insert(last, saved);
+                        }
+                    }
                     true
                 }
                 None => false,
@@ -1271,6 +1284,22 @@ curve = \"easeout\"
             .unwrap();
         assert!(!clean.is_modified());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reverting_an_indented_key_restores_the_original_text() {
+        let text = "[output.\"DP-3\"]\n sdr_white = 203\n scale = 1\n";
+        let path = ["output", "DP-3", "sdr_white"];
+        let mut doc = ConfigDocument::from_str(text).unwrap();
+        assert!(doc.set_leaf_text("output.DP-3.sdr_white", "400"));
+        assert!(
+            doc.text().contains("\n sdr_white = 400\n"),
+            "{}",
+            doc.text()
+        );
+        assert!(doc.revert_leaf(&path));
+        assert_eq!(doc.text(), text);
+        assert!(!doc.is_modified());
     }
 
     #[test]

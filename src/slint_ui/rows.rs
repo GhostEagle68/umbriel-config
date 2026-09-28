@@ -128,19 +128,17 @@ pub(super) fn refresh_row(app: &AppWindow, shell: &Shell, key: &str) {
     rebuild_row(app, shell, key, false);
 }
 
-/// Find a row by key in the cards model and hand it to `update`;
-/// the row is written back when `update` returns true. Returns whether
-/// the row was found.
+/// Find a row by key and hand it to `update`; the row is written back
+/// when `update` returns true. Searches the page's cards, then the
+/// Outputs page's monitor cards. Returns whether the row was found.
 fn update_row(app: &AppWindow, key: &str, update: impl FnOnce(&mut SettingRow) -> bool) -> bool {
-    let cards = app.get_cards();
-    let Some(cards) = cards.as_any().downcast_ref::<VecModel<SettingsCard>>() else {
-        return false;
-    };
-    for gi in 0..cards.row_count() {
-        let Some(card) = cards.row_data(gi) else {
-            continue;
-        };
-        let Some(rows) = card.rows.as_any().downcast_ref::<VecModel<SettingRow>>() else {
+    let (cards, monitors) = (app.get_cards(), app.get_monitors());
+    let groups = cards
+        .iter()
+        .map(|card| card.rows)
+        .chain(monitors.iter().map(|monitor| monitor.rows));
+    for group in groups {
+        let Some(rows) = group.as_any().downcast_ref::<VecModel<SettingRow>>() else {
             continue;
         };
         for ri in 0..rows.row_count() {

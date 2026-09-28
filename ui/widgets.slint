@@ -2,7 +2,7 @@
 // renderer used by every page.
 
 import { Theme } from "theme.slint";
-import { CheckBox, ComboBox, LineEdit, Slider } from "std-widgets.slint";
+import { ComboBox, LineEdit, Slider, Switch } from "std-widgets.slint";
 import {
     ColorMath,
     Hsva,
@@ -188,7 +188,7 @@ export component DraftEdit inherits Rectangle {
     property <string> draft: root.value;
     changed value => { root.draft = root.value; }
 
-    height: inner.preferred-height;
+    height: max(30px, inner.preferred-height);
     border-width: root.invalid ? 1px : 0px;
     border-color: Theme.danger;
     border-radius: Theme.radius-s;
@@ -266,9 +266,138 @@ export component CardHeader inherits Rectangle {
     }
 }
 
-// One setting row: changed dot, label, editor, then hint + ownership
-// badge. Extracted from the category pages so the outputs and rules
-// pages render rows with the same tested widgets.
+// Page title and description, with the page's actions on the right.
+export component PageHeader inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> description;
+    spacing: Theme.space-l;
+
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: Theme.space-xs;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-title;
+            font-weight: 700;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            color: Theme.text-2;
+            wrap: TextWrap.word-wrap;
+        }
+    }
+
+    VerticalLayout {
+        alignment: center;
+
+        HorizontalLayout {
+            spacing: Theme.space-s;
+
+            @children
+        }
+    }
+}
+
+// A section title; collapsible ones toggle on click and show a chevron.
+export component SectionHeader inherits Rectangle {
+    in property <string> title;
+    in property <bool> collapsible: false;
+    in property <bool> expanded: true;
+    callback toggle();
+    height: 28px;
+
+    ta := TouchArea {
+        enabled: root.collapsible;
+        mouse-cursor: root.collapsible ? pointer : default;
+        clicked => { root.toggle(); }
+    }
+
+    HorizontalLayout {
+        spacing: Theme.space-s;
+
+        Text {
+            text: root.title;
+            color: Theme.text-1;
+            font-size: Theme.font-large;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+
+        if root.collapsible: Image {
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+            source: @image-url("../assets/icons/chevron-down.svg");
+            colorize: ta.has-hover ? Theme.text-1 : Theme.text-2;
+            transform-rotation: root.expanded ? 0deg : -90deg;
+            animate transform-rotation { duration: 150ms; }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+// One preference: title and grey subtitle on the left, its controls on
+// the right, a hairline underneath.
+export component PrefRow inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <color> subtitle-color: Theme.text-2;
+    min-height: 56px;
+
+    HorizontalLayout {
+        padding-left: Theme.space-s;
+        padding-right: Theme.space-s;
+        padding-top: Theme.space-s;
+        padding-bottom: Theme.space-s;
+        spacing: Theme.space-l;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.title;
+                color: Theme.text-1;
+                wrap: TextWrap.word-wrap;
+            }
+
+            if root.subtitle != "": Text {
+                text: root.subtitle;
+                color: root.subtitle-color;
+                font-size: Theme.font-small;
+                wrap: TextWrap.word-wrap;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: Theme.space-s;
+
+                @children
+            }
+        }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.divider;
+    }
+}
+
+// One setting row, the PrefRow layout with the setting's own subtitle:
+// changed dot, "New" pill and the file that sets it by the label; the
+// hint (or the error) underneath; the editor and a reset icon on the
+// right. Shared by the category, outputs, rules and guide pages.
 export component SettingRowView inherits Rectangle {
     in property <SettingRow> setting;
     callback set-value(string, string);
@@ -276,221 +405,240 @@ export component SettingRowView inherits Rectangle {
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
     callback view-file(int);
+    min-height: 56px;
 
-    VerticalLayout {
-        spacing: 2px;
+    HorizontalLayout {
+        padding-left: Theme.space-s;
+        padding-right: Theme.space-s;
+        padding-top: Theme.space-s;
+        padding-bottom: Theme.space-s;
+        spacing: Theme.space-l;
         opacity: setting.available ? 0.55 : 1.0;
 
-        HorizontalLayout {
-            min-height: 32px;
-            spacing: Theme.space-m;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
 
-            if setting.changed: Rectangle {
-                width: 7px;
-                VerticalLayout {
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+
+                if setting.changed: VerticalLayout {
                     alignment: center;
 
                     Rectangle {
-                        width: 7px;
-                        height: 7px;
-                        border-radius: 4px;
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
                         background: Theme.accent;
                     }
                 }
-            }
 
-            Text {
-                text: setting.label;
-                min-width: 130px;
-                max-width: 260px;
-                horizontal-stretch: 1;
-                wrap: TextWrap.word-wrap;
-                vertical-alignment: center;
-            }
-
-            if setting.is-new: Text {
-                text: "NEW";
-                color: Theme.accent;
-                font-size: Theme.font-small;
-                vertical-alignment: center;
-            }
-
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-
-            if setting.kind == ValueKind.boolean: CheckBox {
-                checked: setting.checked;
-                toggled => { root.set-value(setting.key, self.checked ? "true" : "false"); }
-            }
-            if setting.kind == ValueKind.integer || setting.kind == ValueKind.float: HorizontalLayout {
-                spacing: Theme.space-s;
-                alignment: end;
-
-                if setting.max > setting.min && !setting.available: Slider {
-                    width: 160px;
-                    minimum: setting.min;
-                    maximum: setting.max;
-                    value: setting.value.to-float();
-                        // A drag detaches the slider's value
-                        // from the binding above, so watch the
-                        // row and push resets/external edits
-                        // back into the thumb.
-                        property <string> watched: setting.value;
-                    changed watched => {
-                        self.value = setting.value.to-float();
-                    }
-                    changed(v) => { root.slider-preview(setting.key, v); }
-                    released(v) => { root.set-slider-value(setting.key, v); }
+                Text {
+                    text: setting.label;
+                    color: Theme.text-1;
+                    wrap: TextWrap.word-wrap;
+                    vertical-alignment: center;
                 }
 
-                DraftEdit {
-                    width: 140px;
-                    value: setting.preview == "" ? setting.value : setting.preview;
-                    invalid: setting.error != "";
-                    commit(t) => { root.set-value(setting.key, t); }
-                }
-            }
-            if setting.kind == ValueKind.color: HorizontalLayout {
-                spacing: Theme.space-s;
-                alignment: end;
-
-                // Click opens the picker popup for this key; the
-                // app-window hosts the overlay, the swatch only aims it.
-                swatch := TouchArea {
-                    width: 28px;
-                    mouse-cursor: pointer;
+                if setting.is-new: VerticalLayout {
+                    alignment: center;
 
                     Rectangle {
-                        border-radius: Theme.radius-s;
-                        border-width: 1px;
-                        border-color: swatch.has-hover ? Theme.accent : Theme.border;
-                        background: setting.swatch;
+                        width: new-text.preferred-width + 12px;
+                        height: 18px;
+                        border-radius: 9px;
+                        background: Theme.accent-soft;
+
+                        new-text := Text {
+                            text: "New";
+                            color: Theme.accent;
+                            font-size: 11px;
+                            font-weight: 600;
+                        }
                     }
+                }
 
-                    clicked => {
-                        PickerState.key = setting.key;
-                        PickerState.hex = setting.value;
-                        PickerState.open = true;
+                // The file that sets this key: click to read it.
+                if setting.home >= 0: Text {
+                    text: "in " + setting.home-label;
+                    color: badge-ta.has-hover ? Theme.accent : Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+
+                    badge-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.view-file(setting.home); }
                     }
                 }
-
-                DraftEdit {
-                    width: 140px;
-                    value: setting.value;
-                    invalid: setting.error != "";
-                    commit(t) => { root.set-value(setting.key, t); }
-                }
             }
-            if setting.kind == ValueKind.curve: ComboBox {
-                width: 180px;
-                model: setting.choices;
-                current-value: setting.value;
-                selected(v) => { root.set-value(setting.key, v); }
-            }
-            if setting.kind == ValueKind.list: DraftEdit {
-                width: 220px;
-                value: setting.value;
-                invalid: setting.error != "";
-                commit(t) => { root.set-value(setting.key, t); }
-            }
-            if setting.kind == ValueKind.text: DraftEdit {
-                width: 220px;
-                value: setting.value;
-                invalid: setting.error != "";
-                commit(t) => { root.set-value(setting.key, t); }
-            }
-            if setting.kind == ValueKind.choice: ComboBox {
-                width: 180px;
-                model: setting.choices;
-                current-value: setting.value;
-                selected(v) => { root.set-value(setting.key, v); }
-            }
-            // A big-but-not-closed vocabulary (hot-corner actions, rule
-            // outputs): a dropdown of the known values plus a free-text
-            // box for anything else valid. Both read `setting.value`, so
-            // picking a dropdown item immediately fills the box too —
-            // there is only ever one value, shown two ways.
-            if setting.kind == ValueKind.open-choice: HorizontalLayout {
-                spacing: Theme.space-s;
-                alignment: end;
-
-                ComboBox {
-                    // Wide: Slint's ComboBox popup width follows the
-                    // closed box's own width, and some known values here
-                    // (e.g. hot-corner actions) run past 35 characters —
-                    // a narrow box truncates the dropdown list itself,
-                    // not just the closed-state label.
-                    width: 260px;
-                    model: setting.choices;
-                    current-value: setting.value;
-                    selected(v) => { root.set-value(setting.key, v); }
-                }
-
-                DraftEdit {
-                    width: 160px;
-                    value: setting.value;
-                    invalid: setting.error != "";
-                    commit(t) => { root.set-value(setting.key, t); }
-                }
-            }
-            if setting.kind == ValueKind.unset: Text {
-                text: setting.value;
-                color: Theme.text-2;
-                font-family: Theme.font-mono;
-                font-size: Theme.font-small;
-                vertical-alignment: center;
-            }
-
-            // One Reset for every editable kind, not just ranged
-            // numbers — the changed-dot above already lights up
-            // for any kind, so every kind needs a way back.
-            if setting.changed && setting.kind != ValueKind.unset: ActionButton {
-                text: "Reset";
-                clicked => { root.reset-key(setting.key); }
-            }
-        }
-
-        HorizontalLayout {
-            spacing: Theme.space-s;
-            alignment: start;
 
             if setting.error != "": Text {
                 text: setting.error;
                 color: Theme.danger;
                 font-size: Theme.font-small;
-                vertical-alignment: center;
+                wrap: TextWrap.word-wrap;
             }
 
             if setting.error == "" && setting.hint != "": Text {
                 text: setting.hint;
                 color: Theme.text-2;
                 font-size: Theme.font-small;
-                opacity: 0.7;
-                vertical-alignment: center;
+                wrap: TextWrap.word-wrap;
             }
+        }
 
-            // Ownership badge: click to view the file that
-                // owns this key (read-only).
-                if setting.home >= 0: Rectangle {
-                width: badge-text.preferred-width + 10px;
-                height: badge-text.preferred-height + 4px;
-                border-radius: Theme.radius-s;
+        VerticalLayout {
+            alignment: center;
 
-                badge-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.view-file(setting.home); }
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: end;
+
+                if setting.kind == ValueKind.boolean: Switch {
+                    checked: setting.checked;
+                    // A click detaches `checked` from the binding above,
+                    // so a reset or a rejected write must push it back.
+                    property <bool> watched: setting.checked;
+                    changed watched => {
+                        self.checked = setting.checked;
+                    }
+                    toggled => { root.set-value(setting.key, self.checked ? "true" : "false"); }
                 }
+                if setting.kind == ValueKind.integer || setting.kind == ValueKind.float: HorizontalLayout {
+                    spacing: Theme.space-m;
+                    alignment: end;
 
-                badge-text := Text {
-                    text: "in " + setting.home-label;
-                    color: badge-ta.has-hover ? Theme.accent : Theme.text-2;
+                    if setting.max > setting.min && !setting.available: Slider {
+                        width: 180px;
+                        minimum: setting.min;
+                        maximum: setting.max;
+                        value: setting.value.to-float();
+                        // A drag detaches the slider's value from the
+                        // binding above, so watch the row and push
+                        // resets/external edits back into the thumb.
+                        property <string> watched: setting.value;
+                        changed watched => {
+                            self.value = setting.value.to-float();
+                        }
+                        changed(v) => { root.slider-preview(setting.key, v); }
+                        released(v) => { root.set-slider-value(setting.key, v); }
+                    }
+
+                    DraftEdit {
+                        width: 96px;
+                        value: setting.preview == "" ? setting.value : setting.preview;
+                        invalid: setting.error != "";
+                        commit(t) => { root.set-value(setting.key, t); }
+                    }
+                }
+                if setting.kind == ValueKind.color: HorizontalLayout {
+                    spacing: Theme.space-s;
+                    alignment: end;
+
+                    // Click opens the picker popup for this key; the
+                    // app-window hosts the overlay, the swatch only aims it.
+                    swatch := TouchArea {
+                        width: 30px;
+                        mouse-cursor: pointer;
+
+                        Rectangle {
+                            border-radius: Theme.radius-s;
+                            border-width: 1px;
+                            border-color: swatch.has-hover ? Theme.accent : Theme.border;
+                            background: setting.swatch;
+                        }
+
+                        clicked => {
+                            PickerState.key = setting.key;
+                            PickerState.hex = setting.value;
+                            PickerState.open = true;
+                        }
+                    }
+
+                    DraftEdit {
+                        width: 130px;
+                        value: setting.value;
+                        invalid: setting.error != "";
+                        commit(t) => { root.set-value(setting.key, t); }
+                    }
+                }
+                if setting.kind == ValueKind.curve || setting.kind == ValueKind.choice: ComboBox {
+                    width: 200px;
+                    model: setting.choices;
+                    current-value: setting.value;
+                    selected(v) => { root.set-value(setting.key, v); }
+                }
+                if setting.kind == ValueKind.list || setting.kind == ValueKind.text: DraftEdit {
+                    width: 240px;
+                    value: setting.value;
+                    invalid: setting.error != "";
+                    commit(t) => { root.set-value(setting.key, t); }
+                }
+                // A big-but-not-closed vocabulary (hot-corner actions, rule
+                // outputs): a dropdown of the known values plus a free-text
+                // box for anything else valid. Both read `setting.value`, so
+                // picking a dropdown item immediately fills the box too —
+                // there is only ever one value, shown two ways.
+                if setting.kind == ValueKind.open-choice: HorizontalLayout {
+                    spacing: Theme.space-s;
+                    alignment: end;
+
+                    ComboBox {
+                        // Wide: Slint's ComboBox popup width follows the
+                        // closed box's own width, and some known values
+                        // (e.g. hot-corner actions) run past 35 characters;
+                        // a narrow box truncates the list itself.
+                        width: 260px;
+                        model: setting.choices;
+                        current-value: setting.value;
+                        selected(v) => { root.set-value(setting.key, v); }
+                    }
+
+                    DraftEdit {
+                        width: 160px;
+                        value: setting.value;
+                        invalid: setting.error != "";
+                        commit(t) => { root.set-value(setting.key, t); }
+                    }
+                }
+                if setting.kind == ValueKind.unset: Text {
+                    text: setting.value;
+                    color: Theme.text-2;
+                    font-family: Theme.font-mono;
                     font-size: Theme.font-small;
                     vertical-alignment: center;
-                    horizontal-alignment: center;
+                }
+
+                // One reset for every editable kind: the changed dot
+                // lights up for any kind, so every kind needs a way back.
+                if setting.changed && setting.kind != ValueKind.unset: Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: Theme.radius-s;
+                    background: reset-ta.has-hover ? Theme.bg-2 : transparent;
+
+                    Image {
+                        width: 15px;
+                        height: 15px;
+                        source: @image-url("../assets/icons/reset.svg");
+                        colorize: reset-ta.has-hover ? Theme.text-1 : Theme.text-2;
+                    }
+
+                    reset-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.reset-key(setting.key); }
+                    }
                 }
             }
         }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.divider;
     }
 }
 
