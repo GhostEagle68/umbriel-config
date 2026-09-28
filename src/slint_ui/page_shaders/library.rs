@@ -39,6 +39,7 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
         .collect();
     // Each section numbers its own shaders, for the grid's positions.
     let (mut own_count, mut other_count) = (0, 0);
+    let mut kind_counts = vec![(0, 0); shaders::KINDS.len()];
     let infos: Vec<ShaderInfo> = shell
         .shaders
         .iter()
@@ -52,6 +53,14 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
             };
             let slot = *count;
             *count += 1;
+            let kind = kind_index(entry.kind);
+            let same_kind = &mut kind_counts[kind as usize];
+            let kind_slot = if is_own {
+                &mut same_kind.0
+            } else {
+                &mut same_kind.1
+            };
+            let kind_slot = std::mem::replace(kind_slot, *kind_slot + 1);
             let thumb = shell.shader_thumbs.get(&entry.path);
             ShaderInfo {
                 name: entry.name.clone().into(),
@@ -69,17 +78,25 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
                             .as_ref()
                             .is_some_and(|current| current.key == *entry_key)
                     })
-                    .map(|(event, _)| prettify(event))
+                    .map(|(event, _)| slot_label(event))
                     .collect::<Vec<_>>()
                     .join(", ")
                     .into(),
                 thumb: thumb.cloned().unwrap_or_default(),
                 has_thumb: thumb.is_some(),
                 slot,
+                kind: prettify(entry.kind).into(),
+                kind_index: kind,
+                kind_slot,
             }
         })
         .collect();
     app.set_shaders(Rc::new(VecModel::from(infos)).into());
+    let kind_counts: Vec<KindCount> = kind_counts
+        .into_iter()
+        .map(|(own, other)| KindCount { own, other })
+        .collect();
+    app.set_shader_kind_counts(Rc::new(VecModel::from(kind_counts)).into());
     app.set_shader_own_count(own_count);
     app.set_shader_other_count(other_count);
 
@@ -110,8 +127,9 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
                 (None, None) => (0, "No shader".to_owned()),
             };
             ShaderAssignment {
-                key: format!("animation.{event}.effect").into(),
-                label: prettify(event).into(),
+                key: (*event).into(),
+                label: slot_label(event).into(),
+                kind: kind_index(shaders::slot_kind(event)),
                 current: current_index as i32,
                 current_name: current_name.into(),
                 current_value: current.unwrap_or_default().into(),
@@ -138,6 +156,13 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
     );
     app.set_shader_community_installed(shell.shaders_installed);
     app.set_changed_count(changed_count(shell));
+}
+
+fn kind_index(kind: &str) -> i32 {
+    shaders::KINDS
+        .iter()
+        .position(|known| *known == kind)
+        .unwrap_or(0) as i32
 }
 
 /// One event's current assignment, resolved the way umbriel reads it.
@@ -202,7 +227,7 @@ pub(super) fn assignments_of(shell: &Shell, shader: &Path) -> Vec<(&'static str,
 pub(super) fn used_by(shell: &Shell, shader: &Path) -> String {
     assignments_of(shell, shader)
         .iter()
-        .map(|(event, _)| prettify(event))
+        .map(|(event, _)| slot_label(event))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -219,7 +244,7 @@ pub(super) fn assign_event(
     shader: Option<&Path>,
 ) -> Result<(), String> {
     let home = shaders::assignment_home(&chain_docs(shell), event);
-    let key = ["animation", event, "effect"];
+    let key = shaders::slot_key(event);
     let Some(shader) = shader else {
         if let Some(home) = home {
             doc_at_mut(shell, home).remove_leaf(&key);
@@ -232,6 +257,14 @@ pub(super) fn assign_event(
             shader.display()
         ));
     };
+    if entry.kind != shaders::slot_kind(event) {
+        return Err(format!(
+            "{} is a {} effect, so it can't go in {}.",
+            entry.name,
+            entry.kind,
+            slot_label(event)
+        ));
+    }
     // Umbriel refuses a preset name defined in two files: the whole
     // config would fall back to its defaults.
     let paths = chain_paths(shell);
@@ -505,9 +538,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_assign(move |key, index| {
             let Some(app) = weak.upgrade() else { return };
-            let Some(event) = key.rsplit('.').nth(1).map(str::to_owned) else {
-                return;
-            };
+            let event = key.to_string();
             {
                 let mut shell = shell.borrow_mut();
                 // Resolve the pick against the list the picker was built

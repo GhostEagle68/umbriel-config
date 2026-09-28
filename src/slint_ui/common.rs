@@ -165,6 +165,17 @@ pub(super) fn prettify(name: &str) -> String {
     owned
 }
 
+/// A shader slot's name for the UI: "Windows in", "Cursor effect".
+pub(super) fn slot_label(slot: &str) -> String {
+    match slot.strip_prefix("effects.") {
+        Some(kind) => format!("{} effect", prettify(kind)),
+        // Animates the color change on focus; "Border effect" is the
+        // one that draws the border.
+        None if slot == "border" => "Border focus change".to_owned(),
+        None => prettify(slot),
+    }
+}
+
 /// Push a note onto the bottom-right stack. Info and success notes fade
 /// after 5 s; warnings, errors and notes with an `action` button stay
 /// until clicked or closed. At most three show, the oldest leaving first.

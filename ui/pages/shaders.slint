@@ -13,6 +13,7 @@ import {
 import {
     CodeEdit,
     ShaderAssignment,
+    KindCount,
     ShaderInfo,
     ShaderStep,
 } from "../types.slint";
@@ -130,10 +131,21 @@ component ShaderTile inherits Rectangle {
             padding-right: 2px;
             spacing: 1px;
 
-            Text {
-                text: root.shader.name;
-                color: Theme.text-1;
-                overflow: elide;
+            HorizontalLayout {
+                spacing: 6px;
+
+                Text {
+                    text: root.shader.name;
+                    color: Theme.text-1;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: root.shader.kind;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
             }
 
             Text {
@@ -201,6 +213,13 @@ component ShaderListRow inherits Rectangle {
                     color: Theme.text-1;
                 }
 
+                Text {
+                    text: root.shader.kind;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+
                 if root.shader.used-by != "": Text {
                     text: "used by " + root.shader.used-by;
                     color: Theme.accent;
@@ -266,6 +285,10 @@ component ShaderGallery inherits VerticalLayout {
     in property <[ShaderInfo]> shaders;
     in property <int> own-count;
     in property <int> other-count;
+    // The picker shows one kind (an index into the kinds; -1 shows
+    // all), so it counts and places tiles among that kind alone.
+    in property <int> kind: -1;
+    in property <[KindCount]> kind-counts;
     in property <bool> grid;
     in property <bool> hover-preview;
     // Picker: a "No shader" entry first, selection, no row actions.
@@ -282,6 +305,8 @@ component ShaderGallery inherits VerticalLayout {
     callback delete(int);
 
     property <int> hovered: -2;
+    property <int> shown-own: root.kind < 0 ? root.own-count : root.kind-counts[root.kind].own;
+    property <int> shown-other: root.kind < 0 ? root.other-count : root.kind-counts[root.kind].other;
     property <bool> own-open: true;
     property <bool> other-open: true;
     // The grid: as many ~200px columns as fit.
@@ -325,6 +350,14 @@ component ShaderGallery inherits VerticalLayout {
         }
     }
 
+    pure function shows(shader: ShaderInfo) -> bool {
+        return root.kind < 0 || shader.kind-index == root.kind;
+    }
+
+    pure function slot-of(shader: ShaderInfo) -> int {
+        return root.kind < 0 ? shader.slot : shader.kind-slot;
+    }
+
     function live(index: int) -> bool {
         return root.inline-play && root.hover-preview && root.hovered == index;
     }
@@ -353,24 +386,24 @@ component ShaderGallery inherits VerticalLayout {
         }
     }
 
-    if root.own-count > 0: VerticalLayout {
+    if root.shown-own > 0: VerticalLayout {
         spacing: Theme.space-s;
 
         SectionHeader {
             title: "Your shaders";
-            caption: root.own-count;
+            caption: root.shown-own;
             collapsible: true;
             expanded: root.own-open;
             toggle => { root.own-open = !root.own-open; }
         }
 
         if root.own-open && root.grid: Rectangle {
-            height: ceil(root.own-count / root.columns) * (root.tile-height + root.gap) - root.gap;
+            height: ceil(root.shown-own / root.columns) * (root.tile-height + root.gap) - root.gap;
 
             for shader[i] in root.shaders: Rectangle {
-                if shader.is-own: ShaderTile {
-                    x: mod(shader.slot, root.columns) * (root.tile-width + root.gap);
-                    y: floor(shader.slot / root.columns) * (root.tile-height + root.gap);
+                if shader.is-own && root.shows(shader): ShaderTile {
+                    x: mod(root.slot-of(shader), root.columns) * (root.tile-width + root.gap);
+                    y: floor(root.slot-of(shader) / root.columns) * (root.tile-height + root.gap);
                     width: root.tile-width;
                     height: root.tile-height;
                     shader: shader;
@@ -385,7 +418,7 @@ component ShaderGallery inherits VerticalLayout {
 
         if root.own-open && !root.grid: VerticalLayout {
             for shader[i] in root.shaders: VerticalLayout {
-                if shader.is-own: ShaderListRow {
+                if shader.is-own && root.shows(shader): ShaderListRow {
                     shader: shader;
                     selected: root.selected == i;
                     live: root.live(i);
@@ -400,24 +433,24 @@ component ShaderGallery inherits VerticalLayout {
         }
     }
 
-    if root.other-count > 0: VerticalLayout {
+    if root.shown-other > 0: VerticalLayout {
         spacing: Theme.space-s;
 
         SectionHeader {
             title: "Built-in and community";
-            caption: root.other-count;
+            caption: root.shown-other;
             collapsible: true;
             expanded: root.other-open;
             toggle => { root.other-open = !root.other-open; }
         }
 
         if root.other-open && root.grid: Rectangle {
-            height: ceil(root.other-count / root.columns) * (root.tile-height + root.gap) - root.gap;
+            height: ceil(root.shown-other / root.columns) * (root.tile-height + root.gap) - root.gap;
 
             for shader[i] in root.shaders: Rectangle {
-                if !shader.is-own: ShaderTile {
-                    x: mod(shader.slot, root.columns) * (root.tile-width + root.gap);
-                    y: floor(shader.slot / root.columns) * (root.tile-height + root.gap);
+                if !shader.is-own && root.shows(shader): ShaderTile {
+                    x: mod(root.slot-of(shader), root.columns) * (root.tile-width + root.gap);
+                    y: floor(root.slot-of(shader) / root.columns) * (root.tile-height + root.gap);
                     width: root.tile-width;
                     height: root.tile-height;
                     shader: shader;
@@ -432,7 +465,7 @@ component ShaderGallery inherits VerticalLayout {
 
         if root.other-open && !root.grid: VerticalLayout {
             for shader[i] in root.shaders: VerticalLayout {
-                if !shader.is-own: ShaderListRow {
+                if !shader.is-own && root.shows(shader): ShaderListRow {
                     shader: shader;
                     selected: root.selected == i;
                     live: root.live(i);
@@ -446,7 +479,7 @@ component ShaderGallery inherits VerticalLayout {
         }
     }
 
-    if root.own-count + root.other-count == 0: Text {
+    if root.shown-own + root.shown-other == 0: Text {
         text: "No shaders found. Download the community shaders, or copy .glsl files into a shaders/ folder next to your config.";
         color: Theme.text-2;
         wrap: TextWrap.word-wrap;
@@ -586,53 +619,74 @@ export component ShadersPage inherits Rectangle {
 
         // ── assignments ─────────────────────────────────────
         if root.tab == 0: VerticalLayout {
-            for row[event] in root.assignments: PrefRow {
-                property <int> index: row.current >= 1 && row.current <= root.shaders.length ? row.current - 1 : row.current == 0 ? -1 : -2;
-                title: row.label;
-                subtitle: row.warning == "" ? "" : row.current-name + ": " + row.warning;
-                subtitle-color: Theme.warning;
+            // Animations first (EVENTS keeps them ahead of the effects),
+            // then a header where the effects start.
+            VerticalLayout {
+                padding-bottom: Theme.space-s;
 
-                // The current shader; click to pick another.
-                Rectangle {
-                    width: 280px;
-                    height: 44px;
-                    border-radius: Theme.radius-m;
-                    background: pick-ta.has-hover ? Theme.bg-2 : Theme.bg-1;
-                    border-width: 1px;
-                    border-color: Theme.border;
+                SectionHeader {
+                    title: "Animations";
+                }
+            }
 
-                    pick-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.pick(row.key, event, index); }
+            for row[event] in root.assignments: VerticalLayout {
+                if row.kind > 0 && root.assignments[event - 1].kind == 0: VerticalLayout {
+                    padding-top: 28px;
+                    padding-bottom: Theme.space-s;
+
+                    SectionHeader {
+                        title: "Effects";
                     }
+                }
 
-                    HorizontalLayout {
-                        padding: 5px;
-                        padding-right: Theme.space-s;
-                        spacing: Theme.space-s;
+                PrefRow {
+                    property <int> index: row.current >= 1 && row.current <= root.shaders.length ? row.current - 1 : row.current == 0 ? -1 : -2;
+                    title: row.label;
+                    subtitle: row.warning == "" ? "" : row.current-name + ": " + row.warning;
+                    subtitle-color: Theme.warning;
 
-                        ShaderThumb {
-                            width: 60px;
-                            shader: index >= 0 ? root.shaders[index] : { name: row.current-name };
-                            none: index == -1;
+                    // The current shader; click to pick another.
+                    Rectangle {
+                        width: 280px;
+                        height: 44px;
+                        border-radius: Theme.radius-m;
+                        background: pick-ta.has-hover ? Theme.bg-2 : Theme.bg-1;
+                        border-width: 1px;
+                        border-color: Theme.border;
+
+                        pick-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.pick(row.key, event, index); }
                         }
 
-                        Text {
-                            text: row.current-name;
-                            color: index == -1 ? Theme.text-2 : Theme.text-1;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                        }
+                        HorizontalLayout {
+                            padding: 5px;
+                            padding-right: Theme.space-s;
+                            spacing: Theme.space-s;
 
-                        VerticalLayout {
-                            alignment: center;
+                            ShaderThumb {
+                                width: 60px;
+                                shader: index >= 0 ? root.shaders[index] : { name: row.current-name };
+                                none: index == -1;
+                            }
 
-                            Image {
-                                width: 16px;
-                                height: 16px;
-                                source: @image-url("../../assets/icons/chevron-right.svg");
-                                colorize: Theme.text-2;
+                            Text {
+                                text: row.current-name;
+                                color: index == -1 ? Theme.text-2 : Theme.text-1;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+
+                                Image {
+                                    width: 16px;
+                                    height: 16px;
+                                    source: @image-url("../../assets/icons/chevron-right.svg");
+                                    colorize: Theme.text-2;
+                                }
                             }
                         }
                     }
@@ -942,7 +996,7 @@ export component ShaderPreviewRow inherits Rectangle {
     // scrubber takes over and pauses.
     property <bool> playing: root.autoplay;
     property <[string]> lengths: ["As set (" + root.configured-ms + " ms)", "0.3 s", "0.6 s", "1.2 s"];
-    property <int> length-index: 0;
+    property <int> length-index: 3;
     property <float> length-ms: root.length-index == 0 ? max(1, root.configured-ms) : root.length-index == 1 ? 300 : root.length-index == 2 ? 600 : 1200;
     property <float> hold-ms: 0;
 
@@ -1224,17 +1278,21 @@ export component ShaderCodeEditor inherits Rectangle {
     }
 }
 
-// Pick a shader for one event, or look through the library: the
-// chosen shader plays in the big preview on top, the library sits
-// below as a list or grid. Hovering (when on) plays the hovered one
-// in the big preview; leaving goes back to the chosen one.
+// Pick a shader for one event: the chosen shader plays in the big
+// preview on top, the library sits below as a list or grid. Hovering
+// (when on) plays the hovered one in the big preview; leaving goes back
+// to the chosen one. Opened from the library (no key) it shows just
+// that shader with its own actions.
 export component ShaderPicker inherits Rectangle {
     in property <string> title;
     // An assignment key; "" is just looking (no Assign).
     in property <string> key;
+    // The kind the assignment takes; -1 when just looking.
+    in property <int> kind: -1;
     in property <[ShaderInfo]> shaders;
     in property <int> own-count;
     in property <int> other-count;
+    in property <[KindCount]> kind-counts;
     in-out property <bool> grid;
     in-out property <bool> hover-preview;
     in-out property <int> selected;
@@ -1257,6 +1315,11 @@ export component ShaderPicker inherits Rectangle {
     callback view-changed();
     callback edit(int);
     callback fork(int);
+    callback delete(int);
+
+    // What the big preview plays: the hovered shader, else the chosen.
+    property <int> hovered: -2;
+    property <int> shown: root.hovered >= 0 ? root.hovered : root.selected;
 
     width: 100%;
     height: 100%;
@@ -1269,8 +1332,8 @@ export component ShaderPicker inherits Rectangle {
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: min(parent.width - 64px, 1040px);
-        height: parent.height - 64px;
+        width: min(parent.width - 64px, root.key == "" ? 760px : 1040px);
+        height: root.key == "" ? min(parent.height - 64px, box.preferred-height) : parent.height - 64px;
         border-radius: Theme.radius-xl;
         background: Theme.bg-3;
         drop-shadow-blur: 24px;
@@ -1278,7 +1341,7 @@ export component ShaderPicker inherits Rectangle {
 
         TouchArea { }
 
-        VerticalLayout {
+        box := VerticalLayout {
             padding: Theme.space-xl;
             spacing: Theme.space-l;
 
@@ -1294,39 +1357,46 @@ export component ShaderPicker inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
-                GalleryOptions {
+                if root.key != "": GalleryOptions {
                     grid <=> root.grid;
                     hover-preview <=> root.hover-preview;
                     changed => { root.view-changed(); }
                 }
             }
 
-            if root.selected >= 0 && root.preview-ready: ShaderPreviewRow {
-                source: root.preview-image;
-                note: root.preview-note;
-                hint: root.shaders[root.selected].description;
-                autoplay: true;
-                direction-in: root.direction-in;
-                progress <=> root.progress;
-                events: root.events;
-                event-index <=> root.event-index;
-                configured-ms: root.configured-ms;
-                event-picked(i) => { root.event-picked(i); }
-                scrub(v) => { root.scrub(v); }
-                toggle-direction() => { root.toggle-direction(); }
+            // The preview's room is kept while picking, so hovering in
+            // and out of it doesn't move the tiles under the pointer.
+            VerticalLayout {
+                min-height: root.key != "" ? 360px * 9 / 16 + 40px : 0;
+                spacing: Theme.space-l;
+
+                if root.shown >= 0 && root.preview-ready: ShaderPreviewRow {
+                    source: root.preview-image;
+                    note: root.preview-note;
+                    hint: root.shaders[root.shown].description;
+                    autoplay: true;
+                    direction-in: root.direction-in;
+                    progress <=> root.progress;
+                    events: root.events;
+                    event-index <=> root.event-index;
+                    configured-ms: root.configured-ms;
+                    event-picked(i) => { root.event-picked(i); }
+                    scrub(v) => { root.scrub(v); }
+                    toggle-direction() => { root.toggle-direction(); }
+                }
+
+                if root.shown == -1: Text {
+                    text: "No shader: umbriel plays its built-in animation for this event.";
+                    color: Theme.text-2;
+                }
+
+                if root.shown >= 0 && !root.preview-ready: Text {
+                    text: root.preview-note != "" ? root.preview-note : "Starting the preview…";
+                    color: Theme.text-2;
+                }
             }
 
-            if root.selected == -1: Text {
-                text: "No shader: umbriel plays its built-in animation for this event.";
-                color: Theme.text-2;
-            }
-
-            if root.selected >= 0 && !root.preview-ready: Text {
-                text: root.preview-note != "" ? root.preview-note : "Starting the preview…";
-                color: Theme.text-2;
-            }
-
-            gsv := ScrollView {
+            if root.key != "": gsv := ScrollView {
                 vertical-stretch: 1;
                 viewport-height: gallery.preferred-height;
 
@@ -1335,6 +1405,8 @@ export component ShaderPicker inherits Rectangle {
                     shaders: root.shaders;
                     own-count: root.own-count;
                     other-count: root.other-count;
+                    kind: root.kind;
+                    kind-counts: root.kind-counts;
                     grid: root.grid;
                     hover-preview: root.hover-preview;
                     picking: root.key != "";
@@ -1346,6 +1418,7 @@ export component ShaderPicker inherits Rectangle {
                         }
                     }
                     hover(i) => {
+                        root.hovered = root.hover-preview ? i : -2;
                         if (!root.hover-preview) {
                             return;
                         }
@@ -1367,7 +1440,20 @@ export component ShaderPicker inherits Rectangle {
                     clicked => { root.edit(root.selected); }
                 }
 
-                if root.key == "" && root.selected >= 0 && !root.shaders[root.selected].is-own: ActionButton {
+                // Two clicks: deleting a file can't be undone.
+                if root.key == "" && root.selected >= 0 && root.shaders[root.selected].is-own: ActionButton {
+                    property <bool> confirming: false;
+                    text: !self.confirming ? "Delete" : root.shaders[root.selected].used-by == "" ? "Really delete?" : "Delete? It's in use";
+                    clicked => {
+                        if (self.confirming) {
+                            root.delete(root.selected);
+                        } else {
+                            self.confirming = true;
+                        }
+                    }
+                }
+
+                if root.key == "" && root.selected >= 0: ActionButton {
                     text: "Fork";
                     clicked => { root.fork(root.selected); }
                 }

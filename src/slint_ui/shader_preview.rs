@@ -108,15 +108,13 @@ enum Kind {
 
 impl Kind {
     fn of(code: &str) -> Self {
-        [
-            ("border", Kind::Border),
-            ("window", Kind::Window),
-            ("screen", Kind::Screen),
-            ("cursor", Kind::Cursor),
-        ]
-        .into_iter()
-        .find(|(name, _)| code.contains(&format!("vec4 {name}(")))
-        .map_or(Kind::Animation, |(_, kind)| kind)
+        match umbriel_config::config::shaders::kind_of(code) {
+            "border" => Kind::Border,
+            "window" => Kind::Window,
+            "screen" => Kind::Screen,
+            "cursor" => Kind::Cursor,
+            _ => Kind::Animation,
+        }
     }
 
     /// The kind's own uniforms, then the `main()` umbriel appends.

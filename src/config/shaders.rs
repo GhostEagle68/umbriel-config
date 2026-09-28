@@ -21,7 +21,37 @@ pub const EVENTS: &[&str] = &[
     "border",
     "dim_unfocused",
     "layers",
+    "effects.border",
+    "effects.window",
+    "effects.screen",
+    "effects.cursor",
 ];
+
+/// The kinds of effect a shader can be, in display order. Only
+/// `animation` is chosen per event; the others by `[effects] <kind>`.
+pub const KINDS: &[&str] = &["animation", "border", "window", "screen", "cursor"];
+
+/// The config keys a slot (an [`EVENTS`] entry) is assigned through.
+pub fn slot_key(slot: &str) -> Vec<&str> {
+    match slot.strip_prefix("effects.") {
+        Some(kind) => vec!["effects", kind],
+        None => vec!["animation", slot, "effect"],
+    }
+}
+
+/// The kind of shader a slot takes.
+pub fn slot_kind(slot: &str) -> &str {
+    slot.strip_prefix("effects.").unwrap_or("animation")
+}
+
+/// A shader's kind, from the function it defines (`vec4 cursor(`),
+/// animation when none of the others.
+pub fn kind_of(code: &str) -> &'static str {
+    KINDS[1..]
+        .iter()
+        .find(|kind| code.contains(&format!("vec4 {kind}(")))
+        .unwrap_or(&KINDS[0])
+}
 
 /// Umbriel's limits for a usable shader file (docs/user/effects.md).
 const MAX_SIZE: u64 = 256 * 1024;
@@ -32,6 +62,8 @@ pub struct ShaderEntry {
     pub name: String,
     /// Absolute path on disk.
     pub path: PathBuf,
+    /// What the shader draws: one of [`KINDS`].
+    pub kind: &'static str,
     /// The preset an event selects to run this shader (`effect = "…"`).
     pub preset: String,
     /// The TOML file defining that preset; see [`preset_file_for`]. It
@@ -93,16 +125,18 @@ pub fn scan(config_dir: &Path, data_dirs: &[PathBuf]) -> Vec<ShaderEntry> {
         push(path, source, &mut entries, &mut seen);
     }
     for data_dir in data_dirs {
-        for path in bundled_shaders(&data_dir.join("umbriel/effects/animation")) {
-            push(path, Source::Bundled, &mut entries, &mut seen);
+        for kind in KINDS {
+            for path in bundled_shaders(&data_dir.join("umbriel/effects").join(kind), kind) {
+                push(path, Source::Bundled, &mut entries, &mut seen);
+            }
         }
     }
     entries
 }
 
-/// The shader of every bundled animation preset under `dir`, in name
+/// The shader of every bundled preset of `kind` under `dir`, in name
 /// order. Presets of other kinds, or without a shader, are skipped.
-fn bundled_shaders(dir: &Path) -> Vec<PathBuf> {
+fn bundled_shaders(dir: &Path, kind: &str) -> Vec<PathBuf> {
     let Ok(read) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -110,7 +144,7 @@ fn bundled_shaders(dir: &Path) -> Vec<PathBuf> {
         .flatten()
         .filter_map(|item| {
             let preset_file = item.path().join("effect.toml");
-            let (_, shader) = read_preset(&preset_file, "animation")?;
+            let (_, shader) = read_preset(&preset_file, kind)?;
             Some(resolve(&shader, &preset_file))
         })
         .collect();
@@ -189,7 +223,7 @@ pub fn preset_text(entry: &ShaderEntry) -> String {
         .unwrap_or_default();
     // Only the preset's own header: its parent tables stay implicit.
     let mut preset = toml_edit::Table::new();
-    preset["kind"] = toml_edit::value("animation");
+    preset["kind"] = toml_edit::value(entry.kind);
     preset["shader"] = toml_edit::value(shader.as_str());
     let mut presets = toml_edit::Table::new();
     presets.set_implicit(true);
@@ -201,7 +235,7 @@ pub fn preset_text(entry: &ShaderEntry) -> String {
     doc.insert("effects", toml_edit::Item::Table(effects));
     format!(
         "# Written by umbriel-config: the preset that runs {shader}.\n\
-         # Select it with [animation.<event>] effect = \"{}\".\n{doc}",
+         # Select it by the name \"{}\".\n{doc}",
         entry.preset
     )
 }
@@ -273,12 +307,13 @@ fn entry_for(path: PathBuf, source: Source) -> ShaderEntry {
     }
     let preset_file = preset_file_for(&path);
     // An existing preset file names the preset; otherwise the shader does.
-    let preset =
-        read_preset(&preset_file, "animation").map_or_else(|| name.clone(), |(preset, _)| preset);
+    let kind = std::fs::read_to_string(&path).map_or(KINDS[0], |code| kind_of(&code));
+    let preset = read_preset(&preset_file, kind).map_or_else(|| name.clone(), |(preset, _)| preset);
     let invalid = validate(&path);
     let description = readme_description(&path);
     ShaderEntry {
         name,
+        kind,
         preset,
         preset_file,
         path,
@@ -332,13 +367,13 @@ fn readme_description(shader_path: &Path) -> String {
 /// (main config overrides includes) plus that document's index, or
 /// `None` when unset (built-in animation).
 pub fn current_assignment(docs: &[&ConfigDocument], event: &str) -> Option<(String, usize)> {
-    winning(docs, event, "effect")
+    winning(docs, &slot_key(event))
 }
 
-fn winning(docs: &[&ConfigDocument], event: &str, key: &str) -> Option<(String, usize)> {
+fn winning(docs: &[&ConfigDocument], key: &[&str]) -> Option<(String, usize)> {
     let mut found = None;
     for (index, doc) in docs.iter().enumerate() {
-        if let Some(value) = doc.get_string(&["animation", event, key])
+        if let Some(value) = doc.get_string(key)
             && !value.is_empty()
         {
             found = Some((value, index));
@@ -352,8 +387,10 @@ fn winning(docs: &[&ConfigDocument], event: &str, key: &str) -> Option<(String, 
 pub fn legacy_assignments(docs: &[&ConfigDocument]) -> Vec<(&'static str, String, usize)> {
     EVENTS
         .iter()
+        .filter(|event| slot_kind(event) == KINDS[0])
         .filter_map(|event| {
-            winning(docs, event, "shader").map(|(value, index)| (*event, value, index))
+            winning(docs, &["animation", event, "shader"])
+                .map(|(value, index)| (*event, value, index))
         })
         .collect()
 }
@@ -488,7 +525,7 @@ pub fn new_assignment_home(docs: &[&ConfigDocument], file_names: &[&str]) -> usi
     let count = |doc: &ConfigDocument| {
         EVENTS
             .iter()
-            .filter(|event| doc.get_string(&["animation", event, "effect"]).is_some())
+            .filter(|event| doc.get_string(&slot_key(event)).is_some())
             .count()
     };
     let busiest = (0..docs.len()).max_by_key(|index| count(docs[*index]));
@@ -2248,6 +2285,31 @@ vec2 cell_id = floor(uv * 12.0);
         assert!(same_file(&file, &base.join("shaders/./a.glsl")));
         assert!(!same_file(&file, &base.join("shaders/b.glsl")));
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn effect_slots_use_the_effects_table_and_their_kind() {
+        assert_eq!(
+            slot_key("windows_in"),
+            ["animation", "windows_in", "effect"]
+        );
+        assert_eq!(slot_key("effects.cursor"), ["effects", "cursor"]);
+        assert_eq!(slot_kind("effects.screen"), "screen");
+        assert_eq!(slot_kind("layers"), "animation");
+        assert_eq!(
+            kind_of("vec4 cursor(vec2 uv) { return vec4(0.0); }"),
+            "cursor"
+        );
+        assert_eq!(
+            kind_of("vec4 animation(vec2 uv) { return vec4(0.0); }"),
+            "animation"
+        );
+        let doc = ConfigDocument::from_str("[effects]\ncursor = \"glow\"\n").unwrap();
+        assert_eq!(
+            current_assignment(&[&doc], "effects.cursor"),
+            Some(("glow".to_owned(), 0))
+        );
+        assert_eq!(current_assignment(&[&doc], "effects.screen"), None);
     }
 
     #[test]

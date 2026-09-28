@@ -133,7 +133,7 @@ pub(super) fn preview_target(event: &str) -> shader_preview::Target {
         "overview" => Target::Overview,
         "scratchpad" => Target::Scratchpad,
         "layers" => Target::Layer,
-        "border" => Target::Border,
+        "border" | "effects.border" => Target::Border,
         _ => Target::Window,
     }
 }

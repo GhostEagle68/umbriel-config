@@ -44,6 +44,7 @@ import {
     DeskStyle,
     HomeLink,
     ShaderAssignment,
+    KindCount,
     ShaderInfo,
     ShaderStep,
     ShaderUse,
@@ -196,6 +197,7 @@ export component AppWindow inherits Window {
     in property <[RuleCard]> rule-cards;
     in property <[ShaderInfo]> shaders;
     // How many shaders are yours, and the rest, for the grid.
+    in property <[KindCount]> shader-kind-counts;
     in property <int> shader-own-count;
     in property <int> shader-other-count;
     // Library and picker view, remembered in the app's settings.
@@ -209,6 +211,7 @@ export component AppWindow inherits Window {
     // The shader picker: for an assignment key, or "" to just look.
     in-out property <bool> shader-picker-open;
     in-out property <string> shader-picker-key;
+    in-out property <int> shader-picker-kind: -1;
     in-out property <string> shader-picker-title;
     in-out property <int> shader-picker-selected;
     in property <[ShaderAssignment]> shader-assignments;
@@ -681,6 +684,7 @@ export component AppWindow inherits Window {
                         convert-legacy => { root.shader-convert-legacy(); }
                         pick(key, event, current) => {
                             root.shader-picker-key = key;
+                            root.shader-picker-kind = root.shader-assignments[event].kind;
                             root.shader-picker-title = "Shader for " + root.shader-assignments[event].label;
                             root.shader-picker-selected = current;
                             root.shader-preview-event = event;
@@ -691,7 +695,8 @@ export component AppWindow inherits Window {
                         }
                         open-preview(index) => {
                             root.shader-picker-key = "";
-                            root.shader-picker-title = "Shaders";
+                            root.shader-picker-kind = -1;
+                            root.shader-picker-title = root.shaders[index].name;
                             root.shader-picker-selected = index;
                             root.shader-picker-open = true;
                             root.shader-preview-file(index, root.shader-preview-event);
@@ -1732,6 +1737,8 @@ export component AppWindow inherits Window {
     if root.shader-picker-open: ShaderPicker {
         title: root.shader-picker-title;
         key: root.shader-picker-key;
+        kind: root.shader-picker-kind;
+        kind-counts: root.shader-kind-counts;
         shaders: root.shaders;
         own-count: root.shader-own-count;
         other-count: root.shader-other-count;
@@ -1763,6 +1770,10 @@ export component AppWindow inherits Window {
         fork(index) => {
             root.shader-picker-open = false;
             root.shader-editor-fork(root.shaders[index].path, root.shaders[index].name);
+        }
+        delete(index) => {
+            root.shader-picker-open = false;
+            root.shader-delete-file(root.shaders[index].path);
         }
     }
 

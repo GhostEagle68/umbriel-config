@@ -381,7 +381,7 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
         // The events the preview can play as, in umbriel's order.
         let events: Vec<slint::SharedString> = shaders::EVENTS
             .iter()
-            .map(|event| slint::SharedString::from(common::prettify(event)))
+            .map(|event| slint::SharedString::from(common::slot_label(event)))
             .collect();
         app.set_shader_preview_events(Rc::new(VecModel::from(events)).into());
     }

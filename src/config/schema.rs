@@ -1195,7 +1195,7 @@ pub fn managed_claims(
     // The Shaders page owns every animation event's effect and the
     // presets it writes.
     for event in super::shaders::EVENTS {
-        claims.insert(format!("animation.{event}.effect"));
+        claims.insert(super::shaders::slot_key(event).join("."));
     }
     claims.insert("effects.preset".to_owned());
     for doc in docs {

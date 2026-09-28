@@ -153,6 +153,18 @@ export struct ShaderInfo {
     // Position within its section (yours, or built-in and community),
     // for laying out the grid.
     slot: int,
+    // What it draws ("Animation", "Cursor", ...), its place in the
+    // kinds, and its position among the same kind in its section (the
+    // picker shows one kind).
+    kind: string,
+    kind-index: int,
+    kind-slot: int,
+}
+
+// How many shaders of one kind each library section holds.
+export struct KindCount {
+    own: int,
+    other: int,
 }
 
 // A code-editor key's result: the new text and the selection to restore
@@ -197,9 +209,11 @@ export struct ShaderUse {
 
 // One animation event's shader assignment row.
 export struct ShaderAssignment {
-    // Dotted schema key, e.g. animation.windows_in.shader.
+    // The slot: an animation event ("windows_in") or "effects.<kind>".
     key: string,
     label: string,
+    // Which kind of shader it takes (index into the kinds).
+    kind: int,
     // The event's shader: 0 none, 1.. library shader (index + 1), past
     // the library a value that matches none of it.
     current: int,

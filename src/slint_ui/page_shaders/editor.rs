@@ -109,7 +109,7 @@ pub(super) fn use_for_rows(shell: &Shell) -> Vec<ShaderUse> {
                 }
             };
             ShaderUse {
-                label: prettify(event).into(),
+                label: slot_label(event).into(),
                 current: current.into(),
                 checked: uses_this || (this.is_none() && index == shell.shader_preview_event),
             }
@@ -134,13 +134,13 @@ pub(super) fn apply_use_for(shell: &mut Shell, app: &AppWindow, path: &Path) -> 
         let uses = using.contains(event);
         if row.checked && !uses {
             match assign_event(shell, event, Some(path)) {
-                Ok(()) => changes.push(format!("now used for {}", prettify(event))),
-                Err(err) => changes.push(format!("not used for {}: {err}", prettify(event))),
+                Ok(()) => changes.push(format!("now used for {}", slot_label(event))),
+                Err(err) => changes.push(format!("not used for {}: {err}", slot_label(event))),
             }
         } else if !row.checked && uses {
             // Clearing never fails.
             let _ = assign_event(shell, event, None);
-            changes.push(format!("no longer used for {}", prettify(event)));
+            changes.push(format!("no longer used for {}", slot_label(event)));
         }
     }
     changes
