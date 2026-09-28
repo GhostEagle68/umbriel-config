@@ -175,8 +175,11 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             let target = match shell.borrow().path.parent() {
                 Some(dir) => dir.join("shaders/community"),
                 None => {
-                    app.set_shader_download_note(
-                        "Could not determine the config directory.".into(),
+                    toast(
+                        &app,
+                        ToastKind::Error,
+                        "Couldn't find the config directory to download into.",
+                        "",
                     );
                     return;
                 }
@@ -200,9 +203,9 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                                 app.invoke_section_selected("shaders".into());
                             }
                             app.set_shader_update_available(false);
-                            app.set_shader_download_note(note.into());
+                            toast(&app, ToastKind::Success, note, "");
                         }
-                        Err(note) => app.set_shader_download_note(note.into()),
+                        Err(note) => toast(&app, ToastKind::Error, note, ""),
                     }
                 });
             });

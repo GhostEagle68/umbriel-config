@@ -271,8 +271,8 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                                 .iter()
                                 .map(|(event, doc)| (*event, *doc, Some(preset.clone())))
                                 .collect();
-                            if let Err(err) =
-                                write_assignments(&mut shell, &repoints).and_then(|()| {
+                            if let Err(err) = write_assignments(&app, &mut shell, &repoints)
+                                .and_then(|()| {
                                     repoint_include(
                                         &mut shell,
                                         &shaders::preset_file_for(old),

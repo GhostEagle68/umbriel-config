@@ -222,6 +222,23 @@ pub(super) fn include_toast(app: &AppWindow, shell: &Shell) {
     }
 }
 
+/// Persist the app's own preferences. A failure only loses the choice
+/// at the next launch, so it warns instead of blocking.
+pub(super) fn store_settings(
+    app: &AppWindow,
+    env: &discovery::Env,
+    settings: &app_settings::Settings,
+) {
+    if let Err(err) = app_settings::store(env, settings) {
+        toast(
+            app,
+            ToastKind::Warning,
+            format!("Couldn't save the app's preferences: {err}"),
+            "",
+        );
+    }
+}
+
 /// The one blocking popup, for failures the user must see.
 pub(super) fn alert(app: &AppWindow, title: &str, body: impl Into<SharedString>) {
     app.set_alert_body(body.into());

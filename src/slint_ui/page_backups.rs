@@ -101,9 +101,21 @@ fn backup_diff(shell: &Shell, base: &Path, id: &str) -> String {
 }
 
 /// Snapshot the on-disk chain into a backup run before a save overwrites
-/// it. Best effort: a backup failure is never allowed to block a save.
-pub(super) fn snapshot_before_save(shell: &Shell, env: &discovery::Env, trigger: &str) {
-    let _ = write_backup_run(shell, env, trigger);
+/// it. Best effort: a backup failure never blocks a save, but it says so.
+pub(super) fn snapshot_before_save(
+    app: &AppWindow,
+    shell: &Shell,
+    env: &discovery::Env,
+    trigger: &str,
+) {
+    if let Err(err) = write_backup_run(shell, env, trigger) {
+        toast(
+            app,
+            ToastKind::Warning,
+            format!("Couldn't back up your config first: {err}"),
+            "",
+        );
+    }
 }
 
 /// Write one backup run from the on-disk chain; `Ok(None)` when there is
@@ -167,10 +179,18 @@ fn apply_backup_dir(
 ) {
     let mut settings = app_settings::load(env);
     settings.backup_dir = (!dir.is_empty()).then(|| dir.to_owned());
-    if let Some(path) = &settings.backup_dir {
-        let _ = std::fs::create_dir_all(path);
+    if let Some(path) = &settings.backup_dir
+        && let Err(err) = std::fs::create_dir_all(path)
+    {
+        toast(
+            app,
+            ToastKind::Error,
+            format!("Couldn't create {path}: {err}"),
+            "",
+        );
+        return;
     }
-    let _ = app_settings::store(env, &settings);
+    store_settings(app, env, &settings);
     app.set_backup_dir_text(dir.to_owned().into());
     app.set_backup_note(backup_note(&settings, env));
     refresh_backup_runs(app, shell, env, runs_out);
@@ -255,7 +275,7 @@ pub(super) fn install_backups(
             let restored = {
                 let mut shell = shell.borrow_mut();
                 // A restore is itself reversible: snapshot first.
-                snapshot_before_save(&shell, &env, "restore");
+                snapshot_before_save(&app, &shell, &env, "restore");
                 let base = backup_base(&app_settings::load(&env), &env);
                 let backup = match backups::read_run(&base, &run_id) {
                     Ok(backup) => backup,
@@ -315,7 +335,7 @@ pub(super) fn install_backups(
             match parsed {
                 Some(count) => {
                     settings.backup_count = count;
-                    let _ = app_settings::store(&env, &settings);
+                    store_settings(&app, &env, &settings);
                     app.set_backup_count_text(count.to_string().into());
                     app.set_backup_note(backup_note(&settings, &env));
                     toast(

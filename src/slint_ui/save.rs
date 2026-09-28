@@ -81,7 +81,7 @@ pub(super) fn save_all_and_validate(
 ) -> bool {
     // Backup the on-disk chain before any of it is overwritten.
     if shell.doc.is_modified() || shell.includes.docs.iter().any(|inc| inc.doc.is_modified()) {
-        super::page_backups::snapshot_before_save(shell, env, "save");
+        super::page_backups::snapshot_before_save(app, shell, env, "save");
     }
 
     let mut saved_files = 0;

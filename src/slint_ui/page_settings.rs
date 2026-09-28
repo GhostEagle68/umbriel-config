@@ -156,11 +156,13 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
         });
     }
     {
+        let weak = app.as_weak();
         let env = env.clone();
         app.on_check_updates_toggled(move |checked| {
+            let Some(app) = weak.upgrade() else { return };
             let mut settings = app_settings::load(&env);
             settings.check_updates_on_start = checked;
-            let _ = app_settings::store(&env, &settings);
+            store_settings(&app, &env, &settings);
         });
     }
     {
@@ -253,11 +255,13 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
         let weak = app.as_weak();
         let env = env.clone();
         app.on_canary_auto_install_toggled({
+            let weak = weak.clone();
             let env = env.clone();
             move |checked| {
+                let Some(app) = weak.upgrade() else { return };
                 let mut settings = app_settings::load(&env);
                 settings.canary_auto_install = checked;
-                let _ = app_settings::store(&env, &settings);
+                store_settings(&app, &env, &settings);
             }
         });
         app.on_update_channel_selected(move |index| {
@@ -265,7 +269,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             app.set_update_channel(index);
             let mut settings = app_settings::load(&env);
             settings.channel = app_settings::Channel::ALL[index as usize];
-            let _ = app_settings::store(&env, &settings);
+            store_settings(&app, &env, &settings);
             start_update_check(app.as_weak(), None);
         });
     }
@@ -278,7 +282,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             app.global::<Theme>().set_dark(dark);
             let mut settings = app_settings::load(&env);
             settings.dark = dark;
-            let _ = app_settings::store(&env, &settings);
+            store_settings(&app, &env, &settings);
         });
     }
     {
@@ -401,7 +405,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
                     format!("{count} new setting{plural} synced from umbriel's docs."),
                     "Review",
                 );
-            } else if !drift.is_empty() {
+            } else if !drift.is_empty() || !error.is_empty() {
                 toast(&app, ToastKind::Info, note, "");
             }
             app.set_schema_empty(shell.schema.is_empty());
@@ -470,10 +474,20 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             show_notes(&app, "What's new", card.into_iter().collect(), false);
         });
     }
-    app.on_open_url(|url| {
-        let _ = std::process::Command::new("xdg-open")
+    let weak = app.as_weak();
+    app.on_open_url(move |url| {
+        let Some(app) = weak.upgrade() else { return };
+        if let Err(err) = std::process::Command::new("xdg-open")
             .arg(url.as_str())
-            .spawn();
+            .spawn()
+        {
+            toast(
+                &app,
+                ToastKind::Error,
+                format!("Couldn't open {url}: {err}"),
+                "",
+            );
+        }
     });
 }
 

@@ -341,6 +341,7 @@ pub(super) fn new_home(shell: &Shell) -> usize {
 /// point them at a file that no longer exists. Other unsaved edits in
 /// those files stay unsaved.
 pub(super) fn write_assignments(
+    app: &AppWindow,
     shell: &mut Shell,
     edits: &[(&'static str, usize, Option<String>)],
 ) -> Result<(), String> {
@@ -348,7 +349,12 @@ pub(super) fn write_assignments(
         return Ok(());
     }
     // Like every other write, take a backup run of the on-disk chain first.
-    super::page_backups::snapshot_before_save(shell, &discovery::Env::from_process(), "shader");
+    super::page_backups::snapshot_before_save(
+        app,
+        shell,
+        &discovery::Env::from_process(),
+        "shader",
+    );
     let paths = chain_paths(shell);
     for (event, doc, value) in edits {
         let key = ["animation", event, "effect"];
@@ -456,7 +462,7 @@ pub(super) fn delete_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, path: &
                     .iter()
                     .map(|(event, doc)| (*event, *doc, None))
                     .collect();
-                if let Err(err) = write_assignments(&mut shell, &clears)
+                if let Err(err) = write_assignments(app, &mut shell, &clears)
                     .and_then(|()| repoint_include(&mut shell, &preset_file, None))
                 {
                     toast(app, ToastKind::Error, err, "");
