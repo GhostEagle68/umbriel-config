@@ -288,7 +288,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
     {
         let weak = app.as_weak();
         let shell = Rc::clone(shell);
-        app.on_view_file(move |index| {
+        app.on_view_file(move |index, key| {
             let Some(app) = weak.upgrade() else { return };
             if index < 0 {
                 return;
@@ -317,7 +317,29 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             };
             app.set_popup_file_title(format!("{label}{modified}").into());
             app.set_popup_file_path(path.into());
-            app.set_popup_file_text(doc.text().into());
+            let text = doc.text();
+            let lines: Vec<CodeLine> = text
+                .lines()
+                .enumerate()
+                .map(|(number, line)| {
+                    let spans: Vec<CodeSpan> = toml_lines::highlight(line)
+                        .into_iter()
+                        .map(|(text, token)| CodeSpan {
+                            text: text.into(),
+                            kind: token as i32,
+                        })
+                        .collect();
+                    CodeLine {
+                        number: number as i32 + 1,
+                        spans: Rc::new(VecModel::from(spans)).into(),
+                    }
+                })
+                .collect();
+            let focus = (!key.is_empty())
+                .then(|| toml_lines::key_line(&text, &key))
+                .flatten();
+            app.set_popup_file_lines(Rc::new(VecModel::from(lines)).into());
+            app.set_popup_focus_line(focus.map_or(-1, |line| line as i32));
             app.set_file_stats(status_line(&shell));
             app.set_show_file_popup(true);
         });

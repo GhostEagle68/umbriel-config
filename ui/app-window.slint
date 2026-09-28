@@ -50,9 +50,11 @@ import {
     ShaderUse,
     Toast,
     ToastKind,
+    CodeLine,
 } from "types.slint";
 import { CategoryPage } from "pages/category.slint";
 import { HomePage } from "pages/home.slint";
+import { FileViewer } from "pages/file-viewer.slint";
 import { SettingsPage } from "pages/settings.slint";
 import { BackupsPage } from "pages/backups.slint";
 import { KeybindsPage, KeybindsState } from "pages/keybinds.slint";
@@ -112,7 +114,9 @@ export component AppWindow inherits Window {
     in-out property <bool> show-file-popup: false;
     in property <string> popup-file-title;
     in property <string> popup-file-path;
-    in property <string> popup-file-text;
+    in property <[CodeLine]> popup-file-lines;
+    // The line that sets the viewed setting; -1 for none.
+    in property <int> popup-focus-line: -1;
     in property <string> file-stats;
     // Home page models, filled by page_home.rs.
     in property <[HomeLink]> home-changes;
@@ -155,7 +159,7 @@ export component AppWindow inherits Window {
     callback set-value(string, string);
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
-    callback view-file(int);
+    callback view-file(int, string);
     callback save-dest-chosen(string, string);
     callback save-confirmed();
     callback reset-entry(string);
@@ -568,7 +572,7 @@ export component AppWindow inherits Window {
                         include-count: root.include-files.length;
                         include-files: root.include-files;
                         config-path: root.config-path;
-                        view-file(i) => { root.view-file(i); }
+                        view-file(i, key) => { root.view-file(i, key); }
                         changed-count: root.changed-count;
                         changes: root.home-changes;
                         new-settings: root.home-new-settings;
@@ -590,7 +594,7 @@ export component AppWindow inherits Window {
                                 root.section-selected(id);
                             }
                         }
-                        view-main-file => { root.view-file(root.include-files.length); }
+                        view-main-file => { root.view-file(root.include-files.length, ""); }
                         install-update => { root.install-update(); }
                         restart-app => { root.restart-app(); }
                         view-update-notes => { root.view-update-notes(); }
@@ -632,7 +636,7 @@ export component AppWindow inherits Window {
                         reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
-                        view-file(i) => { root.view-file(i); }
+                        view-file(i, key) => { root.view-file(i, key); }
                     }
                 }
 
@@ -654,7 +658,7 @@ export component AppWindow inherits Window {
                         reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
-                        view-file(i) => { root.view-file(i); }
+                        view-file(i, key) => { root.view-file(i, key); }
                     }
                 }
 
@@ -735,7 +739,7 @@ export component AppWindow inherits Window {
                         reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
-                        view-file(i) => { root.view-file(i); }
+                        view-file(i, key) => { root.view-file(i, key); }
                         toggle-card(title) => { root.toggle-card(title); }
                     }
                 }
@@ -1028,7 +1032,7 @@ export component AppWindow inherits Window {
                         reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
-                        view-file(i) => { root.view-file(i); }
+                        view-file(i, key) => { root.view-file(i, key); }
                     }
                 }
 
@@ -1343,95 +1347,15 @@ export component AppWindow inherits Window {
         }
     }
 
-    // ── read-only file view popup (opened from a row's "in <file>" badge) ──
-    if root.show-file-popup: Rectangle {
-        width: 100%;
-        height: 100%;
-        background: #00000099;
-
-        // Clicking the scrim closes the popup…
-        TouchArea {
-            clicked => { root.show-file-popup = false; }
-        }
-
-        Rectangle {
-            width: min(parent.width - 96px, 760px);
-            height: parent.height - 96px;
-            border-radius: Theme.radius-xl;
-            background: Theme.bg-3;
-            drop-shadow-blur: 24px;
-            drop-shadow-color: #00000066;
-            border-width: 1px;
-            border-color: Theme.border;
-
-            // …the card absorbs its own clicks so it stays open.
-            TouchArea { }
-
-            VerticalLayout {
-                padding: Theme.space-l;
-                spacing: Theme.space-m;
-
-                HorizontalLayout {
-                    spacing: Theme.space-m;
-
-                    VerticalLayout {
-                        spacing: 2px;
-
-                        Text {
-                            text: root.popup-file-title;
-                            color: Theme.text-1;
-                            font-size: Theme.font-large;
-                            font-weight: 700;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: root.popup-file-path;
-                            color: Theme.text-2;
-                            font-family: Theme.font-mono;
-                            font-size: Theme.font-small;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: root.file-stats;
-                            color: Theme.text-2;
-                            font-size: Theme.font-small;
-                            vertical-alignment: center;
-                            visible: root.file-stats != "";
-                        }
-                    }
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
-
-                    ActionButton {
-                        text: "Close";
-                        clicked => { root.show-file-popup = false; }
-                    }
-                }
-
-                ScrollView {
-                    width: 100%;
-                    height: 100%;
-                    // Non-layout child: the viewport must be pinned to the
-                    // content's natural size or nothing ever scrolls.
-                    viewport-width: file-text.preferred-width;
-                    viewport-height: file-text.preferred-height;
-
-                    file-text := Text {
-                        text: root.popup-file-text;
-                        color: Theme.text-1;
-                        font-family: Theme.font-mono;
-                        font-size: Theme.font-small;
-                        wrap: no-wrap;
-                        width: self.preferred-width;
-                        height: self.preferred-height;
-                    }
-                }
-            }
-        }
+    // ── read-only file viewer (from a row's "in <file>" badge) ──
+    if root.show-file-popup: FileViewer {
+        title: root.popup-file-title;
+        path: root.popup-file-path;
+        stats: root.file-stats;
+        lines: root.popup-file-lines;
+        focus-line: root.popup-focus-line;
+        close => { root.show-file-popup = false; }
+        open-in-editor => { root.open-url(root.popup-file-path); }
     }
 
     // ── shader editor overlay (create, edit, fork, delete own shaders) ──

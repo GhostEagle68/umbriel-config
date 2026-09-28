@@ -337,3 +337,16 @@ export struct Toast {
     text: string,
     action: string,
 }
+
+// A colored piece of a line in the file viewer. `kind`: 0 plain,
+// 1 comment, 2 table header, 3 key, 4 string, 5 number or bool,
+// 6 punctuation (toml_lines::Token, in order).
+export struct CodeSpan {
+    text: string,
+    kind: int,
+}
+
+export struct CodeLine {
+    number: int,
+    spans: [CodeSpan],
+}

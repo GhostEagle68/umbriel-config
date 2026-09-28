@@ -11,6 +11,7 @@ pub mod schema;
 pub mod settings;
 pub mod shaders;
 pub mod state;
+pub mod toml_lines;
 pub mod umbriel_docs;
 pub mod umbriel_schema;
 pub mod validate;

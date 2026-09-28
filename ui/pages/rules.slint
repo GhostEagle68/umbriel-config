@@ -23,7 +23,7 @@ export component RulePage inherits Rectangle {
     callback reset-key(string);
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
-    callback view-file(int);
+    callback view-file(int, string);
 
     VerticalLayout {
         padding-left: Theme.space-xl;
@@ -80,7 +80,7 @@ export component RulePage inherits Rectangle {
                         reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
-                        view-file(i) => { root.view-file(i); }
+                        view-file(i, key) => { root.view-file(i, key); }
                     }
 
                     VerticalLayout {
@@ -101,7 +101,7 @@ export component RulePage inherits Rectangle {
                         reset-key(k) => { root.reset-key(k); }
                         set-slider-value(k, v) => { root.set-slider-value(k, v); }
                         slider-preview(k, v) => { root.slider-preview(k, v); }
-                        view-file(i) => { root.view-file(i); }
+                        view-file(i, key) => { root.view-file(i, key); }
                     }
                 }
             }

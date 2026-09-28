@@ -29,7 +29,7 @@ use slint::{
 };
 use umbriel_config::config::{
     backups, discovery, document::ConfigDocument, includes, keybinds, outputs, rules, schema,
-    settings as app_settings, shaders, state, umbriel_docs, umbriel_schema, validate,
+    settings as app_settings, shaders, state, toml_lines, umbriel_docs, umbriel_schema, validate,
 };
 
 use umbriel_config::{changelog, live, update};

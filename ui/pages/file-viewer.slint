@@ -1,0 +1,200 @@
+// The read-only file viewer: a config file with its TOML colored and
+// line numbers, opened on the line that sets the setting it came from.
+
+import { ListView } from "std-widgets.slint";
+import { ActionButton } from "../widgets.slint";
+import { CodeLine } from "../types.slint";
+import { Theme } from "../theme.slint";
+
+export component FileViewer inherits Rectangle {
+    in property <string> title;
+    in property <string> path;
+    in property <string> stats;
+    in property <[CodeLine]> lines;
+    // Index into `lines` to open on and mark; -1 opens at the top.
+    in property <int> focus-line: -1;
+    callback close();
+    callback open-in-editor();
+
+    property <length> line-height: 18px;
+    property <bool> copied: false;
+
+    width: 100%;
+    height: 100%;
+    background: #00000099;
+
+    TouchArea {
+        clicked => { root.close(); }
+    }
+
+    Rectangle {
+        width: min(parent.width - 96px, 960px);
+        height: parent.height - 96px;
+        border-radius: Theme.radius-xl;
+        background: Theme.bg-3;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000066;
+        border-width: 1px;
+        border-color: Theme.border;
+
+        TouchArea { }
+
+        VerticalLayout {
+            padding: Theme.space-l;
+            spacing: Theme.space-m;
+
+            HorizontalLayout {
+                spacing: Theme.space-m;
+
+                VerticalLayout {
+                    spacing: 4px;
+                    horizontal-stretch: 1;
+
+                    Text {
+                        text: root.title;
+                        color: Theme.text-1;
+                        font-size: Theme.font-large;
+                        font-weight: 700;
+                    }
+
+                    HorizontalLayout {
+                        alignment: start;
+
+                        Rectangle {
+                            border-radius: Theme.radius-s;
+                            background: Theme.bg-2;
+
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                padding-top: 2px;
+                                padding-bottom: 2px;
+
+                                Text {
+                                    text: root.path;
+                                    color: Theme.text-2;
+                                    font-family: Theme.font-mono;
+                                    font-size: Theme.font-small;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+
+                    if root.stats != "": Text {
+                        text: root.stats;
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: start;
+
+                    HorizontalLayout {
+                        spacing: Theme.space-s;
+
+                        ActionButton {
+                            text: root.copied ? "Copied" : "Copy path";
+                            clicked => {
+                                // The clipboard is only reachable through a
+                                // text input.
+                                path-copy.select-all();
+                                path-copy.copy();
+                                root.copied = true;
+                            }
+                        }
+
+                        ActionButton {
+                            text: "Open in editor";
+                            clicked => { root.open-in-editor(); }
+                        }
+
+                        close-ta := TouchArea {
+                            width: 30px;
+                            height: 30px;
+                            mouse-cursor: pointer;
+                            clicked => { root.close(); }
+
+                            Rectangle {
+                                border-radius: Theme.radius-m;
+                                background: close-ta.has-hover ? Theme.bg-2 : transparent;
+
+                                Image {
+                                    width: 16px;
+                                    height: 16px;
+                                    source: @image-url("../../assets/icons/close.svg");
+                                    colorize: Theme.text-2;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            path-copy := TextInput {
+                text: root.path;
+                read-only: true;
+                visible: false;
+                height: 0;
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                border-radius: Theme.radius-m;
+                background: Theme.bg-1;
+                clip: true;
+
+                list := ListView {
+                    // Open with the line a third of the way down.
+                    init => {
+                        if (root.focus-line > 0) {
+                            self.viewport-y = -max(0, root.focus-line * root.line-height - self.visible-height / 3);
+                        }
+                    }
+
+                    for line[i] in root.lines: Rectangle {
+                        height: root.line-height;
+                        background: i == root.focus-line ? Theme.accent-soft : transparent;
+
+                        HorizontalLayout {
+                            padding-left: Theme.space-s;
+                            padding-right: Theme.space-s;
+                            spacing: Theme.space-m;
+                            alignment: start;
+
+                            Text {
+                                width: 36px;
+                                text: line.number;
+                                color: Theme.text-2;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+
+                            HorizontalLayout {
+                                alignment: start;
+
+                                for span in line.spans: Text {
+                                    text: span.text;
+                                    font-family: Theme.font-mono;
+                                    font-size: Theme.font-small;
+                                    vertical-alignment: center;
+                                    font-weight: span.kind == 2 ? 700 : 400;
+                                    font-italic: span.kind == 1;
+                                    color: span.kind == 1 ? Theme.text-2
+                                        : span.kind == 2 ? Theme.accent
+                                        : span.kind == 4 ? Theme.success
+                                        : span.kind == 5 ? Theme.warning
+                                        : span.kind == 6 ? Theme.text-2
+                                        : Theme.text-1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

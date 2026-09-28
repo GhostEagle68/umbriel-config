@@ -343,7 +343,7 @@ export component HomePage inherits Rectangle {
     in property <string> config-path;
     // The Config files line is open.
     property <bool> files-open: false;
-    callback view-file(int);
+    callback view-file(int, string);
     in property <int> changed-count;
     in property <[HomeLink]> changes;
     in property <[HomeLink]> new-settings;
@@ -458,7 +458,7 @@ export component HomePage inherits Rectangle {
                     for file[i] in root.include-files: FileLine {
                         path: file;
                         tag: "include " + (i + 1);
-                        open => { root.view-file(i); }
+                        open => { root.view-file(i, ""); }
                     }
 
                     FileLine {

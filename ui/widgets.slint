@@ -527,7 +527,7 @@ export component SettingRowView inherits Rectangle {
     callback reset-key(string);
     callback set-slider-value(string, float);
     callback slider-preview(string, float);
-    callback view-file(int);
+    callback view-file(int, string);
     min-height: 56px;
 
     // A new setting's edge mark, to spot it in a long page.
@@ -590,7 +590,7 @@ export component SettingRowView inherits Rectangle {
 
                     badge-ta := TouchArea {
                         mouse-cursor: pointer;
-                        clicked => { root.view-file(setting.home); }
+                        clicked => { root.view-file(setting.home, setting.key); }
                     }
                 }
             }
