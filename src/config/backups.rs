@@ -74,7 +74,7 @@ pub fn snapshot_run(
             .into_owned();
         let mut name = base_name.clone();
         let mut n = 2;
-        while stored.contains(&name) {
+        while name == "origin" || stored.contains(&name) {
             name = format!("{n}-{base_name}");
             n += 1;
         }

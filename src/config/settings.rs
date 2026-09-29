@@ -18,6 +18,15 @@ impl Channel {
     /// Also the order of the Settings page's channel dropdown.
     pub const ALL: [Channel; 2] = [Channel::Stable, Channel::Canary];
 
+    /// The channel at a dropdown index; an out-of-range index (Slint's -1
+    /// for "nothing selected") falls back to Stable.
+    pub fn at(index: i32) -> Channel {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| Channel::ALL.get(index).copied())
+            .unwrap_or(Channel::Stable)
+    }
+
     fn name(self) -> &'static str {
         match self {
             Channel::Stable => "stable",

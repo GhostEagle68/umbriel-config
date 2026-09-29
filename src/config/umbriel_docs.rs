@@ -41,12 +41,20 @@ pub fn is_stale(env: &discovery::Env) -> bool {
     age.is_none_or(|age| age >= Duration::from_secs(24 * 60 * 60))
 }
 
+/// A download that describes under half the settings of the bundled copy
+/// means umbriel restructured its docs (or the fetch was partial), not
+/// that half the settings are gone.
+fn plausible(docs: &str) -> bool {
+    let count = |text: &str| super::schema::assemble_docs(text).len();
+    count(docs) * 2 >= count(BUNDLED)
+}
+
 /// Download the docs and store them as the new copy. The old copy stays
-/// when the download fails or holds no settings.
+/// when the download fails or describes far fewer settings.
 pub fn refresh(env: &discovery::Env) -> Result<(), String> {
     let docs = fetch()?;
-    if super::schema::assemble_docs(&docs).is_empty() {
-        return Err("the downloaded docs describe no settings".to_owned());
+    if !plausible(&docs) {
+        return Err("the downloaded docs describe far fewer settings than expected".to_owned());
     }
     store(&cache_path(env), &docs).map_err(|err| err.to_string())
 }
@@ -132,6 +140,14 @@ mod tests {
         assert_eq!(load(&env), BUNDLED);
 
         std::fs::remove_dir_all(&state).ok();
+    }
+
+    #[test]
+    fn a_download_with_far_fewer_settings_is_not_plausible() {
+        assert!(plausible(BUNDLED));
+        let one_page = format!("{PAGE_MARKER}input.md -->\n# Input\n");
+        assert!(!plausible(&one_page));
+        assert!(!plausible(""));
     }
 
     #[test]

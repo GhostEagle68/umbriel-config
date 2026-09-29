@@ -49,7 +49,7 @@ pub(super) fn start_update_check(weak: slint::Weak<AppWindow>, env: Option<disco
     }
     app.set_update_note("Checking…".into());
     // Read the channel here: the worker can't touch the window.
-    let channel = app_settings::Channel::ALL[app.get_update_channel() as usize];
+    let channel = app_settings::Channel::at(app.get_update_channel());
     // Only the startup check may install on its own.
     let automatic = env.is_some();
     std::thread::spawn(move || {
@@ -176,7 +176,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             if version.is_empty() || installing.swap(true, Ordering::Relaxed) {
                 return;
             }
-            let tag = match app_settings::Channel::ALL[app.get_update_channel() as usize] {
+            let tag = match app_settings::Channel::at(app.get_update_channel()) {
                 app_settings::Channel::Canary => "canary".to_owned(),
                 _ => format!("v{version}"),
             };
@@ -268,7 +268,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             let Some(app) = weak.upgrade() else { return };
             app.set_update_channel(index);
             let mut settings = app_settings::load(&env);
-            settings.channel = app_settings::Channel::ALL[index as usize];
+            settings.channel = app_settings::Channel::at(index);
             store_settings(&app, &env, &settings);
             start_update_check(app.as_weak(), None);
         });

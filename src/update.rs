@@ -261,7 +261,9 @@ pub fn install(tag: &str) -> Result<(), String> {
     }
     let exe = std::env::current_exe().map_err(|err| err.to_string())?;
     let staged = exe.with_file_name(".umbriel-config.new");
-    unpack_binary(&tarball, &staged)?;
+    unpack_binary(&tarball, &staged).inspect_err(|_| {
+        let _ = std::fs::remove_file(&staged);
+    })?;
     // The build being replaced stays next to it for `umbriel-config rollback`.
     if let Err(err) = std::fs::copy(&exe, previous_path(&exe)) {
         let _ = std::fs::remove_file(&staged);

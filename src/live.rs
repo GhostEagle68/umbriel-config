@@ -20,6 +20,8 @@ pub enum LiveError {
     Dispatch(#[from] wayland_client::DispatchError),
     #[error("the compositor does not support wlr-output-management")]
     Unsupported,
+    #[error("the compositor did not finish reporting its outputs")]
+    Incomplete,
 }
 
 /// One monitor as the compositor sees it right now.
@@ -70,10 +72,20 @@ pub fn outputs() -> Result<Vec<LiveOutput>, LiveError> {
     if state.manager.is_none() {
         return Err(LiveError::Unsupported);
     }
-    while !state.done {
-        queue.blocking_dispatch(&mut state)?;
+    // The manager's heads and `done` follow the bind, so one more round
+    // trip delivers them. Bounded: a compositor that never reports must
+    // not hang the caller (the window's UI thread, for one).
+    for _ in 0..3 {
+        if state.done {
+            return Ok(state.finish());
+        }
+        queue.roundtrip(&mut state)?;
     }
-    Ok(state.finish())
+    if state.done {
+        Ok(state.finish())
+    } else {
+        Err(LiveError::Incomplete)
+    }
 }
 
 /// Per-connection enumeration state.

@@ -84,21 +84,35 @@ pub(super) fn save_all_and_validate(
         super::page_backups::snapshot_before_save(app, shell, env, "save");
     }
 
+    // Includes first, the main file last. A failure stops the run but
+    // keeps the baselines of what did land, so those keys don't still
+    // show as changed.
+    let main = shell.includes.docs.len();
     let mut saved_files = 0;
-    for inc in &mut shell.includes.docs {
-        if inc.doc.is_modified() {
-            if let Err(err) = inc.doc.save(&inc.path) {
-                alert(app, "Couldn't save", err.to_string());
-                return false;
-            }
-            saved_files += 1;
+    for i in 0..=main {
+        if !doc_at(shell, i).is_modified() {
+            continue;
         }
-    }
-    if shell.doc.is_modified() {
-        let path = shell.path.clone();
-        if let Err(err) = shell.doc.save(&path) {
-            alert(app, "Couldn't save", err.to_string());
+        let path = if i == main {
+            shell.path.clone()
+        } else {
+            shell.includes.docs[i].path.clone()
+        };
+        if let Err(err) = doc_at_mut(shell, i).save(&path) {
+            let plural = if saved_files == 1 { "" } else { "s" };
+            alert(
+                app,
+                "Couldn't save",
+                format!(
+                    "{err}\n\n{saved_files} file{plural} saved before this; the rest are still unsaved."
+                ),
+            );
+            app.set_changed_count(changed_count(shell));
             return false;
+        }
+        let written = doc_at(shell, i).leaf_values().into_iter().collect();
+        if let Some(slot) = shell.saved.get_mut(i) {
+            *slot = written;
         }
         saved_files += 1;
     }
@@ -140,7 +154,11 @@ pub(super) fn report_validation(
                 alert(
                     app,
                     "Umbriel rejected part of the config",
-                    format!("{done}, but umbriel reported:\n\n{}", messages.join("\n")),
+                    format!(
+                        "{done}, but umbriel reported:\n\n{}\n\nThe change is already on disk; \
+                         Backups can restore the previous version.",
+                        messages.join("\n")
+                    ),
                 );
             }
         }
