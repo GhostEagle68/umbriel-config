@@ -153,6 +153,36 @@ pub(super) fn report_validation(
     }
 }
 
+/// Move one changed key to the file its save-popup row picked: write it
+/// into the target first, then remove it from the file it lived in, so a
+/// value is never lost mid-move. A row already in its chosen file, or one
+/// whose value isn't TOML (a "(removed)" deletion), stays where it is.
+fn move_entry(
+    shell: &mut Shell,
+    labels: &[SharedString],
+    sets: &[BTreeSet<String>],
+    entry: &SaveEntry,
+) {
+    let Some(dest) = labels
+        .iter()
+        .position(|label| label.as_str() == entry.dest_label.as_str())
+    else {
+        return;
+    };
+    let Some(home) = entry_home(sets, &entry.key) else {
+        return;
+    };
+    if home == dest {
+        return;
+    }
+    if doc_at_mut(shell, dest).set_leaf_text(&entry.key, &entry.value) {
+        let parts: Vec<&str> = entry.key.split('.').collect();
+        // remove_leaf prunes the tables left empty, so the old file
+        // doesn't keep a bare section header.
+        doc_at_mut(shell, home).remove_leaf(&parts);
+    }
+}
+
 pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &discovery::Env) {
     {
         let weak = app.as_weak();
@@ -264,40 +294,9 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
 
             let labels = setting_labels(&shell);
             let sets = chain_path_sets(&shell);
-            let main = shell.includes.docs.len();
-
-            // Apply per-key destinations. Moving a key = write the value
-            // into the target file first, then remove it from the old one —
-            // a value is never lost mid-move.
+            // Apply per-key destinations.
             for entry in &entries {
-                let Some(dest) = labels
-                    .iter()
-                    .position(|label| label.as_str() == entry.dest_label.as_str())
-                else {
-                    continue;
-                };
-                let Some(home) = entry_home(&sets, &entry.key) else {
-                    continue;
-                };
-                if home == dest {
-                    continue;
-                }
-                let parts: Vec<&str> = entry.key.split('.').collect();
-                let target = if dest == main {
-                    &mut shell.doc
-                } else {
-                    &mut shell.includes.docs[dest].doc
-                };
-                if target.set_leaf_text(&entry.key, &entry.value) {
-                    let source = if home == main {
-                        &mut shell.doc
-                    } else {
-                        &mut shell.includes.docs[home].doc
-                    };
-                    // remove_leaf prunes the tables left empty, so the
-                    // old file doesn't keep a bare section header.
-                    source.remove_leaf(&parts);
-                }
+                move_entry(&mut shell, &labels, &sets, entry);
             }
 
             if save_all_and_validate(&app, &mut shell, &env) {
