@@ -495,7 +495,9 @@ impl ConfigDocument {
     /// Store a value inside rule `index`, creating intermediate tables for
     /// dotted keys and transplanting any existing value's decor.
     fn rule_store(&mut self, name: &str, index: usize, key: &str, mut value: Value) {
-        let mut table = self.rule_table_mut(name, index).unwrap();
+        let Some(mut table) = self.rule_table_mut(name, index) else {
+            return;
+        };
         let parts: Vec<&str> = key.split('.').collect();
         let (last, parents) = parts.split_last().expect("non-empty key");
         for parent in parents {
@@ -1205,6 +1207,15 @@ curve = \"easeout\"
         assert!(doc.remove_rule("layer_rule", 1));
         assert_eq!(doc.rule_count("layer_rule"), 1);
         assert!(!doc.remove_rule("layer_rule", 5));
+    }
+
+    #[test]
+    fn rule_edits_on_a_missing_rule_change_nothing() {
+        let mut doc = ConfigDocument::from_str("[[window_rule]]\n").unwrap();
+        let before = doc.text();
+        doc.rule_set_string("window_rule", 5, "match.app_id", "x");
+        doc.rule_set_bool("no_such_list", 0, "float", true);
+        assert_eq!(doc.text(), before);
     }
 
     #[test]
