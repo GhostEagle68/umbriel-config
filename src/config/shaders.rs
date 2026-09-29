@@ -634,6 +634,13 @@ pub fn write_user_shader(path: &Path, code: &str) -> Result<(), String> {
     if !blockers.is_empty() {
         return Err(blockers.join("; "));
     }
+    // A symlinked shader (a dotfiles checkout) is written through, so the
+    // link stays a link, like the config file itself.
+    let linked = path
+        .is_symlink()
+        .then(|| std::fs::canonicalize(path).ok())
+        .flatten();
+    let path = linked.as_deref().unwrap_or(path);
     let Some(dir) = path.parent() else {
         return Err("shader path has no directory".to_owned());
     };
@@ -1826,6 +1833,22 @@ mod tests {
         assert!(sanitize_shader_name("../evil").is_err());
         assert!(sanitize_shader_name("a/b").is_err());
         assert!(sanitize_shader_name(".hidden").is_err());
+    }
+
+    #[test]
+    fn writing_a_symlinked_shader_keeps_the_link() {
+        let base = std::env::temp_dir().join(format!("umbriel-shader-link-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let real = base.join("dotfiles/glow.glsl");
+        let link = base.join("config/shaders/glow.glsl");
+        write(&real, GLSL);
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let edited = "vec4 animation(vec2 uv) { return umbriel_sample(uv) * 0.5; }\n";
+        write_user_shader(&link, edited).unwrap();
+        assert!(link.is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), edited);
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
