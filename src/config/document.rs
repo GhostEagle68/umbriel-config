@@ -326,14 +326,6 @@ impl ConfigDocument {
         Self::set_value(&mut self.doc, path, Value::Array(array));
     }
 
-    pub fn set_floats(&mut self, path: &[&str], values: &[f64]) {
-        let mut array = Array::new();
-        for value in values {
-            array.push(*value);
-        }
-        Self::set_value(&mut self.doc, path, Value::Array(array));
-    }
-
     pub fn set_strings(&mut self, path: &[&str], values: &[String]) {
         let mut array = Array::new();
         for value in values {
@@ -548,10 +540,6 @@ impl ConfigDocument {
         self.rule_item(name, index, key)?.as_value()?.as_integer()
     }
 
-    pub fn rule_integers(&self, name: &str, index: usize, key: &str) -> Option<Vec<i64>> {
-        let array = self.rule_item(name, index, key)?.as_value()?.as_array()?;
-        array.iter().map(|value| value.as_integer()).collect()
-    }
     pub fn rule_strings(&self, name: &str, index: usize, key: &str) -> Option<Vec<String>> {
         let array = self.rule_item(name, index, key)?.as_value()?.as_array()?;
         array
@@ -588,14 +576,6 @@ impl ConfigDocument {
 
     pub fn rule_set_integer(&mut self, name: &str, index: usize, key: &str, value: i64) {
         self.rule_store(name, index, key, value.into());
-    }
-
-    pub fn rule_set_integers(&mut self, name: &str, index: usize, key: &str, values: &[i64]) {
-        let mut array = Array::new();
-        for value in values {
-            array.push(*value);
-        }
-        self.rule_store(name, index, key, Value::Array(array));
     }
 
     pub fn rule_set_strings(&mut self, name: &str, index: usize, key: &str, values: &[String]) {
@@ -1187,13 +1167,11 @@ curve = \"easeout\"
 
     #[test]
     fn float_arrays_round_trip() {
-        let mut doc = ConfigDocument::from_str("[layout]\nwidth_presets = [0.333, 0.5]\n").unwrap();
+        let doc = ConfigDocument::from_str("[layout]\nwidth_presets = [0.333, 0.5]\n").unwrap();
         assert_eq!(
             doc.get_floats(&["layout", "width_presets"]),
             Some(vec![0.333, 0.5])
         );
-        doc.set_floats(&["layout", "width_presets"], &[0.25, 0.5, 0.75]);
-        assert!(doc.text().contains("width_presets = [0.25, 0.5, 0.75]"));
     }
 
     #[test]

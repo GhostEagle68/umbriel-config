@@ -98,18 +98,14 @@ pub fn check(channel: Channel) -> Result<Verdict, String> {
         .as_deref()
         .map(str::trim)
         .filter(|body| !body.is_empty());
-    compare_versions(env!("CARGO_PKG_VERSION"), &release.tag_name)
-        .map(|ordering| {
-            if ordering == Ordering::Greater {
-                Verdict::UpdateAvailable {
-                    version: release.tag_name.trim_start_matches('v').to_owned(),
-                    notes: notes.map(str::to_owned),
-                }
-            } else {
-                Verdict::UpToDate
-            }
-        })
-        .ok_or_else(|| format!("unparseable version '{}'", release.tag_name))
+    match compare(env!("CARGO_PKG_VERSION"), &release.tag_name) {
+        Some(Verdict::UpdateAvailable { version, .. }) => Ok(Verdict::UpdateAvailable {
+            version,
+            notes: notes.map(str::to_owned),
+        }),
+        Some(verdict) => Ok(verdict),
+        None => Err(format!("unparseable version '{}'", release.tag_name)),
+    }
 }
 
 /// A build without a commit (a versioned release, cargo, source) is

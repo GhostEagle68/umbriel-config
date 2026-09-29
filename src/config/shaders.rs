@@ -84,7 +84,7 @@ pub enum Source {
     Bundled,
     /// Under the config directory's `shaders/`.
     ConfigDir,
-    /// The community repository clone (`shaders/community/…`).
+    /// The downloaded community collection (`shaders/community/…`).
     Community,
 }
 
@@ -729,14 +729,14 @@ pub fn unused_shader_name(config_dir: &Path, base: &str) -> String {
 }
 
 /// Delete a user shader by path. Only files inside the shaders
-/// directory qualify — the git-managed community clone is refused.
+/// directory qualify — the downloaded community collection is refused.
 pub fn delete_user_shader(config_dir: &Path, path: &Path) -> Result<(), String> {
     let Ok(relative) = path.strip_prefix(user_shaders_dir(config_dir)) else {
         return Err(format!("{} is not a user shader", path.display()));
     };
     if relative.starts_with("community") {
         return Err(
-            "community shaders are git-managed — update or remove the clone instead".to_owned(),
+            "community shaders are managed by the download — fork one to change it".to_owned(),
         );
     }
     std::fs::remove_file(path)
@@ -1722,7 +1722,7 @@ mod tests {
 
         let entries = scan(&config_dir, std::slice::from_ref(&data_dir));
         let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
-        // Sorted by path: the community clone sorts before reveal.glsl.
+        // Sorted by path: the community folder sorts before reveal.glsl.
         assert_eq!(names, vec!["example", "reveal", "squash"]);
         assert_eq!(entries[0].source, Source::Community);
         assert_eq!(entries[1].source, Source::ConfigDir);
