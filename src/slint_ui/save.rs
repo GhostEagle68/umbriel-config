@@ -306,3 +306,113 @@ pub(super) fn install_save(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env: &di
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A main file that includes `a.toml`, loaded into a Shell whose
+    /// state files live in the temp dir, not the user's.
+    fn shell_in(tag: &str, main: &str, include: &str) -> (Shell, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("umbriel-save-{tag}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.toml"), include).unwrap();
+        let main_path = dir.join("config.toml");
+        std::fs::write(&main_path, main).unwrap();
+        let env = discovery::Env {
+            xdg_state_home: Some(dir.join("state").into()),
+            ..discovery::Env::from_process()
+        };
+        (Shell::load(&main_path, &env), dir)
+    }
+
+    fn entry(key: &str, value: &str, dest_label: &str) -> SaveEntry {
+        SaveEntry {
+            key: key.into(),
+            label: "".into(),
+            value: value.into(),
+            dest_label: dest_label.into(),
+            dest_index: 0,
+        }
+    }
+
+    const MAIN: &str = "[include]\nfiles = [\"a.toml\"]\n\n[general]\nxwayland = true\n";
+
+    #[test]
+    fn a_key_moves_into_the_include_and_leaves_no_empty_section() {
+        let (mut shell, dir) = shell_in("into", MAIN, "");
+        let (labels, sets) = (setting_labels(&shell), chain_path_sets(&shell));
+        move_entry(
+            &mut shell,
+            &labels,
+            &sets,
+            &entry("general.xwayland", "true", "a.toml"),
+        );
+        assert_eq!(
+            shell.includes.docs[0]
+                .doc
+                .get_bool(&["general", "xwayland"]),
+            Some(true)
+        );
+        assert_eq!(shell.doc.get_bool(&["general", "xwayland"]), None);
+        assert!(!shell.doc.text().contains("[general]"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_key_moves_back_to_the_main_file() {
+        let (mut shell, dir) = shell_in(
+            "back",
+            "[include]\nfiles = [\"a.toml\"]\n",
+            "[general]\nxwayland = true\n",
+        );
+        let (labels, sets) = (setting_labels(&shell), chain_path_sets(&shell));
+        let main = labels.last().unwrap().to_string();
+        move_entry(
+            &mut shell,
+            &labels,
+            &sets,
+            &entry("general.xwayland", "true", &main),
+        );
+        assert_eq!(shell.doc.get_bool(&["general", "xwayland"]), Some(true));
+        assert_eq!(
+            shell.includes.docs[0]
+                .doc
+                .get_bool(&["general", "xwayland"]),
+            None
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_removal_row_is_never_moved() {
+        let (mut shell, dir) = shell_in("removed", MAIN, "");
+        let (labels, sets) = (setting_labels(&shell), chain_path_sets(&shell));
+        move_entry(
+            &mut shell,
+            &labels,
+            &sets,
+            &entry("general.xwayland", "(removed)", "a.toml"),
+        );
+        assert_eq!(shell.doc.get_bool(&["general", "xwayland"]), Some(true));
+        assert!(shell.includes.docs[0].doc.text().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_key_already_in_its_chosen_file_stays() {
+        let (mut shell, dir) = shell_in("same", MAIN, "");
+        let (labels, sets) = (setting_labels(&shell), chain_path_sets(&shell));
+        let main = labels.last().unwrap().to_string();
+        let before = shell.doc.text();
+        move_entry(
+            &mut shell,
+            &labels,
+            &sets,
+            &entry("general.xwayland", "true", &main),
+        );
+        assert_eq!(shell.doc.text(), before);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
