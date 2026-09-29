@@ -78,6 +78,22 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
+      # Detached signatures with the canary key (a repo secret; Stable
+      # releases are signed offline with a different key). The signed
+      # comment binds each signature to this commit.
+      - name: Sign the tarballs
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_CANARY_KEY }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y minisign
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$MINISIGN_KEY" > "$key"
+          for tarball in umbriel-config-*-linux.tar.gz; do
+            minisign -S -s "$key" -m "$tarball" -t "umbriel-config canary $GITHUB_SHA"
+          done
+          ls umbriel-config-*-linux.tar.gz.minisig
       - name: Replace the canary release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -129,4 +145,5 @@ jobs:
           gh release delete "$TAG" --cleanup-tag --yes || true
           gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
             --title "$TAG ${GITHUB_SHA::7}" --notes-file notes.md \
-            umbriel-config-*-linux.tar.gz umbriel-config-*-linux.tar.gz.sha256
+            umbriel-config-*-linux.tar.gz umbriel-config-*-linux.tar.gz.sha256 \
+            umbriel-config-*-linux.tar.gz.minisig
