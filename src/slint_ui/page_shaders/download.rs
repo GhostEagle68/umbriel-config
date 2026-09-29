@@ -63,6 +63,45 @@ pub(in crate::slint_ui) fn maybe_check_shader_updates(app: &AppWindow, shell: &R
     });
 }
 
+/// Unpack a GitHub tarball into `staging`, dropping the archive's top
+/// folder (`<repo>-<branch>/`). Only files and folders are extracted, and
+/// any path that isn't plainly inside `staging` fails the download.
+fn unpack_archive(archive: &[u8], staging: &Path) -> Result<(), String> {
+    let mut tarball = tar::Archive::new(flate2::read::GzDecoder::new(archive));
+    for entry in tarball.entries().map_err(|err| err.to_string())? {
+        let mut entry = entry.map_err(|err| err.to_string())?;
+        let kind = entry.header().entry_type();
+        if !kind.is_file() && !kind.is_dir() {
+            continue;
+        }
+        let dest = {
+            let path = entry.path().map_err(|err| err.to_string())?;
+            let mut parts = path.components();
+            parts.next();
+            let relative = parts.as_path();
+            if relative.as_os_str().is_empty() {
+                continue;
+            }
+            if !relative
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+            {
+                return Err(format!("unsafe path in archive: {}", path.display()));
+            }
+            staging.join(relative)
+        };
+        if kind.is_dir() {
+            std::fs::create_dir_all(&dest).map_err(|err| err.to_string())?;
+        } else {
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+            entry.unpack(&dest).map_err(|err| err.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 /// Download the community shader collection as a tarball over HTTPS —
 /// no git required — and unpack it into `<config dir>/shaders/community`.
 /// The directory is app-managed: a re-download replaces it wholesale
@@ -98,44 +137,9 @@ pub(super) fn download_community_shaders(target: &Path) -> Result<String, String
     std::fs::create_dir_all(&staging)
         .map_err(|err| format!("Could not create {}: {err}", staging.display()))?;
 
-    // Beside the staging folder in the user's own config dir, not a
-    // guessable shared /tmp name, and created fresh (never through a
-    // pre-existing file or symlink).
-    let archive_path = target.with_file_name(".community-download.tar.gz");
-    let _ = std::fs::remove_file(&archive_path);
-    let stored = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&archive_path)
-        .and_then(|mut file| std::io::Write::write_all(&mut file, &archive));
-    if let Err(err) = stored {
-        let _ = std::fs::remove_file(&archive_path);
+    if let Err(err) = unpack_archive(&archive, &staging) {
         let _ = std::fs::remove_dir_all(&staging);
-        return Err(format!("Could not store the download: {err}"));
-    }
-    let extracted = std::process::Command::new("tar")
-        .args([
-            "-xzf",
-            &archive_path.to_string_lossy(),
-            "-C",
-            &staging.to_string_lossy(),
-            "--strip-components=1",
-        ])
-        .output();
-    let _ = std::fs::remove_file(&archive_path);
-    match extracted {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(format!(
-                "Extraction failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        Err(_) => {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err("tar is not installed — cannot unpack the download.".to_owned());
-        }
+        return Err(format!("Extraction failed: {err}"));
     }
 
     // Everything landed: swap the old collection for the fresh one,
@@ -217,5 +221,67 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                 });
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn archive(files: &[(&str, &str)]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, body) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, path, body.as_bytes())
+                .unwrap();
+        }
+        let tar = builder.into_inner().unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut gz, &tar).unwrap();
+        gz.finish().unwrap()
+    }
+
+    #[test]
+    fn unpack_drops_the_top_folder() {
+        let staging = std::env::temp_dir().join(format!("umbriel-unpack-{}", std::process::id()));
+        std::fs::remove_dir_all(&staging).ok();
+        std::fs::create_dir_all(&staging).unwrap();
+        let bytes = archive(&[("repo-main/animation/glow/shader.glsl", "vec4 x;")]);
+        unpack_archive(&bytes, &staging).unwrap();
+        let text = std::fs::read_to_string(staging.join("animation/glow/shader.glsl")).unwrap();
+        assert_eq!(text, "vec4 x;");
+        std::fs::remove_dir_all(&staging).ok();
+    }
+
+    #[test]
+    fn unpack_rejects_paths_that_climb_out() {
+        let staging = std::env::temp_dir().join(format!("umbriel-climb-{}", std::process::id()));
+        std::fs::remove_dir_all(&staging).ok();
+        std::fs::create_dir_all(&staging).unwrap();
+        let mut bytes = Vec::new();
+        {
+            // `append_data` refuses `..`, so write the raw name into the header.
+            let mut builder = tar::Builder::new(Vec::new());
+            let mut header = tar::Header::new_gnu();
+            header.set_size(1);
+            header.set_mode(0o644);
+            let name = b"repo-main/../evil";
+            header.as_old_mut().name[..name.len()].copy_from_slice(name);
+            header.set_cksum();
+            builder.append(&header, &b"x"[..]).unwrap();
+            let tar = builder.into_inner().unwrap();
+            let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            std::io::Write::write_all(&mut gz, &tar).unwrap();
+            bytes.extend(gz.finish().unwrap());
+        }
+        let err = unpack_archive(&bytes, &staging).unwrap_err();
+        assert!(err.contains("unsafe path"), "{err}");
+        assert!(!staging.join("evil").exists());
+        assert!(!staging.parent().unwrap().join("evil").exists());
+        std::fs::remove_dir_all(&staging).ok();
     }
 }
