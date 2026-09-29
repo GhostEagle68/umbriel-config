@@ -17,6 +17,16 @@ const CANARY_URL: &str =
     "https://api.github.com/repos/GhostEagle68/umbriel-config/releases/tags/canary";
 const USER_AGENT: &str = "umbriel-config";
 
+// Public halves of the minisign keys that sign releases. Stable releases
+// are signed offline by the owner: `stable`, with `stable-backup` held
+// back so a lost key doesn't strand installed copies. Canary builds are
+// signed by CI with its own key, which the Stable channel never accepts.
+const STABLE_KEYS: [&str; 2] = [
+    "RWRzWiLAE3f9/ya8WVazdB8ifmVjVxcoCRyjNPILEAJObVuePRfDJZlo",
+    "RWRwaqHb1jOXEO7kIKp/+33t/iZg7dIUfFTCCVEwr41H7e0C8MXHNysJ",
+];
+const CANARY_KEYS: [&str; 1] = ["RWTZCOZ2M15yAECyWl1YiMbKclqPFU6xu+/m56CpLwSHilFAJvb9mi/u"];
+
 /// The commit CI built this binary from; only canary builds carry it.
 pub const BUILD_SHA: Option<&str> = option_env!("UMBRIEL_CONFIG_BUILD_SHA");
 
@@ -243,8 +253,8 @@ pub fn update_hint(kind: InstallKind, channel: Channel, version: &str) -> String
 }
 
 /// Download `tag`'s tarball (`v0.3.0`, `canary`) for this architecture,
-/// check it against the published sha256, and replace the running
-/// binary. Renaming over a running executable is safe on Linux: the old
+/// check it against the published sha256 and its minisign signature, and
+/// replace the running binary. Renaming over a running executable is safe on Linux: the old
 /// inode stays until exit.
 pub fn install(tag: &str) -> Result<(), String> {
     let asset = format!(
@@ -259,6 +269,10 @@ pub fn install(tag: &str) -> Result<(), String> {
     if !actual.eq_ignore_ascii_case(published) {
         return Err("checksum mismatch — nothing was installed".to_owned());
     }
+    // Nothing is unpacked, let alone run, before the signature holds.
+    let signature = get_bytes(&format!("{asset}.minisig"))
+        .map_err(|_| "this release has no signature yet — nothing was installed".to_owned())?;
+    check_release(tag, &tarball, &String::from_utf8_lossy(&signature))?;
     let exe = std::env::current_exe().map_err(|err| err.to_string())?;
     let staged = exe.with_file_name(".umbriel-config.new");
     unpack_binary(&tarball, &staged).inspect_err(|_| {
@@ -275,6 +289,43 @@ pub fn install(tag: &str) -> Result<(), String> {
         let _ = std::fs::remove_file(&staged);
         format!("could not replace {}: {err}", exe.display())
     })
+}
+
+/// Whether `signature` is a valid signature over `tarball` from one of the
+/// channel's keys, made for this very release: the signed comment names
+/// the version (Stable), so an old signed tarball can't stand in for a new
+/// one. Canary's comment only has to say it is a canary build.
+fn check_release(tag: &str, tarball: &[u8], signature: &str) -> Result<(), String> {
+    let comment = if tag == "canary" {
+        verify_signed(&CANARY_KEYS, tarball, signature)?
+    } else {
+        verify_signed(&STABLE_KEYS, tarball, signature)?
+    };
+    let matches = match tag {
+        "canary" => comment.starts_with("umbriel-config canary "),
+        _ => comment == format!("umbriel-config {tag}"),
+    };
+    if matches {
+        Ok(())
+    } else {
+        Err("the signature is for a different release — nothing was installed".to_owned())
+    }
+}
+
+/// Verify `signature` over `bytes` against any of `keys` (base64 public
+/// keys); returns the signed comment.
+fn verify_signed(keys: &[&str], bytes: &[u8], signature: &str) -> Result<String, String> {
+    let signature = minisign_verify::Signature::decode(signature)
+        .map_err(|_| "unreadable signature — nothing was installed".to_owned())?;
+    let signed_by_a_key = keys.iter().any(|key| {
+        minisign_verify::PublicKey::from_base64(key)
+            .is_ok_and(|key| key.verify(bytes, &signature, false).is_ok())
+    });
+    if signed_by_a_key {
+        Ok(signature.trusted_comment().to_owned())
+    } else {
+        Err("signature check failed — nothing was installed".to_owned())
+    }
 }
 
 fn previous_path(exe: &Path) -> PathBuf {
@@ -448,6 +499,52 @@ pub fn mark_checked(env: &discovery::Env) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A throwaway key, never a release key, signed `FIXTURE_PAYLOAD` with
+    // the signed comment "umbriel-config v9.9.9".
+    const FIXTURE_KEY: &str = "RWRVikrDLLO6GrKhYLxL319tswGBY0kY7VppfBXAqHlYpjaothfokMQ2";
+    const FIXTURE_PAYLOAD: &[u8] = b"release bytes";
+    const FIXTURE_SIGNATURE: &str = "untrusted comment: signature from minisign secret key
+RURVikrDLLO6Gvrm1qFsxQXgUwWgKFc56swIKpaBgNP4EdYNpbF1QqpO7U0YyX+edaLknBV6im+qAeyz9uAJ6yuUa5shZazB4Qw=
+trusted comment: umbriel-config v9.9.9
+jzVnvcj6mdV5+u4Hk2T7gsuigPV0YYqqHWCkT/fU5PutnJsrJei1dnecW2hBpr0+UnGPciYnsxdramZp85p+DA==
+";
+
+    #[test]
+    fn a_valid_signature_verifies_and_returns_its_signed_comment() {
+        let comment = verify_signed(&[FIXTURE_KEY], FIXTURE_PAYLOAD, FIXTURE_SIGNATURE).unwrap();
+        assert_eq!(comment, "umbriel-config v9.9.9");
+    }
+
+    #[test]
+    fn tampered_bytes_an_unlisted_key_or_a_broken_signature_fail() {
+        assert!(verify_signed(&[FIXTURE_KEY], b"release bytez", FIXTURE_SIGNATURE).is_err());
+        assert!(verify_signed(&STABLE_KEYS, FIXTURE_PAYLOAD, FIXTURE_SIGNATURE).is_err());
+        assert!(verify_signed(&[FIXTURE_KEY], FIXTURE_PAYLOAD, "not a signature").is_err());
+        let retitled = FIXTURE_SIGNATURE.replace("v9.9.9", "v9.9.10");
+        assert!(verify_signed(&[FIXTURE_KEY], FIXTURE_PAYLOAD, &retitled).is_err());
+    }
+
+    #[test]
+    fn the_embedded_release_keys_are_valid_public_keys() {
+        for key in STABLE_KEYS.iter().chain(&CANARY_KEYS) {
+            assert!(
+                minisign_verify::PublicKey::from_base64(key).is_ok(),
+                "{key}"
+            );
+        }
+        assert!(
+            STABLE_KEYS.iter().all(|key| !CANARY_KEYS.contains(key)),
+            "the channels must not share a key"
+        );
+    }
+
+    #[test]
+    fn a_release_signed_by_no_channel_key_is_refused() {
+        // The fixture key signs a matching comment, yet is on neither list.
+        assert!(check_release("v9.9.9", FIXTURE_PAYLOAD, FIXTURE_SIGNATURE).is_err());
+        assert!(check_release("canary", FIXTURE_PAYLOAD, FIXTURE_SIGNATURE).is_err());
+    }
 
     #[test]
     fn sha256_hex_matches_the_published_form() {
