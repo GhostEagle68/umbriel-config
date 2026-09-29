@@ -141,19 +141,24 @@ pub(super) fn download_community_shaders(target: &Path) -> Result<String, String
     // Everything landed: swap the old collection for the fresh one,
     // keeping the preset files assignments rely on.
     shaders::carry_preset_files(target, &staging);
-    if target.exists()
-        && let Err(err) = std::fs::remove_dir_all(target)
-    {
+    let old = target.with_file_name(".community-old");
+    let _ = std::fs::remove_dir_all(&old);
+    let had_old = target.exists();
+    if had_old && let Err(err) = std::fs::rename(target, &old) {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(format!("Could not replace {}: {err}", target.display()));
     }
     if let Err(err) = std::fs::rename(&staging, target) {
+        if had_old {
+            let _ = std::fs::rename(&old, target);
+        }
         let _ = std::fs::remove_dir_all(&staging);
         return Err(format!(
             "Could not install into {}: {err}",
             target.display()
         ));
     }
+    let _ = std::fs::remove_dir_all(&old);
     if let Some(sha) = upstream_sha {
         let _ = std::fs::write(target.join(SHADERS_UPSTREAM_MARKER), format!("{sha}\n"));
     }
