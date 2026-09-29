@@ -5,6 +5,11 @@ umbriel-config — install
   3. Start "Umbriel Config" from your application menu, or run:
      umbriel-config
 
+Before running it, you can check the download itself: the release page
+has a .minisig signature beside the tarball, and the README explains how
+to verify it and lists the public keys. (The one-line installer and the
+in-app updater do this for you.)
+
 install.sh copies the app into ~/.local with no root, nothing outside your
 home directory. For a system-wide install instead:
 

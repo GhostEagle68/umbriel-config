@@ -270,8 +270,9 @@ pub fn install(tag: &str) -> Result<(), String> {
         return Err("checksum mismatch — nothing was installed".to_owned());
     }
     // Nothing is unpacked, let alone run, before the signature holds.
-    let signature = get_bytes(&format!("{asset}.minisig"))
-        .map_err(|_| "this release has no signature yet — nothing was installed".to_owned())?;
+    let signature = get_bytes(&format!("{asset}.minisig")).map_err(|err| {
+        format!("could not fetch the release signature ({err}) — nothing was installed")
+    })?;
     check_release(tag, &tarball, &String::from_utf8_lossy(&signature))?;
     let exe = std::env::current_exe().map_err(|err| err.to_string())?;
     let staged = exe.with_file_name(".umbriel-config.new");
@@ -296,11 +297,21 @@ pub fn install(tag: &str) -> Result<(), String> {
 /// the version (Stable), so an old signed tarball can't stand in for a new
 /// one. Canary's comment only has to say it is a canary build.
 fn check_release(tag: &str, tarball: &[u8], signature: &str) -> Result<(), String> {
-    let comment = if tag == "canary" {
-        verify_signed(&CANARY_KEYS, tarball, signature)?
+    let keys: &[&str] = if tag == "canary" {
+        &CANARY_KEYS
     } else {
-        verify_signed(&STABLE_KEYS, tarball, signature)?
+        &STABLE_KEYS
     };
+    check_signed_for(keys, tag, tarball, signature)
+}
+
+fn check_signed_for(
+    keys: &[&str],
+    tag: &str,
+    tarball: &[u8],
+    signature: &str,
+) -> Result<(), String> {
+    let comment = verify_signed(keys, tarball, signature)?;
     let matches = match tag {
         "canary" => comment.starts_with("umbriel-config canary "),
         _ => comment == format!("umbriel-config {tag}"),
@@ -537,6 +548,29 @@ jzVnvcj6mdV5+u4Hk2T7gsuigPV0YYqqHWCkT/fU5PutnJsrJei1dnecW2hBpr0+UnGPciYnsxdramZp
             STABLE_KEYS.iter().all(|key| !CANARY_KEYS.contains(key)),
             "the channels must not share a key"
         );
+    }
+
+    const FIXTURE_CANARY_SIGNATURE: &str = "untrusted comment: signature from minisign secret key
+RURVikrDLLO6GthNtQkEGIi3oZxV7romyNf1lFZHgrMox7U6gFuOqqlukt1Rf2ke0Hxnc95J61ki+TZeWFHMTNluKKdzbhFE7wI=
+trusted comment: umbriel-config canary abc1234
+95nQlk4s5stI74L5Q2kjahklr8JmGuPj5XuKFKMdpUmcsXYCQUo24oQJWTv3QVOJoLzlr9hlVhQ4X4GlWeQODA==
+";
+
+    #[test]
+    fn a_signature_only_counts_for_the_release_it_names() {
+        let keys = [FIXTURE_KEY];
+        let check =
+            |tag: &str, signature: &str| check_signed_for(&keys, tag, FIXTURE_PAYLOAD, signature);
+        assert!(check("v9.9.9", FIXTURE_SIGNATURE).is_ok());
+        // An old signed tarball can't stand in for another version, not
+        // even one that merely starts the same way.
+        assert!(check("v9.9.10", FIXTURE_SIGNATURE).is_err());
+        assert!(check("v9.9", FIXTURE_SIGNATURE).is_err());
+        assert!(check("v9.9.9-beta.1", FIXTURE_SIGNATURE).is_err());
+        // Canary and Stable signatures don't cross over.
+        assert!(check("canary", FIXTURE_SIGNATURE).is_err());
+        assert!(check("canary", FIXTURE_CANARY_SIGNATURE).is_ok());
+        assert!(check("v9.9.9", FIXTURE_CANARY_SIGNATURE).is_err());
     }
 
     #[test]

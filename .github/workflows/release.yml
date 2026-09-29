@@ -157,9 +157,12 @@ jobs:
               "$GITHUB_REPOSITORY" "$PREV_TAG" "$GITHUB_REF_NAME" >> release_notes.md
           fi
 
+      # A draft: invisible to the API, get.sh and the app's update check
+      # until `just sign-release` signs the tarballs and publishes it.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          draft: true
           name: ${{ github.ref_name }} — ${{ steps.channel.outputs.channel }}
           prerelease: ${{ steps.channel.outputs.prerelease }}
           files: |

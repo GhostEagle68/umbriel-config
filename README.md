@@ -55,14 +55,17 @@ Prebuilt binaries are attached to every release, no compiler needed.
 curl -fsSL https://raw.githubusercontent.com/GhostEagle68/umbriel-config/dev/packaging/get.sh | sh
 ```
 
-That picks the right build for your machine, verifies its checksum, and
-installs into `~/.local`. Add `-s -- --canary` for the build of the
-latest change instead of the latest release, or `-s -- --version XXX`
-for an exact version (replace `XXX` with the version).
+That picks the right build for your machine, verifies its checksum and
+(if [minisign](https://github.com/jedisct1/minisign) is installed) its
+signature, and installs into `~/.local`. Add `-s -- --canary` for the
+build of the latest change instead of the latest release, or
+`-s -- --version XXX` for an exact version (replace `XXX` with the
+version). Releases from before signing existed need `--allow-unsigned`.
 
 Prefer to do it manually? Download the tarball for your machine from the
 [releases page](https://github.com/GhostEagle68/umbriel-config/releases)
-(`x86_64` for most PCs, `aarch64` for ARM), then:
+(`x86_64` for most PCs, `aarch64` for ARM), [verify it](#verifying-a-download),
+then:
 
 ```sh
 tar -xzf umbriel-config-x86_64-linux.tar.gz
@@ -74,7 +77,38 @@ Either way you get the binary in `~/.local/bin` plus a launcher entry and
 icon under `~/.local/share`, so most desktops list it in the app menu
 after the next login. Make sure `~/.local/bin` is on your `PATH`, then run
 `umbriel-config`. `PREFIX=/usr/local ./install.sh` installs system-wide
-instead, and a `.sha256` checksum sits beside every tarball.
+instead. A `.sha256` checksum and a `.minisig` signature sit beside
+every tarball.
+
+### Verifying a download
+
+The checksum only shows a download arrived intact. The signature shows
+the release was made by the owner of these keys. It needs
+[minisign](https://github.com/jedisct1/minisign) (`sudo pacman -S minisign`,
+`apt install minisign`, and so on). With the tarball and its `.minisig`
+in the same folder:
+
+```sh
+minisign -V -P RWRzWiLAE3f9/ya8WVazdB8ifmVjVxcoCRyjNPILEAJObVuePRfDJZlo \
+    -m umbriel-config-x86_64-linux.tar.gz
+```
+
+For a canary build, use the canary key instead. It must print
+`Signature and comment signature verified`, and the trusted comment must
+read `umbriel-config <the release tag>` (`umbriel-config canary <commit>`
+for canary). Anything else: don't install it, and please
+[open an issue](https://github.com/GhostEagle68/umbriel-config/issues).
+
+| Key | Signs | Public key |
+|---|---|---|
+| stable | Stable and pre-releases | `RWRzWiLAE3f9/ya8WVazdB8ifmVjVxcoCRyjNPILEAJObVuePRfDJZlo` |
+| stable (backup) | Same, only if the stable key is ever lost | `RWRwaqHb1jOXEO7kIKp/+33t/iZg7dIUfFTCCVEwr41H7e0C8MXHNysJ` |
+| canary | The rolling canary builds | `RWTZCOZ2M15yAECyWl1YiMbKclqPFU6xu+/m56CpLwSHilFAJvb9mi/u` |
+
+The in-app updater checks these same keys itself and refuses an update
+that isn't signed, so nothing needs installing for it. The keys are also
+in `src/update.rs` and `packaging/get.sh`; compare the three places if
+you want to be sure.
 
 ## Updating
 
