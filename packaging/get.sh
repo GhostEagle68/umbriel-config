@@ -1,6 +1,7 @@
 #!/bin/sh
 # Downloads the newest umbriel-config release, checks it against the
-# published sha256, and installs it into ~/.local.
+# published sha256 (and its minisign signature, when minisign is
+# installed), and installs it into ~/.local.
 #
 #   curl -fsSL https://raw.githubusercontent.com/GhostEagle68/umbriel-config/dev/packaging/get.sh | sh
 #
@@ -8,6 +9,7 @@
 #   --prerelease   take the newest pre-release instead of the newest stable
 #   --canary       take the untested build of the latest commit to dev
 #   --version X    install exactly that version, e.g. --version 0.3.0-beta.1
+#   --allow-unsigned  install a release that has no signature (older ones)
 #
 # PREFIX=/usr/local picks another install prefix, as in install.sh.
 set -eu
@@ -15,12 +17,20 @@ set -eu
 repo=GhostEagle68/umbriel-config
 channel=stable
 version=
+allow_unsigned=0
+
+# Public halves of the release-signing keys (the same ones the app checks
+# updates against). Stable and pre-releases are signed offline by the
+# owner; the rolling canary is signed by CI with its own key.
+stable_keys="RWRzWiLAE3f9/ya8WVazdB8ifmVjVxcoCRyjNPILEAJObVuePRfDJZlo RWRwaqHb1jOXEO7kIKp/+33t/iZg7dIUfFTCCVEwr41H7e0C8MXHNysJ"
+canary_keys="RWTZCOZ2M15yAECyWl1YiMbKclqPFU6xu+/m56CpLwSHilFAJvb9mi/u"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --prerelease) channel=prerelease ;;
         --canary) channel=canary ;;
         --version) shift; version="${1:-}" ;;
+        --allow-unsigned) allow_unsigned=1 ;;
         *) echo "error: unknown option '$1'" >&2; exit 1 ;;
     esac
     shift
@@ -74,10 +84,13 @@ trap 'rm -rf "$work"' EXIT INT TERM
 
 echo "Downloading umbriel-config $tag ($arch)…"
 curl -fsSL "$base/$asset" -o "$work/$asset" || {
-    # Every push to dev deletes the canary release and publishes a new
-    # one a few minutes later; there is none in between.
-    [ "$tag" = canary ] &&
+    if [ "$tag" = canary ]; then
+        # Every push to dev deletes the canary release and publishes a new
+        # one a few minutes later; there is none in between.
         echo "No canary build right now: a new one is being published. Try again in a few minutes." >&2
+    else
+        echo "error: could not download $asset for $tag" >&2
+    fi
     exit 1
 }
 curl -fsSL "$base/$asset.sha256" -o "$work/$asset.sha256"
@@ -87,6 +100,49 @@ curl -fsSL "$base/$asset.sha256" -o "$work/$asset.sha256"
     echo "error: checksum mismatch — nothing was installed" >&2
     exit 1
 }
+
+# The signature says who made the file; the sha256 only says it arrived
+# intact. Checked when minisign is installed. The signed comment names the
+# release, so an old signed tarball can't pass for a new one.
+verify_signature() {
+    if ! command -v minisign >/dev/null 2>&1; then
+        echo "note: minisign is not installed, so only the sha256 was checked."
+        echo "      Install it to verify the release signature too."
+        return 0
+    fi
+    if ! curl -fsSL "$base/$asset.minisig" -o "$work/$asset.minisig" 2>/dev/null; then
+        if [ "$allow_unsigned" = 1 ]; then
+            echo "warning: $tag has no signature; installing it unsigned (--allow-unsigned)."
+            return 0
+        fi
+        echo "error: $tag has no signature — nothing was installed." >&2
+        echo "       Older releases were not signed; --allow-unsigned installs one anyway." >&2
+        exit 1
+    fi
+    if [ "$tag" = canary ]; then
+        keys=$canary_keys
+    else
+        keys=$stable_keys
+    fi
+    for key in $keys; do
+        if out=$(minisign -V -P "$key" -x "$work/$asset.minisig" -m "$work/$asset" 2>&1); then
+            comment=$(printf '%s\n' "$out" | sed -n 's/^Trusted comment: //p')
+            if [ "$tag" = canary ]; then
+                case "$comment" in
+                    "umbriel-config canary "*) echo "Signature verified."; return 0 ;;
+                esac
+            elif [ "$comment" = "umbriel-config $tag" ]; then
+                echo "Signature verified."
+                return 0
+            fi
+            echo "error: the signature is for a different release — nothing was installed" >&2
+            exit 1
+        fi
+    done
+    echo "error: signature check failed — nothing was installed" >&2
+    exit 1
+}
+verify_signature
 
 tar -xzf "$work/$asset" -C "$work"
 
