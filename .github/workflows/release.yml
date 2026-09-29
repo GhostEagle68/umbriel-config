@@ -144,6 +144,10 @@ jobs:
             echo ""
             echo "Already have umbriel-config? It updates itself: **Settings → Updates**."
             echo ""
+            echo "Every tarball is signed (\`.minisig\` beside it). The installer and the"
+            echo "app's updater check the signature for you; to check a manual download,"
+            echo "see [Verifying a download](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/README.md#verifying-a-download)."
+            echo ""
             echo "## Changes"
             echo ""
           } > release_notes.md

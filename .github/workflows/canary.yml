@@ -141,6 +141,10 @@ jobs:
             echo '```'
             echo
             echo "Already have umbriel-config? Pick **Canary** in **Settings → Updates**."
+            echo
+            echo "Every tarball is signed (\`.minisig\` beside it, canary key). The installer"
+            echo "and the app's updater check it for you; to check a manual download, see"
+            echo "[Verifying a download](https://github.com/${GITHUB_REPOSITORY}/blob/dev/README.md#verifying-a-download)."
           } > notes.md
           gh release delete "$TAG" --cleanup-tag --yes || true
           gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
