@@ -163,14 +163,24 @@ impl ConfigDocument {
                 .unwrap_or("config"),
             std::process::id()
         ));
-        fs::write(&tmp, self.doc.to_string()).map_err(|source| ConfigError::Save {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        fs::rename(&tmp, path).map_err(|source| ConfigError::Save {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        // Synced before the rename so a crash can't leave an empty config;
+        // the old file's mode carries over (a 0600 config stays 0600).
+        let written = || -> std::io::Result<()> {
+            let mut file = fs::File::create(&tmp)?;
+            std::io::Write::write_all(&mut file, self.doc.to_string().as_bytes())?;
+            if let Ok(old) = fs::metadata(path) {
+                file.set_permissions(old.permissions())?;
+            }
+            file.sync_all()?;
+            fs::rename(&tmp, path)
+        }();
+        if let Err(source) = written {
+            let _ = fs::remove_file(&tmp);
+            return Err(ConfigError::Save {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
         self.original = self.doc.to_string();
         Ok(())
     }
@@ -1021,6 +1031,24 @@ curve = \"easeout\"
             .collect();
         assert!(leftovers.is_empty());
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn save_keeps_the_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("umbriel-mode-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        std::fs::write(&path, SAMPLE).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut doc = ConfigDocument::load(&path).unwrap();
+        doc.set_bool(&["general", "xwayland"], false);
+        doc.save(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
         std::fs::remove_dir_all(&root).ok();
     }
 
