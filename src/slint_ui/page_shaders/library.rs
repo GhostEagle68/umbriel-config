@@ -158,7 +158,7 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
     app.set_changed_count(changed_count(shell));
 }
 
-fn kind_index(kind: &str) -> i32 {
+pub(super) fn kind_index(kind: &str) -> i32 {
     shaders::KINDS
         .iter()
         .position(|known| *known == kind)

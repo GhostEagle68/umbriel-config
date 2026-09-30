@@ -20,6 +20,8 @@ pub const PREVIEW_HEIGHT: u32 = 216;
 /// point at the wrong lines.
 const PREAMBLE: &str = "\
 precision highp float;
+#define sin(x) sin(mod((x), 6.283185307179586))
+#define cos(x) cos(mod((x), 6.283185307179586))
 varying vec2 v_texcoord;
 uniform sampler2D umbriel_texture;
 uniform mat3 umbriel_sample_matrix;
@@ -126,7 +128,7 @@ impl Kind {
             ),
             Kind::Border => (
                 BORDER.to_owned(),
-                "\nvoid main() {\n  vec4 c = border(v_texcoord);\n  gl_FragColor = c * smoothstep(-0.5, 0.5, umbriel_border_distance(v_texcoord));\n}\n",
+                "\nvoid main() {\n  vec4 c = border(v_texcoord);\n  gl_FragColor = c * smoothstep(-0.5, 0.5, umbriel_border_distance(v_texcoord) * umbriel_scale);\n}\n",
             ),
             Kind::Window => (
                 MASK.to_owned(),
@@ -1177,6 +1179,53 @@ fn fill_rect(buf: &mut [u8], w: i32, h: i32, rect: Rect, rgba: [u8; 4]) {
 mod tests {
     use super::*;
 
+    /// The value of `static const char <name>[] = "..." "...";` in umbriel's
+    /// `effect_shader.c`, with comments dropped and escapes resolved.
+    fn c_string(source: &str, name: &str) -> String {
+        let start = source.find(&format!("char {name}[] =")).unwrap();
+        let body = &source[start..][..source[start..].find(";\n").unwrap()];
+        let mut out = String::new();
+        for line in body.lines() {
+            let Some(open) = line.find('"') else { continue };
+            let close = line.rfind('"').unwrap();
+            out.push_str(
+                &line[open + 1..close]
+                    .replace("\\n", "\n")
+                    .replace("\\\"", "\"")
+                    .replace("\\\\", "\\"),
+            );
+        }
+        out
+    }
+
+    /// Fails when umbriel changes its shader contract and the preview does not
+    /// follow. Skipped where the sibling checkout is absent (CI).
+    #[test]
+    fn preview_matches_umbriels_effect_shader() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let path = std::path::Path::new(&home)
+            .join("Projects/umbriel/umbrielfx/render/fx_renderer/effect_shader.c");
+        let Ok(c) = std::fs::read_to_string(path) else {
+            return;
+        };
+        assert_eq!(PREAMBLE, c_string(&c, "kPreamble"));
+        assert_eq!(ANIMATION, c_string(&c, "kAnimationSection"));
+        assert_eq!(BORDER, c_string(&c, "kBorderSection"));
+        assert_eq!(MASK, c_string(&c, "kMaskSection"));
+        assert_eq!(POINTER, c_string(&c, "kCursorSection"));
+        for (kind, suffix) in [
+            (Kind::Animation, "kAnimationSuffix"),
+            (Kind::Border, "kBorderSuffix"),
+            (Kind::Window, "kWindowSuffix"),
+            (Kind::Screen, "kScreenSuffix"),
+            (Kind::Cursor, "kCursorSuffix"),
+        ] {
+            assert_eq!(kind.parts().1, c_string(&c, suffix), "{suffix}");
+        }
+    }
+
     #[test]
     fn full_source_layers_the_umbriel_contract() {
         let source = full_source("vec4 animation(vec2 uv) { MARKER }");
@@ -1347,6 +1396,19 @@ mod tests {
             .expect("effect uniforms compile");
         let (_, _, pixels) = state.render(0.5, 0.5, 1.0).unwrap();
         assert!(pixels.iter().any(|&byte| byte != 0));
+    }
+
+    /// Every kind's starter shader compiles against that kind's contract.
+    #[test]
+    fn every_kinds_scaffold_compiles_in_the_preview() {
+        let Ok(mut state) = PreviewState::new(64, 36) else {
+            return;
+        };
+        for kind in umbriel_config::config::shaders::KINDS {
+            state
+                .compile(umbriel_config::config::shaders::scaffold(kind))
+                .unwrap_or_else(|err| panic!("{kind} scaffold: {err}"));
+        }
     }
 
     /// Full GL round-trip; skips silently where no EGL is available (CI,

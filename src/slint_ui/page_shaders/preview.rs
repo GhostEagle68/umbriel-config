@@ -6,8 +6,8 @@ use super::super::*;
 use super::library::*;
 
 /// Hand the editor's freshly loaded code to the preview, playing as the
-/// event the shader is assigned to (the first, when several), else
-/// Windows in.
+/// event the shader is assigned to (the first, when several), else the
+/// first event its kind runs as (Windows in, for an animation).
 pub(super) fn kick_shader_preview(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     let text = app.get_shader_editor_text().to_string();
     let event = {
@@ -21,6 +21,12 @@ pub(super) fn kick_shader_preview(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                     .map(|(event, _)| *event)
             })
             .and_then(|event| shaders::EVENTS.iter().position(|e| *e == event))
+            .or_else(|| {
+                let kind = shaders::kind_of(&text);
+                shaders::EVENTS
+                    .iter()
+                    .position(|event| shaders::slot_kind(event) == kind)
+            })
             .unwrap_or(0)
     };
     start_preview(app, shell, text, event);

@@ -44,13 +44,77 @@ pub fn slot_kind(slot: &str) -> &str {
     slot.strip_prefix("effects.").unwrap_or("animation")
 }
 
-/// A shader's kind, from the function it defines (`vec4 cursor(`),
-/// animation when none of the others.
-pub fn kind_of(code: &str) -> &'static str {
+/// The kind a shader's entry point (`vec4 cursor(`) names, if it defines
+/// one. Borders, windows, screens and cursors win over animation.
+pub fn entry_kind(code: &str) -> Option<&'static str> {
     KINDS[1..]
         .iter()
-        .find(|kind| code.contains(&format!("vec4 {kind}(")))
-        .unwrap_or(&KINDS[0])
+        .chain(&KINDS[..1])
+        .find(|kind| declares_entry(code, kind))
+        .copied()
+}
+
+/// A shader's kind, from the function it defines; animation when it
+/// defines none.
+pub fn kind_of(code: &str) -> &'static str {
+    entry_kind(code).unwrap_or(KINDS[0])
+}
+
+/// The do-nothing starting shader for `kind`, documenting its contract
+/// right in the code. Animation shaders normally start from the builder.
+pub fn scaffold(kind: &str) -> &'static str {
+    match kind {
+        "border" => {
+            "\
+// umbriel calls border() for every pixel of the focused window's ring.
+// uv runs (0,0) top-left to (1,1) bottom-right over the ring. Useful inputs:
+//   umbriel_sample(uv)           the native ring's pixels at uv
+//   umbriel_time                 seconds on the animation clock, times the preset's speed
+//   umbriel_border_distance(uv)  pixels to the window, negative inside it
+//   umbriel_palette_at(t)        accent colors, when the preset sets palette = true
+vec4 border(vec2 uv) {
+    return umbriel_sample(uv);
+}
+"
+        }
+        "window" => {
+            "\
+// umbriel calls window() for every pixel of each window it runs on.
+// uv runs (0,0) top-left to (1,1) bottom-right. Useful inputs:
+//   umbriel_sample(uv)  what is on screen at uv
+//   umbriel_size        window size in pixels
+//   umbriel_time        seconds on the animation clock
+vec4 window(vec2 uv) {
+    return umbriel_sample(uv);
+}
+"
+        }
+        "screen" => {
+            "\
+// umbriel calls screen() for every pixel of the output.
+// uv runs (0,0) top-left to (1,1) bottom-right. Useful inputs:
+//   umbriel_sample(uv)  what is on screen at uv
+//   umbriel_size        output size in pixels
+//   umbriel_time        seconds on the animation clock
+vec4 screen(vec2 uv) {
+    return umbriel_sample(uv);
+}
+"
+        }
+        "cursor" => {
+            "\
+// umbriel calls cursor() for every pixel around the pointer.
+// uv runs (0,0) top-left to (1,1) bottom-right. Useful inputs:
+//   umbriel_sample(uv)  what is on screen at uv
+//   umbriel_pointer     the pointer position in uv
+//   umbriel_time        seconds on the animation clock
+vec4 cursor(vec2 uv) {
+    return umbriel_sample(uv);
+}
+"
+        }
+        _ => builder::SCAFFOLD,
+    }
 }
 
 /// Umbriel's limits for a usable shader file (docs/user/effects.md).
@@ -248,6 +312,41 @@ pub fn ensure_preset_file(entry: &ShaderEntry) -> Result<(), String> {
     }
     std::fs::write(&entry.preset_file, preset_text(entry))
         .map_err(|err| format!("could not write {}: {err}", entry.preset_file.display()))
+}
+
+/// Make the preset that runs `shader` say what the shader's entry point
+/// says: an edit can turn a border shader into a window one, and umbriel
+/// builds the program from the preset's `kind`. Nothing to do without a
+/// preset file yet.
+pub fn sync_preset_kind(shader: &Path, kind: &str) -> Result<(), String> {
+    let preset_file = preset_file_for(shader);
+    let Ok(text) = std::fs::read_to_string(&preset_file) else {
+        return Ok(());
+    };
+    let Ok(mut doc) = text.parse::<toml_edit::DocumentMut>() else {
+        return Ok(());
+    };
+    let file_name = shader.file_name().and_then(|name| name.to_str());
+    let mut changed = false;
+    let presets = doc
+        .get_mut("effects")
+        .and_then(|effects| effects.get_mut("preset"))
+        .and_then(toml_edit::Item::as_table_mut);
+    for (_, item) in presets.into_iter().flat_map(|presets| presets.iter_mut()) {
+        let Some(preset) = item.as_table_mut() else {
+            continue;
+        };
+        let text_of = |key| preset.get(key).and_then(toml_edit::Item::as_str);
+        if text_of("shader") == file_name && text_of("kind") != Some(kind) {
+            preset["kind"] = toml_edit::value(kind);
+            changed = true;
+        }
+    }
+    if changed {
+        std::fs::write(&preset_file, doc.to_string())
+            .map_err(|err| format!("could not write {}: {err}", preset_file.display()))?;
+    }
+    Ok(())
 }
 
 /// Recursively collect `*.glsl` files, depth-limited, skipping hidden
@@ -580,9 +679,9 @@ pub fn sanitize_shader_name(name: &str) -> Result<String, String> {
 }
 
 /// Static checks on shader source, shown live while typing. umbriel
-/// refuses a file outright only for the structural rules; the missing
-/// `animation()` signature is a warning — umbriel falls back to the
-/// built-in animation and the author may simply be mid-typing.
+/// refuses a file outright only for the structural rules; a missing
+/// entry point is a warning — umbriel falls back to the built-in
+/// effect and the author may simply be mid-typing.
 pub fn lint_source(code: &str) -> Vec<String> {
     let mut problems = Vec::new();
     if code.contains('\0') {
@@ -597,28 +696,36 @@ pub fn lint_source(code: &str) -> Vec<String> {
     if !problems.is_empty() {
         return problems;
     }
-    if !declares_animation(code) {
-        problems
-            .push("missing \"vec4 animation(vec2 uv)\" — umbriel calls that function".to_owned());
+    if entry_kind(code).is_none() {
+        problems.push(
+            "missing an entry point — define \"vec4 animation(vec2 uv)\" (or border, window, \
+             screen, cursor); umbriel calls that function"
+                .to_owned(),
+        );
     }
     problems
 }
 
-/// Whether the code declares `vec4 animation(`, spaced any way GLSL
-/// allows (`vec4  animation (`, a line break between, ...).
-fn declares_animation(code: &str) -> bool {
+/// Whether the code declares `vec4 <name>(`, spaced any way GLSL allows
+/// (`vec4  border (`, a line break between, ...). A `//` comment earlier
+/// on the line hides it.
+fn declares_entry(code: &str, name: &str) -> bool {
     let ident = |ch: char| ch.is_ascii_alphanumeric() || ch == '_';
     code.match_indices("vec4").any(|(at, _)| {
         if code[..at].chars().next_back().is_some_and(ident) {
             return false;
         }
+        let line_start = code[..at].rfind('\n').map_or(0, |newline| newline + 1);
+        if code[line_start..at].contains("//") {
+            return false;
+        }
         let rest = &code[at + "vec4".len()..];
         let after_type = rest.trim_start();
         if after_type.len() == rest.len() {
-            return false; // "vec4animation" is one identifier
+            return false; // "vec4border" is one identifier
         }
         after_type
-            .strip_prefix("animation")
+            .strip_prefix(name)
             .is_some_and(|rest| rest.trim_start().starts_with('('))
     })
 }
@@ -769,6 +876,8 @@ pub fn carry_preset_files(old: &Path, new: &Path) {
         }
     }
 }
+
+pub mod api;
 
 pub mod builder;
 
@@ -985,6 +1094,55 @@ mod tests {
         ] {
             assert_eq!(lint_source(wrong).len(), 1, "{wrong:?}");
         }
+    }
+
+    #[test]
+    fn a_kind_change_updates_the_preset_and_keeps_the_rest() {
+        let base = std::env::temp_dir().join(format!("umbriel-presetkind-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let shader = base.join("glow.glsl");
+        // No preset file yet: nothing to do, nothing created.
+        write(&shader, GLSL);
+        sync_preset_kind(&shader, "border").unwrap();
+        assert!(!shader.with_extension("effect.toml").exists());
+        // A hand-tuned preset keeps its comment and parameters.
+        let preset_file = shader.with_extension("effect.toml");
+        let tuned = "# mine\n[effects.preset.glow]\nkind = \"animation\"\nshader = \"glow.glsl\"\npalette = true\n\n[effects.preset.other]\nkind = \"window\"\nshader = \"other.glsl\"\n";
+        write(&preset_file, tuned.as_bytes());
+        sync_preset_kind(&shader, "border").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&preset_file).unwrap(),
+            tuned.replacen("animation", "border", 1)
+        );
+        // Already right: the file isn't rewritten.
+        std::fs::remove_file(&preset_file).ok();
+        write(
+            &preset_file,
+            tuned.replacen("animation", "border", 1).as_bytes(),
+        );
+        let before = std::fs::metadata(&preset_file).unwrap().modified().unwrap();
+        sync_preset_kind(&shader, "border").unwrap();
+        assert_eq!(
+            std::fs::metadata(&preset_file).unwrap().modified().unwrap(),
+            before
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn every_kinds_entry_point_lints_clean_and_names_its_kind() {
+        for kind in KINDS {
+            let code = format!("vec4  {kind} (vec2 uv) {{ return umbriel_sample(uv); }}\n");
+            assert!(lint_source(&code).is_empty(), "{kind}");
+            assert_eq!(kind_of(&code), *kind);
+            let scaffold = scaffold(kind);
+            assert!(lint_source(scaffold).is_empty(), "{kind} scaffold");
+            assert_eq!(kind_of(scaffold), *kind, "{kind} scaffold");
+        }
+        // A commented-out signature is not an entry point.
+        let commented = "// vec4 window(vec2 uv)\nvec4 animation(vec2 uv) { return vec4(0.0); }\n";
+        assert_eq!(kind_of(commented), "animation");
+        assert_eq!(entry_kind("float x = 1.0;"), None);
     }
 
     #[test]

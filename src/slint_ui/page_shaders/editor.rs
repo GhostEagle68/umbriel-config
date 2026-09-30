@@ -20,6 +20,10 @@ pub(super) fn code_settled(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         format!("⚠ {}", problems.join("; "))
     };
     app.set_shader_editor_note(note.into());
+    // Mid-typing code with no entry point keeps the kind it had.
+    if let Some(kind) = shaders::entry_kind(&text) {
+        app.set_shader_editor_kind(kind_index(kind));
+    }
     sync_builder_from_code(app, shell, &text);
     shell
         .borrow_mut()
@@ -58,10 +62,38 @@ pub(super) fn open_shader_editor(
     app.set_shader_editor_used_by(used_by(&shell.borrow(), Path::new(path)).into());
     app.set_shader_editor_name(name.into());
     sync_builder_from_code(app, shell, &text);
+    app.set_shader_editor_kind(kind_index(shaders::kind_of(&text)));
     app.set_shader_editor_text(text.into());
     app.set_shader_editor_note(String::new().into());
     show_editor(app, shell);
     kick_shader_preview(app, shell);
+}
+
+/// Open the editor on a fresh, unsaved shader of `kind`: the builder's
+/// starter stack for animations, that kind's template otherwise.
+fn new_shader(app: &AppWindow, shell: &Rc<RefCell<Shell>>, kind: &str) {
+    shell.borrow_mut().shader_editing = None;
+    app.set_shader_editor_editing(false);
+    app.set_shader_editor_kind(kind_index(kind));
+    if kind == shaders::KINDS[0] {
+        shell.borrow_mut().builder_steps = shaders::builder::default_steps();
+        regen_builder(app, shell);
+    } else {
+        app.set_shader_editor_text(shaders::scaffold(kind).into());
+    }
+    app.set_shader_editor_note(String::new().into());
+    show_editor(app, shell);
+    kick_shader_preview(app, shell);
+}
+
+/// The [`shaders::EVENTS`] slots (with their index) that take shaders
+/// of `kind`.
+fn slots_of_kind(kind: &str) -> impl Iterator<Item = (usize, &'static str)> + '_ {
+    shaders::EVENTS
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(move |(_, event)| shaders::slot_kind(event) == kind)
 }
 
 /// Show the editor overlay over whatever code is loaded, remembering it
@@ -80,23 +112,22 @@ pub(super) fn show_editor(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     app.set_shader_editor_open(true);
 }
 
-/// The "Use for" checklist: every event, what it uses now, ticked when
-/// it already uses the shader being saved. A new or forked shader also
-/// has the previewed event ticked; editing never pre-ticks an event the
-/// shader doesn't already have, so a plain edit-and-save can't quietly
-/// take one over.
-pub(super) fn use_for_rows(shell: &Shell) -> Vec<ShaderUse> {
+/// The "Use for" checklist: every slot that takes a `kind` shader, what
+/// it uses now, ticked when it already uses the shader being saved. A
+/// new or forked shader also has the previewed event ticked; editing
+/// never pre-ticks an event the shader doesn't already have, so a plain
+/// edit-and-save can't quietly take one over.
+pub(super) fn use_for_rows(shell: &Shell, kind: &str) -> Vec<ShaderUse> {
     let this = shell.shader_editing.as_deref().map(shaders::file_key);
-    shaders::EVENTS
-        .iter()
-        .zip(resolved_assignments(shell))
-        .enumerate()
-        .map(|(index, (event, assigned))| {
-            let uses_this = match (&assigned, &this) {
+    let resolved = resolved_assignments(shell);
+    slots_of_kind(kind)
+        .map(|(index, event)| {
+            let assigned = &resolved[index];
+            let uses_this = match (assigned, &this) {
                 (Some(assigned), Some(this)) => assigned.key == *this,
                 _ => false,
             };
-            let current = match &assigned {
+            let current = match assigned {
                 None => String::new(),
                 Some(_) if uses_this => "uses this shader".to_owned(),
                 Some(assigned) => {
@@ -126,12 +157,13 @@ pub(super) fn apply_use_for(shell: &mut Shell, app: &AppWindow, path: &Path) -> 
         .iter()
         .map(|(event, _)| *event)
         .collect();
+    let kind = shaders::kind_of(&app.get_shader_editor_text());
     let mut changes = Vec::new();
-    for (index, event) in shaders::EVENTS.iter().enumerate() {
-        let Some(row) = rows.row_data(index) else {
+    for (row_index, (_, event)) in slots_of_kind(kind).enumerate() {
+        let Some(row) = rows.row_data(row_index) else {
             continue;
         };
-        let uses = using.contains(event);
+        let uses = using.contains(&event);
         if row.checked && !uses {
             match assign_event(shell, event, Some(path)) {
                 Ok(()) => changes.push(format!("now used for {}", slot_label(event))),
@@ -152,17 +184,32 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_editor_new(move || {
             let Some(app) = weak.upgrade() else { return };
-            {
-                let mut shell = shell.borrow_mut();
-                shell.shader_editing = None;
-                shell.builder_steps = shaders::builder::default_steps();
-            }
-            app.set_shader_editor_editing(false);
             app.set_shader_editor_name(String::new().into());
-            regen_builder(&app, &shell);
-            app.set_shader_editor_note(String::new().into());
-            show_editor(&app, &shell);
-            kick_shader_preview(&app, &shell);
+            new_shader(&app, &shell, shaders::KINDS[0]);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let shell = Rc::clone(shell);
+        // A new shader's kind picker: the kind's template replaces the
+        // code, so only while the code is still the untouched template.
+        app.on_shader_editor_kind_picked(move |index| {
+            let Some(app) = weak.upgrade() else { return };
+            let text = app.get_shader_editor_text();
+            let kind = usize::try_from(index)
+                .ok()
+                .and_then(|index| shaders::KINDS.get(index));
+            match kind {
+                Some(kind) if text.as_str() == shell.borrow().shader_editor_baseline => {
+                    new_shader(&app, &shell, kind);
+                }
+                _ => {
+                    app.set_shader_editor_kind(kind_index(shaders::kind_of(&text)));
+                    app.set_shader_editor_note(
+                        "The kind can only change before you edit the code.".into(),
+                    );
+                }
+            }
         });
     }
     {
@@ -205,7 +252,8 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         // Save's first step: which events should use this shader.
         app.on_shader_editor_save_request(move || {
             let Some(app) = weak.upgrade() else { return };
-            let rows = use_for_rows(&shell.borrow());
+            let kind = shaders::kind_of(&app.get_shader_editor_text());
+            let rows = use_for_rows(&shell.borrow(), kind);
             app.set_shader_use_for(Rc::new(VecModel::from(rows)).into());
             app.set_shader_use_open(true);
         });
@@ -237,6 +285,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                                 renamed = assigned;
                                 renamed_from = Some(path.clone());
                             }
+                            shaders::sync_preset_kind(&new, shaders::kind_of(&text))?;
                             Ok(new)
                         }),
                         None => Err("could not determine the config directory.".to_owned()),
@@ -284,11 +333,23 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                                 toast(&app, ToastKind::Error, err, "");
                             }
                         }
-                        let changes = if apply_use {
-                            apply_use_for(&mut shell, &app, &path)
-                        } else {
-                            Vec::new()
-                        };
+                        // An edit that changed the shader's kind strands the
+                        // slots of the old kind: umbriel drops a preset of
+                        // the wrong kind, so they stop using it.
+                        let kind = shaders::kind_of(&text);
+                        let mut changes = Vec::new();
+                        for (event, _) in assignments_of(&shell, &path) {
+                            if shaders::slot_kind(event) != kind {
+                                let _ = assign_event(&mut shell, event, None);
+                                changes.push(format!(
+                                    "no longer used for {} (now a {kind} shader)",
+                                    slot_label(event)
+                                ));
+                            }
+                        }
+                        if apply_use {
+                            changes.extend(apply_use_for(&mut shell, &app, &path));
+                        }
                         scan_shaders(&mut shell);
                         changes
                     };

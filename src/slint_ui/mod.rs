@@ -388,6 +388,11 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
             .map(|def| slint::SharedString::from(def.label))
             .collect();
         app.set_shader_step_kinds(Rc::new(VecModel::from(kinds)).into());
+        let shader_kinds: Vec<slint::SharedString> = shaders::KINDS
+            .iter()
+            .map(|kind| slint::SharedString::from(*kind))
+            .collect();
+        app.set_shader_kinds(Rc::new(VecModel::from(shader_kinds)).into());
         // The events the preview can play as, in umbriel's order.
         let events: Vec<slint::SharedString> = shaders::EVENTS
             .iter()

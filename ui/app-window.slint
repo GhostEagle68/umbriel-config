@@ -240,6 +240,11 @@ export component AppWindow inherits Window {
     // the builder is read-only until reset.
     in property <bool> shader-builder-locked;
     in property <[string]> shader-step-kinds;
+    // The kinds a shader can be, and the one the code's entry point
+    // names (an index into them); picking one starts a fresh shader of it.
+    in property <[string]> shader-kinds;
+    in-out property <int> shader-editor-kind;
+    callback shader-editor-kind-picked(int);
     callback shader-editor-new();
     callback shader-editor-edit(string);
     callback shader-editor-fork(string, string);
@@ -1421,6 +1426,22 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                     }
 
+                    Text {
+                        text: "Kind";
+                        color: Theme.text-2;
+                        vertical-alignment: center;
+                    }
+
+                    ComboBox {
+                        min-width: 110px;
+                        model: root.shader-kinds;
+                        // Only a new shader chooses its kind; an existing one
+                        // is whatever its entry point says.
+                        enabled: !root.shader-editor-editing;
+                        current-index <=> root.shader-editor-kind;
+                        selected => { root.shader-editor-kind-picked(self.current-index); }
+                    }
+
                     Rectangle {
                         horizontal-stretch: 1;
                     }
@@ -1434,7 +1455,8 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                     spacing: Theme.space-m;
 
-                    ShaderBuilderPanel {
+                    // The builder only writes animation shaders.
+                    if root.shader-editor-kind == 0: ShaderBuilderPanel {
                         min-width: 280px;
                         max-width: 460px;
                         horizontal-stretch: 2;
