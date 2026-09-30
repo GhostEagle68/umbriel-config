@@ -229,8 +229,19 @@ fn read_preset(preset_file: &Path, kind: &str) -> Option<(String, String)> {
         })
 }
 
-/// The presets of `kind` (`border`, `window`, …) a selector can name, in
-/// order: those the loaded files define, then umbriel's bundled ones
+/// The kind of the pool `name` (`[effects.pool.<name>]`) the loaded
+/// files define, if any. A pool picks one of its member presets per
+/// window or output; selectors take one wherever they take a preset,
+/// except for animations.
+pub fn pool_kind(docs: &[&ConfigDocument], name: &str) -> Option<String> {
+    docs.iter()
+        .rev()
+        .find_map(|doc| doc.get_string(&["effects", "pool", name, "kind"]))
+}
+
+/// The presets and pools of `kind` (`border`, `window`, …) a selector
+/// can name, in order: those the loaded files define (each file's
+/// presets, then its pools), then umbriel's bundled presets
 /// (`<data dir>/umbriel/effects/<kind>/*/effect.toml`) with the file to
 /// include for each.
 pub fn presets(
@@ -240,10 +251,14 @@ pub fn presets(
 ) -> Vec<(String, Option<PathBuf>)> {
     let mut found: Vec<(String, Option<PathBuf>)> = Vec::new();
     for doc in docs {
-        for name in doc.table_names(&["effects", "preset"]) {
-            let defined = doc.get_string(&["effects", "preset", &name, "kind"]);
-            if defined.as_deref() == Some(kind) && !found.iter().any(|(known, _)| *known == name) {
-                found.push((name, None));
+        for table in ["preset", "pool"] {
+            for name in doc.table_names(&["effects", table]) {
+                let defined = doc.get_string(&["effects", table, &name, "kind"]);
+                if defined.as_deref() == Some(kind)
+                    && !found.iter().any(|(known, _)| *known == name)
+                {
+                    found.push((name, None));
+                }
             }
         }
     }
@@ -1474,6 +1489,28 @@ mod tests {
             ]
         );
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn pools_are_offered_beside_presets_of_their_kind() {
+        let doc = ConfigDocument::from_str(
+            "[effects.preset.pulse]\nkind = \"border\"\nshader = \"p.glsl\"\n\n\
+             [effects.pool.borders]\nkind = \"border\"\nchoose = [\"pulse\"]\n\n\
+             [effects.pool.windows]\nkind = \"window\"\nchoose = []\n",
+        )
+        .unwrap();
+        let names = |kind| -> Vec<String> {
+            presets(&[&doc], &[], kind)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect()
+        };
+        assert_eq!(names("border"), ["pulse", "borders"]);
+        assert_eq!(names("window"), ["windows"]);
+        // Animations take presets only.
+        assert!(names("animation").is_empty());
+        assert_eq!(pool_kind(&[&doc], "borders").as_deref(), Some("border"));
+        assert_eq!(pool_kind(&[&doc], "pulse"), None);
     }
 
     #[test]

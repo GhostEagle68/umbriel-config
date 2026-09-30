@@ -32,6 +32,7 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
     // cards and rows below only compare these (no per-pair filesystem
     // lookups).
     let assigned = resolved_assignments(shell);
+    let docs = chain_docs(shell);
     let entry_keys: Vec<PathBuf> = shell
         .shaders
         .iter()
@@ -111,18 +112,31 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
                     .iter()
                     .position(|entry_key| *entry_key == current.key)
             });
-            let warning = match &current {
-                Some(current) => {
-                    shaders::assignment_problem(current.path.as_deref()).unwrap_or_default()
+            // A value no shader runs may name a pool, which umbriel
+            // resolves to one of its member presets.
+            let pool = current
+                .as_ref()
+                .filter(|current| current.path.is_none())
+                .and_then(|current| Some((current, shaders::pool_kind(&docs, &current.value)?)));
+            let warning = match (&current, &pool) {
+                (Some(_), Some((pool, kind))) if kind != shaders::slot_kind(event) => {
+                    format!("{} is a pool of {kind} effects", pool.value)
                 }
-                None => "",
+                (Some(_), Some(_)) | (None, _) => String::new(),
+                (Some(current), None) => shaders::assignment_problem(current.path.as_deref())
+                    .unwrap_or_default()
+                    .to_owned(),
             };
+            let is_pool = pool.is_some();
             let current = current.map(|current| current.value);
             // 0 is no shader, 1.. the library; a value outside the
             // library sits just past it, so picking "No shader" is a
             // real change.
             let (current_index, current_name) = match (index, &current) {
                 (Some(position), _) => (position + 1, shell.shaders[position].name.clone()),
+                (None, Some(value)) if is_pool => {
+                    (shell.shaders.len() + 1, format!("{value} (pool)"))
+                }
                 (None, Some(value)) => (shell.shaders.len() + 1, value.clone()),
                 (None, None) => (0, "No shader".to_owned()),
             };
