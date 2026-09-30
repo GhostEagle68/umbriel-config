@@ -1,0 +1,268 @@
+// The shader editor page: create, edit, fork and delete your own shaders.
+// It takes the place of the Shaders library while open (the sidebar
+// stays). Saving writes the .glsl file; umbriel live-reloads it, which is
+// the preview loop. Assign the shader to an event to see it run.
+
+import { ComboBox, LineEdit } from "std-widgets.slint";
+import { ActionButton } from "../widgets.slint";
+import { CodeEdit, ShaderStep } from "../types.slint";
+import { Theme } from "../theme.slint";
+import {
+    ShaderBuilderPanel,
+    ShaderCodeEditor,
+    ShaderPreviewRow,
+} from "shaders.slint";
+
+export component ShaderEditorPage inherits Rectangle {
+    in property <bool> editing;
+    // Events assigned the shader being edited, for the delete confirm.
+    in property <string> used-by;
+    in-out property <string> name;
+    in-out property <string> text;
+    in property <string> note;
+    // The kinds a shader can be, and the one the code's entry point
+    // names (an index into them).
+    in property <[string]> kinds;
+    in-out property <int> kind;
+    in property <[ShaderStep]> steps;
+    in property <[string]> step-kinds;
+    // The code isn't builder output, so the builder is read-only until reset.
+    in property <bool> builder-locked;
+    in property <image> preview-image;
+    in-out property <float> preview-progress;
+    in property <float> preview-direction;
+    in property <bool> preview-ready;
+    in property <string> preview-note;
+    in property <[string]> preview-events;
+    in-out property <int> preview-event;
+    in property <int> preview-length-ms;
+    in-out property <bool> confirm-close;
+    callback kind-picked(int);
+    callback builder-reset();
+    callback step-add(string);
+    callback step-remove(int);
+    callback step-move(int, int);
+    callback step-param(int, int, float);
+    callback step-param-live(int, int, float);
+    callback preview-event-picked(int);
+    callback preview-scrub(float);
+    callback preview-direction-toggled();
+    // (text, anchor, cursor, kind); see ShaderCodeEditor.edited.
+    callback text-changed(string, int, int, int);
+    callback code-history(string) -> CodeEdit;
+    callback code-key(string, int, int, string) -> CodeEdit;
+    // Back: with unsaved code Rust raises confirm-close instead of leaving.
+    callback close();
+    callback discard();
+    callback delete();
+    callback save-request();
+
+    VerticalLayout {
+        padding-left: Theme.space-xl;
+        padding-right: Theme.space-xl;
+        padding-top: Theme.space-l;
+        padding-bottom: Theme.space-l;
+        spacing: Theme.space-m;
+
+        HorizontalLayout {
+            spacing: Theme.space-m;
+
+            ActionButton {
+                text: "← Shaders";
+                clicked => { root.close(); }
+            }
+
+            Text {
+                text: root.editing ? "Edit shader" : "New shader";
+                color: Theme.text-1;
+                font-size: Theme.font-large;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-m;
+            alignment: start;
+
+            Text {
+                text: "Name";
+                color: Theme.text-2;
+                vertical-alignment: center;
+            }
+
+            LineEdit {
+                min-width: 130px;
+                max-width: 260px;
+                horizontal-stretch: 1;
+                text <=> root.name;
+                placeholder-text: "my-effect";
+            }
+
+            Text {
+                text: ".glsl";
+                color: Theme.text-2;
+                font-family: Theme.font-mono;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: "Kind";
+                color: Theme.text-2;
+                vertical-alignment: center;
+            }
+
+            ComboBox {
+                min-width: 110px;
+                model: root.kinds;
+                // Only a new shader chooses its kind; an existing one
+                // is whatever its entry point says.
+                enabled: !root.editing;
+                current-index <=> root.kind;
+                selected => { root.kind-picked(self.current-index); }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+
+        // Fluid middle: builder beside preview + code with stretch
+        // ratios, so every pane scales with the window instead of
+        // competing over fixed pixel sizes. Narrow windows shrink the
+        // builder to its minimum; wide ones give every pane room.
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: Theme.space-m;
+
+            // The builder only writes animation shaders.
+            if root.kind == 0: ShaderBuilderPanel {
+                min-width: 280px;
+                max-width: 460px;
+                horizontal-stretch: 2;
+                steps: root.steps;
+                kinds: root.step-kinds;
+                locked: root.builder-locked;
+                reset => { root.builder-reset(); }
+                add(k) => { root.step-add(k); }
+                step-remove(i) => { root.step-remove(i); }
+                step-move(i, d) => { root.step-move(i, d); }
+                step-param(i, s, v) => { root.step-param(i, s, v); }
+                step-param-live(i, s, v) => { root.step-param-live(i, s, v); }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 3;
+                spacing: Theme.space-m;
+
+                if root.preview-ready: ShaderPreviewRow {
+                    source: root.preview-image;
+                    note: root.preview-note;
+                    direction-in: root.preview-direction > 0;
+                    progress <=> root.preview-progress;
+                    events: root.preview-events;
+                    event-index <=> root.preview-event;
+                    configured-ms: root.preview-length-ms;
+                    event-picked(i) => { root.preview-event-picked(i); }
+                    scrub(v) => { root.preview-scrub(v); }
+                    toggle-direction() => { root.preview-direction-toggled(); }
+                }
+
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    spacing: Theme.space-xs;
+
+                    // The editor's keys, where people look for them.
+                    HorizontalLayout {
+                        spacing: Theme.space-m;
+
+                        Text {
+                            text: "Code";
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            font-weight: 700;
+                        }
+
+                        Text {
+                            text: "Tab indents · Shift+Tab outdents · Enter keeps the indent · right-click to cut, copy or paste";
+                            color: Theme.text-2;
+                            font-size: Theme.font-small;
+                            horizontal-alignment: right;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+
+                    ShaderCodeEditor {
+                        vertical-stretch: 1;
+                        min-height: 200px;
+                        text <=> root.text;
+                        edited(text, anchor, cursor, kind) => {
+                            root.text-changed(text, anchor, cursor, kind);
+                        }
+                        history(kind) => { root.code-history(kind) }
+                        code-key(text, anchor, cursor, kind) => {
+                            root.code-key(text, anchor, cursor, kind)
+                        }
+                    }
+                }
+            }
+        }
+
+        if !root.preview-ready && root.preview-note != "": Text {
+            text: root.preview-note;
+            color: Theme.warning;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+        }
+
+        if root.note != "": Text {
+            text: root.note;
+            color: Theme.warning;
+            font-size: Theme.font-small;
+            wrap: TextWrap.word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: Theme.space-s;
+
+            if root.confirm-close: Text {
+                text: "Discard unsaved changes?";
+                color: Theme.warning;
+                vertical-alignment: center;
+            }
+
+            if root.confirm-close: ActionButton {
+                text: "Keep editing";
+                clicked => { root.confirm-close = false; }
+            }
+
+            if root.confirm-close: ActionButton {
+                text: "Discard";
+                clicked => {
+                    root.confirm-close = false;
+                    root.discard();
+                }
+            }
+
+            if !root.confirm-close && root.editing: ActionButton {
+                property <bool> confirming: false;
+                text: !self.confirming ? "Delete" : root.used-by == "" ? "Really delete?" : "Delete? Used by " + root.used-by;
+                clicked => {
+                    if (self.confirming) {
+                        root.delete();
+                    } else {
+                        self.confirming = true;
+                    }
+                }
+            }
+
+            if !root.confirm-close: ActionButton {
+                text: "Save";
+                primary: true;
+                clicked => { root.save-request(); }
+            }
+        }
+    }
+}

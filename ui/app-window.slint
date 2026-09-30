@@ -60,13 +60,8 @@ import { BackupsPage } from "pages/backups.slint";
 import { KeybindsPage, KeybindsState } from "pages/keybinds.slint";
 import { OutputsPage } from "pages/outputs.slint";
 import { RulePage } from "pages/rules.slint";
-import {
-    ShaderBuilderPanel,
-    ShaderCodeEditor,
-    ShaderPicker,
-    ShaderPreviewRow,
-    ShadersPage,
-} from "pages/shaders.slint";
+import { ShaderEditorPage } from "pages/shader-editor.slint";
+import { ShaderPicker, ShadersPage } from "pages/shaders.slint";
 
 // Embedded fonts (compiler bakes these into the binary). Family names are
 // the fonts' internal names, verified with fc-scan.
@@ -227,7 +222,7 @@ export component AppWindow inherits Window {
     in property <bool> shader-community-installed;
     in property <bool> shader-update-available;
     in-out property <bool> shader-downloading;
-    // Shader editor overlay.
+    // Shader editor page.
     in-out property <bool> shader-editor-open;
     in property <bool> shader-editor-editing;
     // Events assigned the shader being edited, for the delete confirm.
@@ -667,7 +662,48 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if root.page == Page.shaders: shsv := ScrollView {
+                if root.page == Page.shaders && root.shader-editor-open: ShaderEditorPage {
+                    width: 100%;
+                    height: 100%;
+                    editing: root.shader-editor-editing;
+                    used-by: root.shader-editor-used-by;
+                    name <=> root.shader-editor-name;
+                    text <=> root.shader-editor-text;
+                    note: root.shader-editor-note;
+                    kinds: root.shader-kinds;
+                    kind <=> root.shader-editor-kind;
+                    steps: root.shader-steps;
+                    step-kinds: root.shader-step-kinds;
+                    builder-locked: root.shader-builder-locked;
+                    preview-image: root.shader-preview-image;
+                    preview-progress <=> root.shader-preview-progress;
+                    preview-direction: root.shader-preview-direction;
+                    preview-ready: root.shader-preview-ready;
+                    preview-note: root.shader-preview-note;
+                    preview-events: root.shader-preview-events;
+                    preview-event <=> root.shader-preview-event;
+                    preview-length-ms: root.shader-preview-length-ms;
+                    confirm-close <=> root.shader-editor-confirm-close;
+                    kind-picked(i) => { root.shader-editor-kind-picked(i); }
+                    builder-reset => { root.shader-builder-reset(); }
+                    step-add(k) => { root.shader-step-add(k); }
+                    step-remove(i) => { root.shader-step-remove(i); }
+                    step-move(i, d) => { root.shader-step-move(i, d); }
+                    step-param(i, s, v) => { root.shader-step-param(i, s, v); }
+                    step-param-live(i, s, v) => { root.shader-step-param-live(i, s, v); }
+                    preview-event-picked(i) => { root.shader-preview-event-picked(i); }
+                    preview-scrub(v) => { root.shader-preview-scrub(v); }
+                    preview-direction-toggled => { root.shader-preview-direction-toggled(); }
+                    text-changed(t, a, c, k) => { root.shader-editor-text-changed(t, a, c, k); }
+                    code-history(k) => { root.shader-code-history(k) }
+                    code-key(t, a, c, k) => { root.shader-code-key(t, a, c, k) }
+                    close => { root.shader-editor-close(); }
+                    discard => { root.shader-editor-open = false; }
+                    delete => { root.shader-editor-delete(); }
+                    save-request => { root.shader-editor-save-request(); }
+                }
+
+                if root.page == Page.shaders && !root.shader-editor-open: shsv := ScrollView {
                     width: 100%;
                     height: 100%;
                     viewport-height: shaders-page.preferred-height;
@@ -1363,238 +1399,8 @@ export component AppWindow inherits Window {
         open-in-editor => { root.open-url(root.popup-file-path); }
     }
 
-    // ── shader editor overlay (create, edit, fork, delete own shaders) ──
-    // Saving writes the .glsl file; umbriel live-reloads it, which is the
-    // preview loop. Assign the shader to an event to see it run.
-    if root.shader-editor-open: Rectangle {
-        width: 100%;
-        height: 100%;
-        background: #00000099;
-
-        TouchArea {
-            clicked => { root.shader-editor-close(); }
-        }
-
-        Rectangle {
-            width: min(1400px, parent.width - 48px);
-            height: parent.height - 48px;
-            x: (parent.width - self.width) / 2;
-            y: 24px;
-            background: Theme.bg-1;
-            border-radius: Theme.radius-xl;
-            drop-shadow-blur: 24px;
-            drop-shadow-color: #00000066;
-            border-width: 1px;
-            border-color: Theme.border;
-
-            // Absorb clicks so the scrim underneath doesn't fire.
-            TouchArea { }
-
-            VerticalLayout {
-                padding: Theme.space-l;
-                spacing: Theme.space-m;
-
-                Text {
-                    text: root.shader-editor-editing ? "Edit shader" : "New shader";
-                    color: Theme.text-1;
-                    font-size: Theme.font-large;
-                    font-weight: 700;
-                }
-
-                HorizontalLayout {
-                    spacing: Theme.space-m;
-                    alignment: start;
-
-                    Text {
-                        text: "Name";
-                        color: Theme.text-2;
-                        vertical-alignment: center;
-                    }
-
-                    LineEdit {
-                        min-width: 130px;
-                        max-width: 260px;
-                        horizontal-stretch: 1;
-                        text <=> root.shader-editor-name;
-                        placeholder-text: "my-effect";
-                    }
-
-                    Text {
-                        text: ".glsl";
-                        color: Theme.text-2;
-                        font-family: Theme.font-mono;
-                        vertical-alignment: center;
-                    }
-
-                    Text {
-                        text: "Kind";
-                        color: Theme.text-2;
-                        vertical-alignment: center;
-                    }
-
-                    ComboBox {
-                        min-width: 110px;
-                        model: root.shader-kinds;
-                        // Only a new shader chooses its kind; an existing one
-                        // is whatever its entry point says.
-                        enabled: !root.shader-editor-editing;
-                        current-index <=> root.shader-editor-kind;
-                        selected => { root.shader-editor-kind-picked(self.current-index); }
-                    }
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
-                }
-
-                // Fluid middle: builder beside preview + code with stretch
-                // ratios, so every pane scales with the window instead of
-                // competing over fixed pixel sizes. Narrow cards shrink the
-                // builder to its minimum; wide ones give every pane room.
-                HorizontalLayout {
-                    vertical-stretch: 1;
-                    spacing: Theme.space-m;
-
-                    // The builder only writes animation shaders.
-                    if root.shader-editor-kind == 0: ShaderBuilderPanel {
-                        min-width: 280px;
-                        max-width: 460px;
-                        horizontal-stretch: 2;
-                        steps: root.shader-steps;
-                        kinds: root.shader-step-kinds;
-                        locked: root.shader-builder-locked;
-                        reset => { root.shader-builder-reset(); }
-                        add(k) => { root.shader-step-add(k); }
-                        step-remove(i) => { root.shader-step-remove(i); }
-                        step-move(i, d) => { root.shader-step-move(i, d); }
-                        step-param(i, s, v) => { root.shader-step-param(i, s, v); }
-                        step-param-live(i, s, v) => { root.shader-step-param-live(i, s, v); }
-                    }
-
-                    VerticalLayout {
-                        horizontal-stretch: 3;
-                        spacing: Theme.space-m;
-
-                        if root.shader-preview-ready: ShaderPreviewRow {
-                            source: root.shader-preview-image;
-                            note: root.shader-preview-note;
-                            direction-in: root.shader-preview-direction > 0;
-                            progress <=> root.shader-preview-progress;
-                            events: root.shader-preview-events;
-                            event-index <=> root.shader-preview-event;
-                            configured-ms: root.shader-preview-length-ms;
-                            event-picked(i) => { root.shader-preview-event-picked(i); }
-                            scrub(v) => { root.shader-preview-scrub(v); }
-                            toggle-direction() => { root.shader-preview-direction-toggled(); }
-                        }
-
-                        VerticalLayout {
-                            vertical-stretch: 1;
-                            spacing: Theme.space-xs;
-
-                            // The editor's keys, where people look for them.
-                            HorizontalLayout {
-                                spacing: Theme.space-m;
-
-                                Text {
-                                    text: "Code";
-                                    color: Theme.text-2;
-                                    font-size: Theme.font-small;
-                                    font-weight: 700;
-                                }
-
-                                Text {
-                                    text: "Tab indents · Shift+Tab outdents · Enter keeps the indent · right-click to cut, copy or paste";
-                                    color: Theme.text-2;
-                                    font-size: Theme.font-small;
-                                    horizontal-alignment: right;
-                                    horizontal-stretch: 1;
-                                    overflow: elide;
-                                }
-                            }
-
-                            ShaderCodeEditor {
-                                vertical-stretch: 1;
-                                min-height: 200px;
-                                text <=> root.shader-editor-text;
-                                edited(text, anchor, cursor, kind) => {
-                                    root.shader-editor-text-changed(text, anchor, cursor, kind);
-                                }
-                                history(kind) => { root.shader-code-history(kind) }
-                                code-key(text, anchor, cursor, kind) => {
-                                    root.shader-code-key(text, anchor, cursor, kind)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if !root.shader-preview-ready && root.shader-preview-note != "": Text {
-                    text: root.shader-preview-note;
-                    color: Theme.warning;
-                    font-size: Theme.font-small;
-                    wrap: word-wrap;
-                }
-
-                if root.shader-editor-note != "": Text {
-                    text: root.shader-editor-note;
-                    color: Theme.warning;
-                    font-size: Theme.font-small;
-                    wrap: TextWrap.word-wrap;
-                }
-
-                HorizontalLayout {
-                    alignment: end;
-                    spacing: Theme.space-s;
-
-                    if root.shader-editor-confirm-close: Text {
-                        text: "Discard unsaved changes?";
-                        color: Theme.warning;
-                        vertical-alignment: center;
-                    }
-
-                    if root.shader-editor-confirm-close: ActionButton {
-                        text: "Keep editing";
-                        clicked => { root.shader-editor-confirm-close = false; }
-                    }
-
-                    if root.shader-editor-confirm-close: ActionButton {
-                        text: "Discard";
-                        clicked => {
-                            root.shader-editor-confirm-close = false;
-                            root.shader-editor-open = false;
-                        }
-                    }
-
-                    if !root.shader-editor-confirm-close && root.shader-editor-editing: ActionButton {
-                        property <bool> confirming: false;
-                        text: !self.confirming ? "Delete" : root.shader-editor-used-by == "" ? "Really delete?" : "Delete? Used by " + root.shader-editor-used-by;
-                        clicked => {
-                            if (self.confirming) {
-                                root.shader-editor-delete();
-                            } else {
-                                self.confirming = true;
-                            }
-                        }
-                    }
-
-                    if !root.shader-editor-confirm-close: ActionButton {
-                        text: "Cancel";
-                        clicked => { root.shader-editor-close(); }
-                    }
-
-                    if !root.shader-editor-confirm-close: ActionButton {
-                        text: "Save";
-                        primary: true;
-                        clicked => { root.shader-editor-save-request(); }
-                    }
-                }
-            }
-        }
-    }
-
     // ── shader "Use for" checklist (the editor's Save step) ──
-    if root.shader-editor-open && root.shader-use-open: Rectangle {
+    if root.page == Page.shaders && root.shader-editor-open && root.shader-use-open: Rectangle {
         width: 100%;
         height: 100%;
         background: #00000066;

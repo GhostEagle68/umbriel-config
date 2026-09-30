@@ -1,4 +1,4 @@
-//! The shader editor overlay: opening, the code pane (keys, undo, settling),
+//! The shader editor page: opening, the code pane (keys, undo, settling),
 //! the unsaved-changes guard, and Save with its "Use for" step, rename and
 //! delete.
 
@@ -40,7 +40,7 @@ pub(super) fn settle_now(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     }
 }
 
-/// Open the overlay editor pre-loaded with a shader file's content.
+/// Open the editor pre-loaded with a shader file's content.
 /// `editing` reuses that exact file on save; forking leaves the source
 /// untouched and saves under a new name.
 pub(super) fn open_shader_editor(
@@ -96,7 +96,7 @@ fn slots_of_kind(kind: &str) -> impl Iterator<Item = (usize, &'static str)> + '_
         .filter(move |(_, event)| shaders::slot_kind(event) == kind)
 }
 
-/// Show the editor overlay over whatever code is loaded, remembering it
+/// Show the editor page over whatever code is loaded, remembering it
 /// as the unsaved-changes baseline.
 pub(super) fn show_editor(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     // A settle left over from the last session would re-check old code.
@@ -472,7 +472,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     {
         let weak = app.as_weak();
         let shell = Rc::clone(shell);
-        // Cancel and the scrim both land here: unsaved code asks first.
+        // Back lands here: unsaved code asks first.
         app.on_shader_editor_close(move || {
             let Some(app) = weak.upgrade() else { return };
             let unsaved = {
