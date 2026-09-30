@@ -820,12 +820,61 @@ pub fn rename_user_shader(
         .map_err(|err| format!("could not rename {}: {err}", path.display()))?;
     // A preset file the app wrote follows its shader, renamed with it.
     let preset_file = path.with_extension("effect.toml");
-    if preset_file.is_file() {
-        let _ = std::fs::remove_file(&preset_file);
+    if let Ok(text) = std::fs::read_to_string(&preset_file) {
         let renamed = entry_for(target.clone(), Source::ConfigDir);
-        ensure_preset_file(&renamed)?;
+        let old_name = path.file_name().and_then(|name| name.to_str());
+        let carried =
+            old_name.and_then(|old| carry_preset(&text, old, &file_name, &renamed.preset));
+        // Written before the old file goes, so a failure loses nothing;
+        // a file already at the new name is never replaced.
+        if !renamed.preset_file.exists() {
+            let text = carried.unwrap_or_else(|| preset_text(&renamed));
+            std::fs::write(&renamed.preset_file, text).map_err(|err| {
+                format!("could not write {}: {err}", renamed.preset_file.display())
+            })?;
+        }
+        let _ = std::fs::remove_file(&preset_file);
     }
     Ok(target)
+}
+
+/// `text`, a preset file, with the preset that ran shader file `old` now
+/// running `new` under the name `preset`: every other key, table and
+/// comment stays, so parameters added by hand survive a rename. `None`
+/// when the text doesn't parse or has no preset for `old`.
+fn carry_preset(text: &str, old: &str, new: &str, preset: &str) -> Option<String> {
+    let mut doc = text.parse::<toml_edit::DocumentMut>().ok()?;
+    let presets = doc.get_mut("effects")?.get_mut("preset")?.as_table_mut()?;
+    let mut ran_old: Vec<String> = Vec::new();
+    for (name, item) in presets.iter_mut() {
+        let Some(table) = item.as_table_like_mut() else {
+            continue;
+        };
+        if table.get("shader").and_then(toml_edit::Item::as_str) == Some(old) {
+            table.insert("shader", toml_edit::value(new));
+            ran_old.push(name.to_owned());
+        }
+    }
+    let first = ran_old.first()?.clone();
+    for name in ran_old {
+        if name != preset
+            && !presets.contains_key(preset)
+            && let Some(item) = presets.remove(&name)
+        {
+            presets.insert(preset, item);
+        }
+    }
+    // The header the app writes names the shader and the preset.
+    let header = |file: &str, name: &str| {
+        format!(
+            "# Written by umbriel-config: the preset that runs {file}.\n\
+             # Select it by the name \"{name}\".\n"
+        )
+    };
+    Some(
+        doc.to_string()
+            .replacen(&header(old, &first), &header(new, preset), 1),
+    )
 }
 
 /// A name for a new shader in `shaders/` that no file uses yet: `base`,
@@ -1476,6 +1525,50 @@ mod tests {
         );
         delete_user_shader(&config_dir, &renamed).unwrap();
         assert!(!config_dir.join("shaders/jelly.effect.toml").exists());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn renaming_keeps_the_parameters_added_to_the_preset_file() {
+        let base = std::env::temp_dir().join(format!("umbriel-renamekeep-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let config_dir = base.join("config");
+        let shader = config_dir.join("shaders/pulse.glsl");
+        write(
+            &shader,
+            b"vec4 border(vec2 uv) { return umbriel_sample(uv); }\n",
+        );
+        ensure_preset_file(&entry_for(shader.clone(), Source::ConfigDir)).unwrap();
+        // A hand-tuned file: parameters, a light table, another preset.
+        let preset_file = config_dir.join("shaders/pulse.effect.toml");
+        let text = std::fs::read_to_string(&preset_file).unwrap();
+        let tuned = format!(
+            "{text}speed = 2.0\npalette = true\n\n[effects.preset.pulse.light]\nspread = 120\n\n\
+             [effects.preset.other]\nkind = \"window\"\nshader = \"other.glsl\"\n"
+        );
+        write(&preset_file, tuned.as_bytes());
+
+        rename_user_shader(&config_dir, &shader, "glow").unwrap();
+        let renamed = std::fs::read_to_string(config_dir.join("shaders/glow.effect.toml")).unwrap();
+        assert!(!preset_file.exists());
+        // The preset runs the new file under the new name, keeping every
+        // other key and the untouched preset, and the header says so.
+        assert_eq!(
+            renamed,
+            tuned
+                .replace("pulse.glsl", "glow.glsl")
+                .replace("\"pulse\"", "\"glow\"")
+                .replace("preset.pulse", "preset.glow")
+        );
+        let doc: ConfigDocument = renamed.parse().unwrap();
+        let key = |key: &str| doc.get_string(&["effects", "preset", "glow", key]);
+        assert_eq!(key("kind").as_deref(), Some("border"));
+        assert_eq!(key("shader").as_deref(), Some("glow.glsl"));
+        assert_eq!(key("speed"), None);
+        assert!(renamed.contains("speed = 2.0") && renamed.contains("spread = 120"));
+        // Text with no preset for the file can't be carried.
+        assert_eq!(carry_preset("# nothing\n", "a.glsl", "b.glsl", "b"), None);
+        assert_eq!(carry_preset("not = [toml", "a.glsl", "b.glsl", "b"), None);
         std::fs::remove_dir_all(&base).ok();
     }
 
