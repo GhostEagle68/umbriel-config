@@ -192,8 +192,9 @@ export component ShaderEditorPage inherits Rectangle {
                     vertical-stretch: 1;
                     spacing: Theme.space-xs;
 
-                    // The editor's keys, where people look for them.
+                    // The code pane's header: the reference toggle.
                     HorizontalLayout {
+                        alignment: start;
                         spacing: Theme.space-m;
 
                         Text {
@@ -207,15 +208,6 @@ export component ShaderEditorPage inherits Rectangle {
                         ActionButton {
                             text: root.reference-open ? "Hide reference" : "Reference";
                             clicked => { root.reference-open = !root.reference-open; }
-                        }
-
-                        Text {
-                            text: "Tab indents or takes a suggestion · Shift+Tab outdents · Ctrl+/ comments · Ctrl+F finds · Ctrl+G goes to a line · right-click for cut, copy, paste";
-                            color: Theme.text-2;
-                            font-size: Theme.font-small;
-                            horizontal-alignment: right;
-                            horizontal-stretch: 1;
-                            overflow: elide;
                         }
                     }
 
@@ -284,6 +276,13 @@ export component ShaderEditorPage inherits Rectangle {
                                 }
                             }
                         }
+                    }
+                    // The editor's keys, where people look for them.
+                    Text {
+                        text: "Tab: indent, or take a suggestion · Shift+Tab: outdent · Ctrl+/: comment · Ctrl+F: find and replace · Ctrl+G: go to line · right-click: cut, copy, paste";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        wrap: word-wrap;
                     }
                 }
             }
