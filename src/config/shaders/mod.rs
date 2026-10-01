@@ -951,6 +951,8 @@ pub mod completion;
 
 pub mod diagnostics;
 
+pub mod find;
+
 pub mod tokens;
 
 #[cfg(test)]

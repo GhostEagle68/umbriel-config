@@ -61,6 +61,10 @@ export component ShaderEditorPage inherits Rectangle {
     in property <[Diagnostic]> diagnostics;
     callback code-line-offset(string, int) -> int;
     pure callback code-marks(string, int) -> [Mark];
+    pure callback code-find-marks(string, string) -> [Mark];
+    pure callback code-find-status(string, string, int) -> string;
+
+    callback code-find-step(string, int, int, string, string, string) -> CodeEdit;
 
     pure callback code-suggest(string, int, int) -> [CodeHint];
     callback code-complete(string, int, string) -> CodeEdit;
@@ -206,7 +210,7 @@ export component ShaderEditorPage inherits Rectangle {
                         }
 
                         Text {
-                            text: "Tab indents or takes a suggestion · Shift+Tab outdents · Ctrl+/ comments · Ctrl+G goes to a line · right-click for cut, copy, paste";
+                            text: "Tab indents or takes a suggestion · Shift+Tab outdents · Ctrl+/ comments · Ctrl+F finds · Ctrl+G goes to a line · right-click for cut, copy, paste";
                             color: Theme.text-2;
                             font-size: Theme.font-small;
                             horizontal-alignment: right;
@@ -231,6 +235,10 @@ export component ShaderEditorPage inherits Rectangle {
                             problems: root.diagnostics;
                             line-offset(text, line) => { root.code-line-offset(text, line) }
                             marks(text, cursor) => { root.code-marks(text, cursor) }
+                            find-marks(text, query) => { root.code-find-marks(text, query) }
+                            find-status(text, query, start) => { root.code-find-status(text, query, start) }
+
+                            find-step(text, anchor, cursor, query, with, action) => { root.code-find-step(text, anchor, cursor, query, with, action) }
 
                             suggest(text, cursor, kind) => { root.code-suggest(text, cursor, kind) }
                             complete(text, cursor, label) => { root.code-complete(text, cursor, label) }

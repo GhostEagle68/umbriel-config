@@ -269,6 +269,10 @@ export component AppWindow inherits Window {
     in property <[Diagnostic]> shader-diagnostics;
     callback shader-code-line-offset(string, int) -> int;
     pure callback shader-code-marks(string, int) -> [Mark];
+    pure callback shader-code-find-marks(string, string) -> [Mark];
+    pure callback shader-code-find-status(string, string, int) -> string;
+
+    callback shader-code-find-step(string, int, int, string, string, string) -> CodeEdit;
 
     // Suggestions at the caret (text, caret byte offset, kind), one
     // accepted, and the names umbriel gives a kind of shader.
@@ -713,6 +717,10 @@ export component AppWindow inherits Window {
                     diagnostics: root.shader-diagnostics;
                     code-line-offset(t, l) => { root.shader-code-line-offset(t, l) }
                     code-marks(t, c) => { root.shader-code-marks(t, c) }
+                    code-find-marks(t, q) => { root.shader-code-find-marks(t, q) }
+                    code-find-status(t, q, s) => { root.shader-code-find-status(t, q, s) }
+
+                    code-find-step(t, a, c, q, w, x) => { root.shader-code-find-step(t, a, c, q, w, x) }
 
                     code-suggest(t, c, k) => { root.shader-code-suggest(t, c, k) }
                     code-complete(t, c, l) => { root.shader-code-complete(t, c, l) }

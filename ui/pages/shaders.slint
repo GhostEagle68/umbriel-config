@@ -1193,7 +1193,15 @@ export component ShaderCodeEditor inherits Rectangle {
         callback line-offset(string, int) -> int;
     // What to highlight at the caret: the bracket it sits beside and
     // that bracket's partner.
-    pure callback marks(string, int) -> [Mark];
+        pure callback marks(string, int) -> [Mark];
+    // The find bar: every match of a query, and a button's step (text,
+    // anchor, caret, query, replacement, "from" / "next" / "previous" /
+    // "replace" / "replace-all") as a new text and selection.
+        pure callback find-marks(string, string) -> [Mark];
+    // "2 of 4": the count the bar shows for (text, query, selection start).
+    pure callback find-status(string, string, int) -> string;
+
+    callback find-step(string, int, int, string, string, string) -> CodeEdit;
 
     property <length> caret-x;
     property <length> caret-y;
@@ -1210,6 +1218,11 @@ export component ShaderCodeEditor inherits Rectangle {
     property <length> char-width: width-probe.preferred-width / 50;
     property <[Mark]> bracket-marks: root.marks(input.text, input.cursor-position-byte-offset);
     property <bool> goto-open;
+    property <bool> find-open;
+    property <string> find-text;
+    property <string> replace-text;
+    property <[Mark]> match-marks: root.find-marks(input.text, root.find-open ? root.find-text : "");
+    property <string> find-count: root.find-status(input.text, root.find-open ? root.find-text : "", min(input.anchor-position-byte-offset, input.cursor-position-byte-offset));
 
     function token-color(index: int) -> color {
         return index == 1 ? Theme.text-2
@@ -1241,6 +1254,25 @@ export component ShaderCodeEditor inherits Rectangle {
         // assignment trips a move bug in Slint 1.16's Rust codegen.
                 root.edited(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, 1);
         return true;
+    }
+
+    // A find-bar button: select the match (or replace), as Rust says.
+    function find(action: string) {
+        let result = root.find-step(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, root.find-text, root.replace-text, action);
+        let changed = result.text != input.text;
+        if (!changed && result.anchor == input.anchor-position-byte-offset && result.cursor == input.cursor-position-byte-offset) {
+            return;
+        }
+        input.text = result.text;
+        input.set-selection-offsets(result.anchor, result.cursor);
+        if (changed) {
+            root.edited(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, 1);
+        }
+    }
+
+    function close-find() {
+        root.find-open = false;
+        input.focus();
     }
 
     changed hints => { root.hint-index = 0; }
@@ -1350,6 +1382,16 @@ export component ShaderCodeEditor inherits Rectangle {
                     viewport-width: max(self.visible-width, input.preferred-width + 2 * Theme.space-s);
                     viewport-height: max(self.visible-height, input.preferred-height + 2 * Theme.space-s);
 
+                    // Every match of the find bar's query.
+                    for mark in root.match-marks: Rectangle {
+                        x: Theme.space-s + mark.col * root.char-width;
+                        y: Theme.space-s + mark.line * root.line-height;
+                        width: mark.len * root.char-width;
+                        height: root.line-height;
+                        border-radius: 2px;
+                        background: Theme.warning.with-alpha(0.3);
+                    }
+
                     // The brackets that match at the caret.
                     for mark in root.bracket-marks: Rectangle {
                         x: Theme.space-s + mark.col * root.char-width;
@@ -1427,6 +1469,11 @@ export component ShaderCodeEditor inherits Rectangle {
                         // Undo/redo before the TextInput's own (stale) history.
                         if (event.modifiers.control && !event.modifiers.alt) {
                                 if (event.text == "/" && root.apply("comment")) {
+                                    return accept;
+                                }
+                                if (event.text == "f" || event.text == "F" || event.text == "h" || event.text == "H") {
+                                    root.find-open = true;
+                                    find-edit.focus();
                                     return accept;
                                 }
                                 if (event.text == "g" || event.text == "G") {
@@ -1556,6 +1603,91 @@ export component ShaderCodeEditor inherits Rectangle {
             }
         }
     }
+    // Ctrl+F (or Ctrl+H): find and replace. Typing selects the first
+    // match; Enter goes to the next, Esc closes.
+    Rectangle {
+        visible: root.find-open;
+        width: 460px;
+        height: find-grid.preferred-height;
+        x: root.width - self.width - 16px;
+        y: 8px;
+        background: Theme.bg-3;
+        border-radius: Theme.radius-s;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #00000055;
+
+        FocusScope {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    root.close-find();
+                    return accept;
+                }
+                return reject;
+            }
+
+            // One grid, so both text boxes are the same width whatever
+            // the buttons beside them need.
+                        find-grid := GridLayout {
+                padding: Theme.space-s;
+                spacing: Theme.space-s;
+
+                Row {
+                    find-edit := LineEdit {
+                        placeholder-text: "Find";
+                        text <=> root.find-text;
+                        edited => { root.find("from"); }
+                        accepted => { root.find("next"); }
+                    }
+
+                    Text {
+                        text: root.find-count;
+                        color: root.find-count == "No matches" ? Theme.danger : Theme.text-2;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                    }
+
+                    ActionButton {
+                        text: "Prev";
+                        clicked => { root.find("previous"); }
+                    }
+
+                    ActionButton {
+                        text: "Next";
+                        clicked => { root.find("next"); }
+                    }
+
+                    ActionButton {
+                        text: "×";
+                        clicked => { root.close-find(); }
+                    }
+                }
+
+                Row {
+                    LineEdit {
+                        placeholder-text: "Replace with";
+                        text <=> root.replace-text;
+                        accepted => { root.find("replace"); }
+                    }
+
+                    ActionButton {
+                        colspan: 2;
+                        text: "Replace";
+                        clicked => { root.find("replace"); }
+                    }
+
+                    ActionButton {
+                        colspan: 2;
+                        text: "All";
+                        clicked => { root.find("replace-all"); }
+                    }
+                }
+            }
+        }
+    }
+
     // Ctrl+G: a line number, Enter to go, Esc to close.
     if root.goto-open: Rectangle {
         width: 220px;

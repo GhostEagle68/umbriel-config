@@ -511,7 +511,52 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             .collect();
         Rc::new(VecModel::from(marks)).into()
     });
+    // The find bar: its count, every match to highlight (capped at 500),
+    // and a button's step.
+    app.on_shader_code_find_status(|text, query, start| {
+        shaders::find::status(&text, &query, usize::try_from(start).unwrap_or(0)).into()
+    });
+    app.on_shader_code_find_marks(|text, query| {
+        let marks: Vec<Mark> = shaders::find::matches(&text, &query)
+            .into_iter()
+            .take(500)
+            .map(|(from, to)| {
+                let (line, col) = shaders::code_edit::line_col(&text, from);
+                Mark {
+                    line: line as i32,
+                    col: col as i32,
+                    len: text[from..to].chars().count() as i32,
+                }
+            })
+            .collect();
+        Rc::new(VecModel::from(marks)).into()
+    });
+    app.on_shader_code_find_step(|text, anchor, cursor, query, replacement, action| {
+        use shaders::find::Step;
+        let step = match action.as_str() {
+            "next" => Step::Next,
+            "previous" => Step::Previous,
+            "replace" => Step::Replace,
+            "replace-all" => Step::ReplaceAll,
+            _ => Step::From,
+        };
+        let offset = |value: i32| usize::try_from(value).unwrap_or(0);
+        let (text, anchor, cursor) = shaders::find::step(
+            &text,
+            offset(anchor),
+            offset(cursor),
+            &query,
+            &replacement,
+            step,
+        );
+        CodeEdit {
+            text: text.into(),
+            anchor: anchor as i32,
+            cursor: cursor as i32,
+        }
+    });
     // Code-editor keys: pure text surgery, see shaders::code_edit.
+
     app.on_shader_code_key(|text, anchor, cursor, kind| {
         let key = code_key_named(&kind);
         let offset = |value: i32| usize::try_from(value).unwrap_or(0);
