@@ -114,6 +114,12 @@ struct Shell {
     // What the timing dialog's event had when it opened (preview event
     // index, its own `curve` and `duration_ms`), for Revert.
     timing_original: Option<(usize, Option<String>, Option<i64>)>,
+    // The editor's preset parameters (key -> value text) as they are and
+    // as the preset file has them; the file is left alone when the app
+    // didn't write it.
+    shader_params: shaders::params::Values,
+    shader_params_baseline: shaders::params::Values,
+    shader_params_locked: bool,
 
     // The code pane's undo/redo (the text box's own is unreliable).
     shader_code_history: shaders::code_edit::History,
@@ -254,6 +260,9 @@ impl Shell {
             shader_code_settle: slint::Timer::default(),
             timing_backed_up: false,
             timing_original: None,
+            shader_params: shaders::params::Values::new(),
+            shader_params_baseline: shaders::params::Values::new(),
+            shader_params_locked: false,
 
             shader_code_history: shaders::code_edit::History::default(),
             builder_steps: Vec::new(),

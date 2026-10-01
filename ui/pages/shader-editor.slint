@@ -10,8 +10,10 @@ import {
     CodeHint,
     Diagnostic,
     Mark,
+    ParamRow,
     ShaderStep,
 } from "../types.slint";
+import { ParamsPanel } from "shader-params.slint";
 import { Theme } from "../theme.slint";
 
 import {
@@ -65,6 +67,10 @@ export component ShaderEditorPage inherits Rectangle {
     pure callback code-find-marks(string, string) -> [Mark];
     pure callback code-find-status(string, string, int) -> string;
 
+    in property <[ParamRow]> params;
+    in property <[string]> param-overlays;
+    in property <bool> params-locked;
+    callback param-set(string, string);
     callback code-find-step(string, int, int, string, string, string) -> CodeEdit;
 
     pure callback code-suggest(string, int, int) -> [CodeHint];
@@ -157,19 +163,38 @@ export component ShaderEditorPage inherits Rectangle {
             spacing: Theme.space-m;
 
             // The builder only writes animation shaders.
-                                    if root.kind == 0: ShaderBuilderPanel {
+                                                // The left column: the builder (animation shaders only) above the
+            // preset's settings.
+            VerticalLayout {
                 min-width: 280px;
                 max-width: 460px;
                 horizontal-stretch: 2;
-                steps: root.steps;
-                kinds: root.step-kinds;
-                locked: root.builder-locked;
-                reset => { root.builder-reset(); }
-                add(k) => { root.step-add(k); }
-                step-remove(i) => { root.step-remove(i); }
-                step-move(i, d) => { root.step-move(i, d); }
-                step-param(i, s, v) => { root.step-param(i, s, v); }
-                step-param-live(i, s, v) => { root.step-param-live(i, s, v); }
+                spacing: Theme.space-m;
+
+                if root.kind == 0: ShaderBuilderPanel {
+                    vertical-stretch: 1;
+                    min-height: 140px;
+                    steps: root.steps;
+                    kinds: root.step-kinds;
+                    locked: root.builder-locked;
+                    reset => { root.builder-reset(); }
+                    add(k) => { root.step-add(k); }
+                    step-remove(i) => { root.step-remove(i); }
+                    step-move(i, d) => { root.step-move(i, d); }
+                    step-param(i, s, v) => { root.step-param(i, s, v); }
+                    step-param-live(i, s, v) => { root.step-param-live(i, s, v); }
+                }
+
+                ParamsPanel {
+                    rows: root.params;
+                    overlays: root.param-overlays;
+                    locked: root.params-locked;
+                    set(key, value) => { root.param-set(key, value); }
+                }
+
+                if root.kind != 0: Rectangle {
+                    vertical-stretch: 1;
+                }
             }
 
             VerticalLayout {

@@ -4,7 +4,7 @@
 
 use super::super::common::*;
 use super::super::*;
-use super::{builder::*, library::*, preview::*};
+use super::{builder::*, library::*, preview::*, strip::*};
 
 /// How long typing must pause before the code is re-checked.
 pub(super) const CODE_SETTLE: std::time::Duration = std::time::Duration::from_millis(200);
@@ -21,8 +21,11 @@ pub(super) fn code_settled(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     };
     app.set_shader_editor_note(note.into());
     // Mid-typing code with no entry point keeps the kind it had.
-    if let Some(kind) = shaders::entry_kind(&text) {
+    if let Some(kind) = shaders::entry_kind(&text)
+        && app.get_shader_editor_kind() != kind_index(kind)
+    {
         app.set_shader_editor_kind(kind_index(kind));
+        refresh_params(app, shell);
     }
     sync_builder_from_code(app, shell, &text);
     shell
@@ -109,6 +112,7 @@ pub(super) fn show_editor(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         .shader_code_history
         .reset(app.get_shader_editor_text().as_str());
     shell.borrow_mut().shader_editor_baseline_name = app.get_shader_editor_name().to_string();
+    load_params(app, shell);
     app.set_shader_editor_confirm_close(false);
     app.set_shader_editor_open(true);
 }
@@ -352,6 +356,13 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                             changes.extend(apply_use_for(&mut shell, &app, &path));
                         }
                         scan_shaders(&mut shell);
+                        // The settings strip's values go into the preset file.
+                        if let Some(entry) = shell.shaders.iter().find(|entry| entry.path == path)
+                            && let Err(err) = save_params(&shell, entry, kind)
+                        {
+                            toast(&app, ToastKind::Error, err, "");
+                        }
+                        shell.shader_params_baseline = shell.shader_params.clone();
                         changes
                     };
                     request_thumbnails(&app, &shell);
@@ -579,6 +590,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
                 let shell = shell.borrow();
                 app.get_shader_editor_text().as_str() != shell.shader_editor_baseline
                     || app.get_shader_editor_name().as_str() != shell.shader_editor_baseline_name
+                    || params_unsaved(&shell)
             };
             if unsaved {
                 app.set_shader_editor_confirm_close(true);

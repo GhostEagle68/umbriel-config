@@ -1,0 +1,110 @@
+// The shader editor's settings strip: the preset's parameters (palette,
+// speed, light...), one row each. Rows are made in Rust from what Umbriel
+// documents, so a newer Umbriel's keys appear without a release.
+
+import { ComboBox, Slider, Switch } from "std-widgets.slint";
+import { ParamRow } from "../types.slint";
+import { Theme } from "../theme.slint";
+
+export component ParamsPanel inherits Rectangle {
+    in property <[ParamRow]> rows;
+    // Window presets an `overlay` can name; the first is "none".
+    in property <[string]> overlays;
+    // The preset file isn't the app's: shown, not editable.
+    in property <bool> locked;
+    // (key, value as text); sliders send on release.
+    callback set(string, string);
+
+    // The description of the row the pointer is over.
+    property <string> hint;
+
+    VerticalLayout {
+        alignment: start;
+        spacing: Theme.space-s;
+
+        Text {
+            text: "Settings";
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            font-weight: 700;
+        }
+
+        if root.locked: Text {
+            text: "This shader's preset file wasn't written by umbriel-config, so its settings are left to you.";
+            color: Theme.warning;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+        }
+
+        for row in root.rows: Rectangle {
+            visible: row.shown;
+            height: row.shown ? 30px : 0px;
+
+            // Under the controls: hovering the label shows the description.
+            TouchArea {
+                changed has-hover => {
+                    if (self.has-hover) {
+                        root.hint = row.description;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: row.indent ? 16px : 0px;
+                spacing: Theme.space-s;
+
+                Text {
+                    text: row.label;
+                    color: root.locked ? Theme.text-2 : Theme.text-1;
+                    vertical-alignment: center;
+                    min-width: 70px;
+                }
+
+                if row.control == 0: HorizontalLayout {
+                    alignment: end;
+
+                    Switch {
+                        checked: row.on;
+                        enabled: !root.locked;
+                        toggled => { root.set(row.key, self.checked ? "true" : "false"); }
+                    }
+                }
+
+                if row.control == 1: HorizontalLayout {
+                    spacing: Theme.space-s;
+
+                    number := Slider {
+                        minimum: row.min;
+                        maximum: row.max;
+                        value: row.number;
+                        enabled: !root.locked;
+                        released(v) => { root.set(row.key, v.to-fixed(row.decimals)); }
+                    }
+
+                    Text {
+                        text: number.value.to-fixed(row.decimals);
+                        color: Theme.text-1;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        min-width: 44px;
+                    }
+                }
+
+                if row.control == 2: ComboBox {
+                    model: root.overlays;
+                    current-index: row.choice;
+                    enabled: !root.locked;
+                    selected(name) => { root.set(row.key, self.current-index == 0 ? "" : name); }
+                }
+            }
+        }
+
+        if root.hint != "": Text {
+            text: root.hint;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+        }
+    }
+}

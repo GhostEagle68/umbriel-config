@@ -325,8 +325,7 @@ pub fn ensure_preset_file(entry: &ShaderEntry) -> Result<(), String> {
     if entry.preset_file.exists() {
         return Ok(());
     }
-    std::fs::write(&entry.preset_file, preset_text(entry))
-        .map_err(|err| format!("could not write {}: {err}", entry.preset_file.display()))
+    write_file_atomic(&entry.preset_file, &preset_text(entry))
 }
 
 /// Make the preset that runs `shader` say what the shader's entry point
@@ -358,8 +357,7 @@ pub fn sync_preset_kind(shader: &Path, kind: &str) -> Result<(), String> {
         }
     }
     if changed {
-        std::fs::write(&preset_file, doc.to_string())
-            .map_err(|err| format!("could not write {}: {err}", preset_file.display()))?;
+        write_file_atomic(&preset_file, &doc.to_string())?;
     }
     Ok(())
 }
@@ -756,15 +754,21 @@ pub fn write_user_shader(path: &Path, code: &str) -> Result<(), String> {
     if !blockers.is_empty() {
         return Err(blockers.join("; "));
     }
-    // A symlinked shader (a dotfiles checkout) is written through, so the
-    // link stays a link, like the config file itself.
+    write_file_atomic(path, code)
+}
+
+/// Write `contents` to `path` through a temp file, synced before the
+/// rename so a crash can't leave an empty file. A symlinked `path` (a
+/// dotfiles checkout) is written through, so the link stays a link, like
+/// the config file itself. Creates the directory.
+pub fn write_file_atomic(path: &Path, contents: &str) -> Result<(), String> {
     let linked = path
         .is_symlink()
         .then(|| std::fs::canonicalize(path).ok())
         .flatten();
     let path = linked.as_deref().unwrap_or(path);
     let Some(dir) = path.parent() else {
-        return Err("shader path has no directory".to_owned());
+        return Err(format!("{} has no directory", path.display()));
     };
     std::fs::create_dir_all(dir)
         .map_err(|err| format!("could not create {}: {err}", dir.display()))?;
@@ -773,11 +777,10 @@ pub fn write_user_shader(path: &Path, code: &str) -> Result<(), String> {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let tmp = dir.join(format!(".{file_name}.{}.tmp", std::process::id()));
-    // Synced before the rename so a crash can't leave an empty shader; any
-    // failure removes the temp file.
+    // Any failure removes the temp file.
     let written = || -> std::io::Result<()> {
         let mut file = std::fs::File::create(&tmp)?;
-        std::io::Write::write_all(&mut file, code.as_bytes())?;
+        std::io::Write::write_all(&mut file, contents.as_bytes())?;
         file.sync_all()?;
         std::fs::rename(&tmp, path)
     }();
@@ -844,9 +847,7 @@ pub fn rename_user_shader(
         // a file already at the new name is never replaced.
         if !renamed.preset_file.exists() {
             let text = carried.unwrap_or_else(|| preset_text(&renamed));
-            std::fs::write(&renamed.preset_file, text).map_err(|err| {
-                format!("could not write {}: {err}", renamed.preset_file.display())
-            })?;
+            write_file_atomic(&renamed.preset_file, &text)?;
         }
         let _ = std::fs::remove_file(&preset_file);
     }
@@ -952,6 +953,8 @@ pub mod completion;
 pub mod diagnostics;
 
 pub mod find;
+
+pub mod params;
 
 pub mod tokens;
 

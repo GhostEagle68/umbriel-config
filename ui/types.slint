@@ -377,6 +377,25 @@ export struct TimingView {
     note: string,
 }
 
+// One row of the shader editor's settings strip: a preset parameter.
+// `control`: 0 switch, 1 slider, 2 pick of a window preset (`choice`
+// indexes the overlay names). Rows of a group start `indent`ed and are
+// `shown` only while the group is on.
+export struct ParamRow {
+    key: string,
+    label: string,
+    description: string,
+    control: int,
+    on: bool,
+    number: float,
+    min: float,
+    max: float,
+    decimals: int,
+    choice: int,
+    indent: bool,
+    shown: bool,
+}
+
 // A span of one line for the shader editor to highlight: 0-based line
 // and character column, and how many characters.
 export struct Mark {
