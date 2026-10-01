@@ -1,7 +1,10 @@
 //! Code-editor keys the plain text box doesn't handle: Tab indents,
-//! Shift+Tab outdents, Enter keeps the line's indentation. Offsets are
-//! UTF-8 byte offsets (what Slint's text input reports); every result
-//! is `(text, anchor, cursor)` with the selection to restore.
+//! Shift+Tab outdents, Enter keeps the line's indentation (and indents
+//! after `{`), Ctrl+/ comments lines, and brackets close themselves.
+//! Offsets are UTF-8 byte offsets (what Slint's text input reports);
+//! every result is `(text, anchor, cursor)` with the selection to
+//! restore. A result equal to the input means the key did nothing here
+//! and the text box should handle it as usual.
 
 const INDENT: usize = 4;
 
@@ -10,6 +13,12 @@ pub enum Key {
     Indent,
     Outdent,
     Newline,
+    ToggleComment,
+    /// An opening bracket was typed: `(`, `[` or `{`.
+    Open(char),
+    /// A closing bracket was typed.
+    Close(char),
+    Backspace,
 }
 
 pub fn apply(text: &str, anchor: usize, cursor: usize, key: Key) -> (String, usize, usize) {
@@ -18,13 +27,7 @@ pub fn apply(text: &str, anchor: usize, cursor: usize, key: Key) -> (String, usi
     let (start, end) = (anchor.min(cursor), anchor.max(cursor));
     let multi_line = text[start..end].contains('\n');
     match key {
-        Key::Newline => {
-            let indent: String = text[line_start(text, start)..]
-                .chars()
-                .take_while(|ch| *ch == ' ' || *ch == '\t')
-                .collect();
-            replace(text, start, end, &format!("\n{indent}"))
-        }
+        Key::Newline => newline(text, start, end),
         // A caret or a selection inside one line: pad to the next
         // tab stop, replacing any selected text.
         Key::Indent if !multi_line => {
@@ -32,6 +35,36 @@ pub fn apply(text: &str, anchor: usize, cursor: usize, key: Key) -> (String, usi
             replace(text, start, end, &" ".repeat(INDENT - column % INDENT))
         }
         Key::Indent | Key::Outdent => shift_lines(text, anchor, cursor, key == Key::Indent),
+        Key::ToggleComment => toggle_comment(text, anchor, cursor),
+        Key::Open(open) => open_bracket(text, anchor, cursor, open),
+        Key::Close(close) => {
+            if anchor == cursor && text[cursor..].starts_with(close) {
+                // Typing over the bracket that closed itself.
+                let at = cursor + close.len_utf8();
+                (text.to_owned(), at, at)
+            } else {
+                (text.to_owned(), anchor, cursor)
+            }
+        }
+        Key::Backspace => {
+            let pair = text[..cursor].chars().next_back().and_then(closer);
+            match pair {
+                Some(close) if anchor == cursor && text[cursor..].starts_with(close) => {
+                    let at = cursor - 1;
+                    (format!("{}{}", &text[..at], &text[cursor + 1..]), at, at)
+                }
+                _ => (text.to_owned(), anchor, cursor),
+            }
+        }
+    }
+}
+
+fn closer(open: char) -> Option<char> {
+    match open {
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        _ => None,
     }
 }
 
@@ -41,52 +74,151 @@ fn replace(text: &str, start: usize, end: usize, with: &str) -> (String, usize, 
     (out, caret, caret)
 }
 
-/// Indent or outdent every line the selection touches. A selection
-/// ending at column 0 leaves that last line alone, like editors do.
-fn shift_lines(text: &str, anchor: usize, cursor: usize, indent: bool) -> (String, usize, usize) {
+/// Enter: keep the line's indentation, one step deeper after a `{`; a
+/// `}` right behind the caret drops to its own line.
+fn newline(text: &str, start: usize, end: usize) -> (String, usize, usize) {
+    let line = line_start(text, start);
+    let indent: String = text[line..]
+        .chars()
+        .take_while(|ch| *ch == ' ' || *ch == '\t')
+        .collect();
+    if !text[line..start].trim_end().ends_with('{') {
+        return replace(text, start, end, &format!("\n{indent}"));
+    }
+    let inner = format!("{indent}{}", " ".repeat(INDENT));
+    if text[end..].starts_with('}') {
+        let with = format!("\n{inner}\n{indent}");
+        let out = format!("{}{with}{}", &text[..start], &text[end..]);
+        let caret = start + 1 + inner.len();
+        return (out, caret, caret);
+    }
+    replace(text, start, end, &format!("\n{inner}"))
+}
+
+/// A typed `(`, `[` or `{`: wraps a selection, and closes itself when
+/// what follows isn't part of a word (so `(` before `x` stays alone).
+fn open_bracket(text: &str, anchor: usize, cursor: usize, open: char) -> (String, usize, usize) {
     let (start, end) = (anchor.min(cursor), anchor.max(cursor));
-    let first = line_start(text, start);
+    let Some(close) = closer(open) else {
+        return (text.to_owned(), anchor, cursor);
+    };
+    if start < end {
+        let out = format!(
+            "{}{open}{}{close}{}",
+            &text[..start],
+            &text[start..end],
+            &text[end..]
+        );
+        return (out, start + 1, end + 1);
+    }
+    let alone = text[cursor..]
+        .chars()
+        .next()
+        .is_none_or(|next| next.is_whitespace() || ")]};,".contains(next));
+    if alone {
+        let out = format!("{}{open}{close}{}", &text[..cursor], &text[cursor..]);
+        (out, cursor + 1, cursor + 1)
+    } else {
+        (text.to_owned(), anchor, cursor)
+    }
+}
+
+/// `(start, end)` of every line the selection touches. A selection
+/// ending at column 0 leaves that last line alone, like editors do.
+fn touched_lines(text: &str, anchor: usize, cursor: usize) -> Vec<(usize, usize)> {
+    let (start, end) = (anchor.min(cursor), anchor.max(cursor));
     let last_end = if end > start && end == line_start(text, end) {
         end - 1
     } else {
         end
     };
-    // (line start in the old text, bytes added, bytes removed)
-    let mut edits: Vec<(usize, usize, usize)> = Vec::new();
-    let mut at = first;
+    let mut lines = Vec::new();
+    let mut at = line_start(text, start);
     loop {
         let line_end = text[at..].find('\n').map_or(text.len(), |i| at + i);
-        if indent {
-            edits.push((at, INDENT, 0));
-        } else {
-            let line = &text[at..line_end];
-            let removed = if line.starts_with('\t') {
-                1
-            } else {
-                line.bytes().take(INDENT).take_while(|b| *b == b' ').count()
-            };
-            edits.push((at, 0, removed));
-        }
+        lines.push((at, line_end));
         if line_end >= last_end || line_end == text.len() {
-            break;
+            return lines;
         }
         at = line_end + 1;
     }
-    let mut out = String::with_capacity(text.len() + edits.len() * INDENT);
+}
+
+/// Indent or outdent every line the selection touches.
+fn shift_lines(text: &str, anchor: usize, cursor: usize, indent: bool) -> (String, usize, usize) {
+    let edits: Vec<Edit> = touched_lines(text, anchor, cursor)
+        .into_iter()
+        .map(|(at, end)| {
+            if indent {
+                (at, " ".repeat(INDENT), 0)
+            } else {
+                let line = &text[at..end];
+                let removed = if line.starts_with('\t') {
+                    1
+                } else {
+                    line.bytes().take(INDENT).take_while(|b| *b == b' ').count()
+                };
+                (at, String::new(), removed)
+            }
+        })
+        .collect();
+    splice(text, &edits, anchor, cursor)
+}
+
+/// Comment every code line the selection touches with `// ` (at the
+/// shallowest indentation), or, when they all are already, uncomment
+/// them. Blank lines are left alone.
+fn toggle_comment(text: &str, anchor: usize, cursor: usize) -> (String, usize, usize) {
+    let indent_of = |line: &str| line.len() - line.trim_start_matches([' ', '\t']).len();
+    let code: Vec<(usize, &str)> = touched_lines(text, anchor, cursor)
+        .into_iter()
+        .map(|(at, end)| (at, &text[at..end]))
+        .filter(|(_, line)| !line.trim().is_empty())
+        .collect();
+    let uncomment = !code.is_empty()
+        && code
+            .iter()
+            .all(|(_, line)| line.trim_start().starts_with("//"));
+    let column = code
+        .iter()
+        .map(|(_, line)| indent_of(line))
+        .min()
+        .unwrap_or(0);
+    let edits: Vec<Edit> = code
+        .iter()
+        .map(|&(at, line)| {
+            if uncomment {
+                let at = at + indent_of(line);
+                let space = text[at + 2..].starts_with(' ');
+                (at, String::new(), 2 + usize::from(space))
+            } else {
+                (at + column, "// ".to_owned(), 0)
+            }
+        })
+        .collect();
+    splice(text, &edits, anchor, cursor)
+}
+
+/// `(where, what to insert, how many bytes to remove first)`.
+type Edit = (usize, String, usize);
+
+/// `text` with `edits` (ascending, not overlapping) applied and the
+/// selection carried along. An old offset moves by every edit at or
+/// before it; one inside removed text lands at the edit's start.
+fn splice(text: &str, edits: &[Edit], anchor: usize, cursor: usize) -> (String, usize, usize) {
+    let mut out = String::with_capacity(text.len());
     let mut copied = 0;
-    for &(line, added, removed) in &edits {
-        out.push_str(&text[copied..line]);
-        out.push_str(&" ".repeat(added));
-        copied = line + removed;
+    for (at, insert, removed) in edits {
+        out.push_str(&text[copied..*at]);
+        out.push_str(insert);
+        copied = at + removed;
     }
     out.push_str(&text[copied..]);
-    // Shift an old offset by every edit at or before it; a position
-    // inside removed whitespace lands at its line's new start.
     let map = |pos: usize| {
         let shift: isize = edits
             .iter()
-            .filter(|(line, _, _)| *line <= pos)
-            .map(|&(line, added, removed)| added as isize - (pos - line).min(removed) as isize)
+            .filter(|(at, _, _)| *at <= pos)
+            .map(|(at, insert, removed)| insert.len() as isize - (pos - at).min(*removed) as isize)
             .sum();
         (pos as isize + shift) as usize
     };
@@ -184,6 +316,16 @@ pub fn line_offset(text: &str, line: usize) -> usize {
         .map(str::len)
         .sum::<usize>()
         .min(line_start(text, text.len()))
+}
+
+/// The 0-based line and character column of byte `offset`.
+pub fn line_col(text: &str, offset: usize) -> (usize, usize) {
+    let before = &text[..boundary(text, offset)];
+    let line = before.matches('\n').count();
+    (
+        line,
+        before[line_start(before, before.len())..].chars().count(),
+    )
 }
 
 fn boundary(text: &str, pos: usize) -> usize {
@@ -286,5 +428,81 @@ mod tests {
         let (out, caret, _) = apply(text, text.len(), text.len(), Key::Newline);
         assert_eq!(out, "  é\n  ");
         assert_eq!(caret, out.len());
+    }
+
+    #[test]
+    fn a_position_is_a_line_and_a_character_column() {
+        use super::line_col;
+        assert_eq!(line_col("ab\ncd", 0), (0, 0));
+        assert_eq!(line_col("ab\ncd", 4), (1, 1));
+        assert_eq!(line_col("ab\n", 3), (1, 0));
+        // Columns count characters, not bytes.
+        assert_eq!(line_col("é(x", 3), (0, 2));
+    }
+
+    #[test]
+    fn enter_indents_after_an_open_brace_and_splits_a_pair() {
+        use super::{Key, apply};
+        assert_eq!(
+            apply("  f() {", 7, 7, Key::Newline),
+            ("  f() {\n      ".into(), 14, 14)
+        );
+        // Trailing spaces after the brace don't matter.
+        assert_eq!(apply("{ ", 2, 2, Key::Newline).0, "{ \n    ");
+        // `{|}` opens a block with the closing brace on its own line.
+        assert_eq!(
+            apply("  {}", 3, 3, Key::Newline),
+            ("  {\n      \n  }".into(), 10, 10)
+        );
+        // A brace elsewhere on the line isn't an open block.
+        assert_eq!(apply("a { b", 5, 5, Key::Newline).0, "a { b\n");
+    }
+
+    #[test]
+    fn ctrl_slash_comments_and_uncomments_whole_lines() {
+        use super::{Key, apply};
+        let text = "  a;\n\n    b;\n";
+        // Both code lines, at the shallowest indent; the blank is skipped.
+        let (out, anchor, cursor) = apply(text, 0, 9, Key::ToggleComment);
+        assert_eq!(out, "  // a;\n\n  //   b;\n");
+        assert_eq!((anchor, cursor), (0, 15));
+        // Toggling again restores it, selection included.
+        assert_eq!(
+            apply(&out, anchor, cursor, Key::ToggleComment),
+            (text.into(), 0, 9)
+        );
+        // A single line from a caret; a lone `//` without a space.
+        assert_eq!(
+            apply("x;", 1, 1, Key::ToggleComment),
+            ("// x;".into(), 4, 4)
+        );
+        assert_eq!(apply("//x;", 3, 3, Key::ToggleComment), ("x;".into(), 1, 1));
+        // Mixed lines get commented, not uncommented.
+        assert_eq!(
+            apply("// a\nb", 0, 7, Key::ToggleComment).0,
+            "// // a\n// b"
+        );
+        // Nothing but blanks: nothing to do.
+        assert_eq!(apply("\n", 0, 0, Key::ToggleComment).0, "\n");
+    }
+
+    #[test]
+    fn brackets_close_themselves_and_are_typed_over() {
+        use super::{Key, apply};
+        // At the end, or before a space or a closer, the pair appears.
+        assert_eq!(apply("f", 1, 1, Key::Open('(')), ("f()".into(), 2, 2));
+        assert_eq!(apply("a b", 1, 1, Key::Open('[')), ("a[] b".into(), 2, 2));
+        assert_eq!(apply("{)", 1, 1, Key::Open('(')), ("{())".into(), 2, 2));
+        // Before a word it types alone (unchanged: the box handles it).
+        assert_eq!(apply("x", 0, 0, Key::Open('(')), ("x".into(), 0, 0));
+        // A selection is wrapped and stays selected.
+        assert_eq!(apply("abc", 1, 2, Key::Open('(')), ("a(b)c".into(), 2, 3));
+        // The closer is typed over; elsewhere it is left to the box.
+        assert_eq!(apply("f()", 2, 2, Key::Close(')')), ("f()".into(), 3, 3));
+        assert_eq!(apply("f(", 2, 2, Key::Close(')')), ("f(".into(), 2, 2));
+        // Backspace between a pair removes both.
+        assert_eq!(apply("f()", 2, 2, Key::Backspace), ("f".into(), 1, 1));
+        assert_eq!(apply("f(x)", 2, 2, Key::Backspace), ("f(x)".into(), 2, 2));
+        assert_eq!(apply("f()", 1, 2, Key::Backspace), ("f()".into(), 1, 2));
     }
 }

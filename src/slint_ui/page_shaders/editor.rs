@@ -494,13 +494,26 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     app.on_shader_code_layer(|text, index| {
         shaders::tokens::layer(&text, usize::try_from(index).unwrap_or(usize::MAX)).into()
     });
+    // What to highlight at the caret (the matching bracket).
+    app.on_shader_code_marks(|text, cursor| {
+        let cursor = usize::try_from(cursor).unwrap_or(0);
+        let marks: Vec<Mark> = shaders::tokens::bracket_pair(&text, cursor)
+            .into_iter()
+            .flat_map(|(a, b)| [a, b])
+            .map(|at| {
+                let (line, col) = shaders::code_edit::line_col(&text, at);
+                Mark {
+                    line: line as i32,
+                    col: col as i32,
+                    len: 1,
+                }
+            })
+            .collect();
+        Rc::new(VecModel::from(marks)).into()
+    });
     // Code-editor keys: pure text surgery, see shaders::code_edit.
     app.on_shader_code_key(|text, anchor, cursor, kind| {
-        let key = match kind.as_str() {
-            "outdent" => shaders::code_edit::Key::Outdent,
-            "newline" => shaders::code_edit::Key::Newline,
-            _ => shaders::code_edit::Key::Indent,
-        };
+        let key = code_key_named(&kind);
         let offset = |value: i32| usize::try_from(value).unwrap_or(0);
         let (text, anchor, cursor) =
             shaders::code_edit::apply(&text, offset(anchor), offset(cursor), key);
@@ -540,4 +553,24 @@ fn hints_model(hints: Vec<shaders::completion::Hint>) -> slint::ModelRc<CodeHint
         })
         .collect();
     Rc::new(VecModel::from(hints)).into()
+}
+
+/// The editor key a `code-key` kind names: `open(`, `close)`, or a word.
+fn code_key_named(kind: &str) -> shaders::code_edit::Key {
+    use shaders::code_edit::Key;
+    let bracket = |prefix: &str| {
+        kind.strip_prefix(prefix)
+            .and_then(|rest| rest.chars().next())
+    };
+    match kind {
+        "outdent" => Key::Outdent,
+        "newline" => Key::Newline,
+        "comment" => Key::ToggleComment,
+        "backspace" => Key::Backspace,
+        _ => match (bracket("open"), bracket("close")) {
+            (Some(open), _) => Key::Open(open),
+            (_, Some(close)) => Key::Close(close),
+            _ => Key::Indent,
+        },
+    }
 }

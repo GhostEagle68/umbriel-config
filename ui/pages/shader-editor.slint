@@ -5,7 +5,13 @@
 
 import { ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 import { ActionButton } from "../widgets.slint";
-import { CodeEdit, CodeHint, Diagnostic, ShaderStep } from "../types.slint";
+import {
+    CodeEdit,
+    CodeHint,
+    Diagnostic,
+    Mark,
+    ShaderStep,
+} from "../types.slint";
 import { Theme } from "../theme.slint";
 import {
     ShaderBuilderPanel,
@@ -54,6 +60,8 @@ export component ShaderEditorPage inherits Rectangle {
     pure callback code-layer(string, int) -> string;
     in property <[Diagnostic]> diagnostics;
     callback code-line-offset(string, int) -> int;
+    pure callback code-marks(string, int) -> [Mark];
+
     pure callback code-suggest(string, int, int) -> [CodeHint];
     callback code-complete(string, int, string) -> CodeEdit;
     // What umbriel gives a shader of kind `int`, for the reference panel.
@@ -198,7 +206,7 @@ export component ShaderEditorPage inherits Rectangle {
                         }
 
                         Text {
-                            text: "Tab indents or takes a suggestion · Shift+Tab outdents · Enter keeps the indent · right-click to cut, copy or paste";
+                            text: "Tab indents or takes a suggestion · Shift+Tab outdents · Ctrl+/ comments · Ctrl+G goes to a line · right-click for cut, copy, paste";
                             color: Theme.text-2;
                             font-size: Theme.font-small;
                             horizontal-alignment: right;
@@ -222,6 +230,8 @@ export component ShaderEditorPage inherits Rectangle {
                             layer(text, index) => { root.code-layer(text, index) }
                             problems: root.diagnostics;
                             line-offset(text, line) => { root.code-line-offset(text, line) }
+                            marks(text, cursor) => { root.code-marks(text, cursor) }
+
                             suggest(text, cursor, kind) => { root.code-suggest(text, cursor, kind) }
                             complete(text, cursor, label) => { root.code-complete(text, cursor, label) }
                             history(kind) => { root.code-history(kind) }

@@ -2,7 +2,13 @@
 // discovered GLSL effects, the per-event assignment rows, the visual
 // effect builder, and the live preview row.
 
-import { ComboBox, ScrollView, Slider, Switch } from "std-widgets.slint";
+import {
+    ComboBox,
+    LineEdit,
+    ScrollView,
+    Slider,
+    Switch,
+} from "std-widgets.slint";
 import {
     ActionButton,
     PageHeader,
@@ -14,6 +20,7 @@ import {
     CodeEdit,
     CodeHint,
     Diagnostic,
+    Mark,
     ShaderAssignment,
     KindCount,
     ShaderInfo,
@@ -1183,7 +1190,10 @@ export component ShaderCodeEditor inherits Rectangle {
     // The compile problems to mark (gutter bar, line band, list below).
     in property <[Diagnostic]> problems;
     // The byte offset where a 1-based line starts, for jumping to it.
-    callback line-offset(string, int) -> int;
+        callback line-offset(string, int) -> int;
+    // What to highlight at the caret: the bracket it sits beside and
+    // that bracket's partner.
+    pure callback marks(string, int) -> [Mark];
 
     property <length> caret-x;
     property <length> caret-y;
@@ -1196,7 +1206,10 @@ export component ShaderCodeEditor inherits Rectangle {
     property <bool> hints-open: root.suggesting && root.hints.length > 0 && input.has-focus;
     // The distance between lines. Measured over many lines: one line's
     // own height is rounded up and would drift down the page.
-    property <length> line-height: probe.preferred-height / 50;
+        property <length> line-height: probe.preferred-height / 50;
+    property <length> char-width: width-probe.preferred-width / 50;
+    property <[Mark]> bracket-marks: root.marks(input.text, input.cursor-position-byte-offset);
+    property <bool> goto-open;
 
     function token-color(index: int) -> color {
         return index == 1 ? Theme.text-2
@@ -1215,13 +1228,19 @@ export component ShaderCodeEditor inherits Rectangle {
     border-color: input.has-focus ? Theme.accent : Theme.border;
     forward-focus: input;
 
-    function apply(kind: string) {
+    // Run an editor key in Rust; false when it left the text and caret as
+    // they were, so the text box should handle the key itself.
+    function apply(kind: string) -> bool {
         let result = root.code-key(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, kind);
+        if (result.text == input.text && result.anchor == input.anchor-position-byte-offset && result.cursor == input.cursor-position-byte-offset) {
+            return false;
+        }
         input.text = result.text;
         input.set-selection-offsets(result.anchor, result.cursor);
         // Read back from the input: reusing result.text after the
         // assignment trips a move bug in Slint 1.16's Rust codegen.
-        root.edited(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, 1);
+                root.edited(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, 1);
+        return true;
     }
 
     changed hints => { root.hint-index = 0; }
@@ -1256,6 +1275,14 @@ export component ShaderCodeEditor inherits Rectangle {
     probe := Text {
         visible: false;
         text: "M\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM";
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+    }
+
+    // One character's width, for placing highlights by column.
+    width-probe := Text {
+        visible: false;
+        text: "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM";
         font-family: Theme.font-mono;
         font-size: Theme.font-small;
     }
@@ -1323,6 +1350,16 @@ export component ShaderCodeEditor inherits Rectangle {
                     viewport-width: max(self.visible-width, input.preferred-width + 2 * Theme.space-s);
                     viewport-height: max(self.visible-height, input.preferred-height + 2 * Theme.space-s);
 
+                    // The brackets that match at the caret.
+                    for mark in root.bracket-marks: Rectangle {
+                        x: Theme.space-s + mark.col * root.char-width;
+                        y: Theme.space-s + mark.line * root.line-height;
+                        width: mark.len * root.char-width;
+                        height: root.line-height;
+                        border-radius: 2px;
+                        background: Theme.accent.with-alpha(0.35);
+                    }
+
                     // A band behind each problem's line.
                 for problem in root.problems: Rectangle {
                         visible: problem.line > 0;
@@ -1386,6 +1423,13 @@ export component ShaderCodeEditor inherits Rectangle {
                             }
                         // Undo/redo before the TextInput's own (stale) history.
                         if (event.modifiers.control && !event.modifiers.alt) {
+                                if (event.text == "/" && root.apply("comment")) {
+                                    return accept;
+                                }
+                                if (event.text == "g" || event.text == "G") {
+                                    root.goto-open = true;
+                                    return accept;
+                                }
                                 if ((event.text == "z" || event.text == "Z") && !event.modifiers.shift) {
                                     root.step-history("undo");
                                     return accept;
@@ -1397,6 +1441,17 @@ export component ShaderCodeEditor inherits Rectangle {
                             }
                             if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
                                 return reject;
+                            }
+                            // Brackets close themselves and are typed over;
+                            // Backspace between a pair takes both.
+                            if ((event.text == "(" || event.text == "[" || event.text == "{") && root.apply("open" + event.text)) {
+                                return accept;
+                            }
+                            if ((event.text == ")" || event.text == "]" || event.text == "}") && root.apply("close" + event.text)) {
+                                return accept;
+                            }
+                            if (event.text == Key.Backspace && root.apply("backspace")) {
+                                return accept;
                             }
                             if (event.text == Key.Backtab || (event.text == Key.Tab && event.modifiers.shift)) {
                                 root.apply("outdent");
@@ -1498,6 +1553,53 @@ export component ShaderCodeEditor inherits Rectangle {
             }
         }
     }
+    // Ctrl+G: a line number, Enter to go, Esc to close.
+    if root.goto-open: Rectangle {
+        width: 220px;
+        height: 40px;
+        x: root.width - self.width - 16px;
+        y: 8px;
+        background: Theme.bg-3;
+        border-radius: Theme.radius-s;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #00000055;
+
+        FocusScope {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    root.goto-open = false;
+                    input.focus();
+                    return accept;
+                }
+                return reject;
+            }
+
+            HorizontalLayout {
+                padding: Theme.space-s;
+                spacing: Theme.space-s;
+
+                Text {
+                    text: "Go to line";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+
+                LineEdit {
+                    input-type: number;
+                    horizontal-stretch: 1;
+                    init => { self.focus(); }
+                    accepted(text) => {
+                        root.goto-open = false;
+                        root.jump(text.to-float());
+                    }
+                }
+            }
+        }
+    }
+
     // The suggestions, under the caret (above it near the bottom).
     if root.hints-open: Rectangle {
         property <length> caret-left: scroll.absolute-position.x - root.absolute-position.x + input.x + root.caret-x + scroll.viewport-x;

@@ -254,6 +254,56 @@ pub fn layer(text: &str, index: usize) -> String {
         .collect()
 }
 
+/// The brackets that match when the caret sits beside one: the byte
+/// offsets of both, in text order. Brackets in comments and directives
+/// don't count. The one before the caret wins over the one after it.
+pub fn bracket_pair(text: &str, cursor: usize) -> Option<(usize, usize)> {
+    let classes = classify(text);
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let after = chars.partition_point(|(at, _)| *at < cursor);
+    let in_code = |i: usize| !matches!(classes[i], Token::Comment | Token::Preproc);
+    for i in [after.wrapping_sub(1), after] {
+        let Some(&(_, ch)) = chars.get(i) else {
+            continue;
+        };
+        let (open, close, forward) = match ch {
+            '(' => ('(', ')', true),
+            ')' => ('(', ')', false),
+            '[' => ('[', ']', true),
+            ']' => ('[', ']', false),
+            '{' => ('{', '}', true),
+            '}' => ('{', '}', false),
+            _ => continue,
+        };
+        if !in_code(i) {
+            continue;
+        }
+        let (same, opposite) = if forward {
+            (open, close)
+        } else {
+            (close, open)
+        };
+        let candidates: Box<dyn Iterator<Item = usize>> = if forward {
+            Box::new(i..chars.len())
+        } else {
+            Box::new((0..=i).rev())
+        };
+        let mut depth = 0;
+        for j in candidates.filter(|&j| in_code(j)) {
+            if chars[j].1 == same {
+                depth += 1;
+            } else if chars[j].1 == opposite {
+                depth -= 1;
+                if depth == 0 {
+                    let (a, b) = (chars[i].0, chars[j].0);
+                    return Some((a.min(b), a.max(b)));
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,5 +368,29 @@ mod tests {
         assert_eq!(layer("a\nb\n", LINE_NUMBERS), "1\n2\n3");
         assert_eq!(layer("", LINE_NUMBERS), "1");
         assert_eq!(layer("x", LINE_NUMBERS + 1), "");
+    }
+
+    #[test]
+    fn a_bracket_beside_the_caret_finds_its_partner() {
+        let code = "f(a[1], (b))";
+        // After `(` and before `)`, either end, nested pairs skipped.
+        assert_eq!(bracket_pair(code, 2), Some((1, 11)));
+        assert_eq!(bracket_pair(code, 12), Some((1, 11)));
+        assert_eq!(bracket_pair(code, 10), Some((8, 10)));
+        assert_eq!(bracket_pair(code, 11), Some((8, 10)));
+        // The bracket before the caret wins: `)(`.
+        assert_eq!(bracket_pair("(a)(b)", 3), Some((0, 2)));
+        // Nothing beside the caret, or no partner.
+        assert_eq!(bracket_pair(code, 7), None);
+        assert_eq!(bracket_pair("f(a", 2), None);
+        assert_eq!(bracket_pair("", 0), None);
+    }
+
+    #[test]
+    fn brackets_in_comments_are_ignored() {
+        let code = "{ // )\n  x(); /* ( */ }";
+        assert_eq!(bracket_pair(code, 1), Some((0, code.len() - 1)));
+        // A caret by a bracket inside a comment finds nothing.
+        assert_eq!(bracket_pair(code, 6), None);
     }
 }

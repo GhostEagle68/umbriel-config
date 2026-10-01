@@ -346,6 +346,14 @@ export struct CodeHint {
     doc: string,
 }
 
+// A span of one line for the shader editor to highlight: 0-based line
+// and character column, and how many characters.
+export struct Mark {
+    line: int,
+    col: int,
+    len: int,
+}
+
 // One compile problem for the shader editor to mark: its 1-based line
 // (0 when the driver named none) and the driver's message.
 export struct Diagnostic {
