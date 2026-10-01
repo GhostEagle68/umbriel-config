@@ -51,6 +51,7 @@ export component ShaderEditorPage inherits Rectangle {
     callback text-changed(string, int, int, int);
     callback code-history(string) -> CodeEdit;
     callback code-key(string, int, int, string) -> CodeEdit;
+    pure callback code-layer(string, int) -> string;
     // Back: with unsaved code Rust raises confirm-close instead of leaving.
     callback close();
     callback discard();
@@ -200,6 +201,7 @@ export component ShaderEditorPage inherits Rectangle {
                         edited(text, anchor, cursor, kind) => {
                             root.text-changed(text, anchor, cursor, kind);
                         }
+                        layer(text, index) => { root.code-layer(text, index) }
                         history(kind) => { root.code-history(kind) }
                         code-key(text, anchor, cursor, kind) => {
                             root.code-key(text, anchor, cursor, kind)

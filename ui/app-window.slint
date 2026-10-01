@@ -261,6 +261,7 @@ export component AppWindow inherits Window {
     callback shader-code-history(string) -> CodeEdit;
     // Editor keys (Tab/Shift+Tab/Enter) done in Rust; see ShaderCodeEditor.
     callback shader-code-key(string, int, int, string) -> CodeEdit;
+    pure callback shader-code-layer(string, int) -> string;
     callback shader-step-add(string);
     callback shader-builder-reset();
     callback shader-step-remove(int);
@@ -695,6 +696,7 @@ export component AppWindow inherits Window {
                     preview-scrub(v) => { root.shader-preview-scrub(v); }
                     preview-direction-toggled => { root.shader-preview-direction-toggled(); }
                     text-changed(t, a, c, k) => { root.shader-editor-text-changed(t, a, c, k); }
+                    code-layer(t, i) => { root.shader-code-layer(t, i) }
                     code-history(k) => { root.shader-code-history(k) }
                     code-key(t, a, c, k) => { root.shader-code-key(t, a, c, k) }
                     close => { root.shader-editor-close(); }

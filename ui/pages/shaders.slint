@@ -1154,6 +1154,12 @@ export component ShaderPreviewRow inherits Rectangle {
 // Undo/redo come from Rust too (`history`): the TextInput's own history
 // goes stale once the text is replaced from outside, and replaying it
 // can crash.
+//
+// Highlighting: the input's text is transparent and sits over one copy
+// of the code per token class (`layer`), each blanked except for its
+// class, so the copies lay out exactly like the input. The input then
+// can't draw its caret, so the editor draws one. The gutter is another
+// `layer` copy (line numbers) that follows the scroll.
 export component ShaderCodeEditor inherits Rectangle {
     in-out property <string> text <=> input.text;
     // (text, anchor, cursor, kind): kind 0 = typed, 1 = a key edit
@@ -1162,6 +1168,25 @@ export component ShaderCodeEditor inherits Rectangle {
     callback code-key(string, int, int, string) -> CodeEdit;
     // "undo" / "redo": the state to restore, or cursor -1 for none.
     callback history(string) -> CodeEdit;
+    // A copy of the text for one layer: 0..7 the token classes (plain,
+    // comment, keyword, type, builtin, umbriel, number, preprocessor),
+    // 8 the line numbers. See src/config/shaders/tokens.rs.
+    pure callback layer(string, int) -> string;
+
+    property <length> caret-x;
+    property <length> caret-y;
+    property <bool> caret-on: true;
+
+    function token-color(index: int) -> color {
+        return index == 1 ? Theme.text-2
+            : index == 2 ? Theme.accent
+            : index == 3 ? Theme.syn-type
+            : index == 4 ? Theme.syn-builtin
+            : index == 5 ? Theme.syn-umbriel
+            : index == 6 ? Theme.syn-number
+            : index == 7 ? Theme.syn-preproc
+            : Theme.text-1;
+    }
 
     background: Theme.bg-0;
     border-radius: Theme.radius-s;
@@ -1188,90 +1213,149 @@ export component ShaderCodeEditor inherits Rectangle {
         root.edited(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, 2);
     }
 
-    ContextMenuArea {
-        Menu {
-            MenuItem {
-                title: "Cut";
-                activated => { input.cut(); }
-            }
+    // One line's height, for the caret.
+    probe := Text {
+        visible: false;
+        text: "M";
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+    }
 
-            MenuItem {
-                title: "Copy";
-                activated => { input.copy(); }
-            }
+    // Blinks while focused; a move shows the caret at once.
+    Timer {
+        interval: 530ms;
+        running: input.has-focus;
+        triggered => { root.caret-on = !root.caret-on; }
+    }
 
-            MenuItem {
-                title: "Paste";
-                activated => { input.paste(); }
-            }
+    HorizontalLayout {
+        gutter := Rectangle {
+            // Whole pixels, so the code never starts between two.
+            width: ceil(numbers.preferred-width / 1px) * 1px + 2 * Theme.space-s;
+            clip: true;
 
-            MenuItem {
-                title: "Select All";
-                activated => { input.select-all(); }
+            numbers := Text {
+                x: Theme.space-s;
+                y: Theme.space-s + scroll.viewport-y;
+                text: root.layer(input.text, 8);
+                color: Theme.text-2;
+                horizontal-alignment: right;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-small;
             }
         }
 
-        scroll := ScrollView {
-            viewport-width: max(self.visible-width, input.preferred-width + 2 * Theme.space-s);
-            viewport-height: max(self.visible-height, input.preferred-height + 2 * Theme.space-s);
-
-            input := TextInput {
-                x: Theme.space-s;
-                y: Theme.space-s;
-                width: max(scroll.visible-width, self.preferred-width + 2 * Theme.space-s) - 2 * Theme.space-s;
-                height: max(scroll.visible-height, self.preferred-height + 2 * Theme.space-s) - 2 * Theme.space-s;
-                single-line: false;
-                wrap: no-wrap;
-                font-family: Theme.font-mono;
-                font-size: Theme.font-small;
-                color: Theme.text-1;
-
-                edited => {
-                    root.edited(self.text, self.anchor-position-byte-offset, self.cursor-position-byte-offset, 0);
+        ContextMenuArea {
+            Menu {
+                MenuItem {
+                    title: "Cut";
+                    activated => { input.cut(); }
                 }
 
-                key-pressed(event) => {
-                    // Undo/redo before the TextInput's own (stale) history.
-                    if (event.modifiers.control && !event.modifiers.alt) {
-                        if ((event.text == "z" || event.text == "Z") && !event.modifiers.shift) {
-                            root.step-history("undo");
-                            return accept;
-                        }
-                        if (event.text == "z" || event.text == "Z" || event.text == "y" || event.text == "Y") {
-                            root.step-history("redo");
-                            return accept;
-                        }
+                MenuItem {
+                    title: "Copy";
+                    activated => { input.copy(); }
+                }
+
+                MenuItem {
+                    title: "Paste";
+                    activated => { input.paste(); }
+                }
+
+                MenuItem {
+                    title: "Select All";
+                    activated => { input.select-all(); }
+                }
+            }
+
+            scroll := ScrollView {
+                viewport-width: max(self.visible-width, input.preferred-width + 2 * Theme.space-s);
+                viewport-height: max(self.visible-height, input.preferred-height + 2 * Theme.space-s);
+
+                for index in 8: Text {
+                    x: Theme.space-s;
+                    y: Theme.space-s;
+                    text: root.layer(input.text, index);
+                    color: root.token-color(index);
+                    wrap: no-wrap;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-small;
+                }
+
+                input := TextInput {
+                    x: Theme.space-s;
+                    y: Theme.space-s;
+                    width: max(scroll.visible-width, self.preferred-width + 2 * Theme.space-s) - 2 * Theme.space-s;
+                    height: max(scroll.visible-height, self.preferred-height + 2 * Theme.space-s) - 2 * Theme.space-s;
+                    single-line: false;
+                    wrap: no-wrap;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-small;
+                    // The colored copies underneath show through.
+                    color: transparent;
+                    selection-foreground-color: transparent;
+                    selection-background-color: Theme.accent.with-alpha(0.35);
+
+                    edited => {
+                        root.edited(self.text, self.anchor-position-byte-offset, self.cursor-position-byte-offset, 0);
                     }
-                    if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+
+                    key-pressed(event) => {
+                        // Undo/redo before the TextInput's own (stale) history.
+                        if (event.modifiers.control && !event.modifiers.alt) {
+                            if ((event.text == "z" || event.text == "Z") && !event.modifiers.shift) {
+                                root.step-history("undo");
+                                return accept;
+                            }
+                            if (event.text == "z" || event.text == "Z" || event.text == "y" || event.text == "Y") {
+                                root.step-history("redo");
+                                return accept;
+                            }
+                        }
+                        if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+                            return reject;
+                        }
+                        if (event.text == Key.Backtab || (event.text == Key.Tab && event.modifiers.shift)) {
+                            root.apply("outdent");
+                            return accept;
+                        }
+                        if (event.text == Key.Tab) {
+                            root.apply("indent");
+                            return accept;
+                        }
+                        if (event.text == Key.Return && !event.modifiers.shift) {
+                            root.apply("newline");
+                            return accept;
+                        }
                         return reject;
                     }
-                    if (event.text == Key.Backtab || (event.text == Key.Tab && event.modifiers.shift)) {
-                        root.apply("outdent");
-                        return accept;
+
+                    // Keep the caret in view, as std TextEdit does.
+                    cursor-position-changed(cpos) => {
+                        root.caret-x = cpos.x;
+                        root.caret-y = cpos.y;
+                        root.caret-on = true;
+                        if (cpos.x + scroll.viewport-x < 12px) {
+                            scroll.viewport-x = min(0px, max(scroll.visible-width - scroll.viewport-width, -cpos.x + 12px));
+                        } else if (cpos.x + scroll.viewport-x > scroll.visible-width - 12px) {
+                            scroll.viewport-x = min(0px, max(scroll.visible-width - scroll.viewport-width, scroll.visible-width - cpos.x - 12px));
+                        }
+                        if (cpos.y + scroll.viewport-y < 12px) {
+                            scroll.viewport-y = min(0px, max(scroll.visible-height - scroll.viewport-height, -cpos.y + 12px));
+                        } else if (cpos.y + scroll.viewport-y > scroll.visible-height - 32px) {
+                            scroll.viewport-y = min(0px, max(scroll.visible-height - scroll.viewport-height, scroll.visible-height - cpos.y - 32px));
+                        }
                     }
-                    if (event.text == Key.Tab) {
-                        root.apply("indent");
-                        return accept;
-                    }
-                    if (event.text == Key.Return && !event.modifiers.shift) {
-                        root.apply("newline");
-                        return accept;
-                    }
-                    return reject;
                 }
 
-                // Keep the caret in view, as std TextEdit does.
-                cursor-position-changed(cpos) => {
-                    if (cpos.x + scroll.viewport-x < 12px) {
-                        scroll.viewport-x = min(0px, max(scroll.visible-width - scroll.viewport-width, -cpos.x + 12px));
-                    } else if (cpos.x + scroll.viewport-x > scroll.visible-width - 12px) {
-                        scroll.viewport-x = min(0px, max(scroll.visible-width - scroll.viewport-width, scroll.visible-width - cpos.x - 12px));
-                    }
-                    if (cpos.y + scroll.viewport-y < 12px) {
-                        scroll.viewport-y = min(0px, max(scroll.visible-height - scroll.viewport-height, -cpos.y + 12px));
-                    } else if (cpos.y + scroll.viewport-y > scroll.visible-height - 32px) {
-                        scroll.viewport-y = min(0px, max(scroll.visible-height - scroll.viewport-height, scroll.visible-height - cpos.y - 32px));
-                    }
+                // The caret: hidden while a range is selected.
+                Rectangle {
+                    x: input.x + root.caret-x;
+                    y: input.y + root.caret-y;
+                    width: 2px;
+                    height: probe.preferred-height;
+                    background: Theme.text-1;
+                    visible: input.has-focus && root.caret-on && input.anchor-position-byte-offset == input.cursor-position-byte-offset;
                 }
             }
         }

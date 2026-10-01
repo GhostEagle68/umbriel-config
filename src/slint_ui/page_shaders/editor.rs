@@ -453,6 +453,10 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             }
         });
     }
+    // The code pane's highlight layers and gutter, see shaders::tokens.
+    app.on_shader_code_layer(|text, index| {
+        shaders::tokens::layer(&text, usize::try_from(index).unwrap_or(usize::MAX)).into()
+    });
     // Code-editor keys: pure text surgery, see shaders::code_edit.
     app.on_shader_code_key(|text, anchor, cursor, kind| {
         let key = match kind.as_str() {

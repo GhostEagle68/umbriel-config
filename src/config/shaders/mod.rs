@@ -947,6 +947,8 @@ pub mod builder;
 
 pub mod code_edit;
 
+pub mod tokens;
+
 #[cfg(test)]
 mod tests {
     use super::*;
