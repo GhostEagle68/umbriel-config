@@ -40,6 +40,7 @@ import {
     SectionRow,
     SettingsCard,
     CodeEdit,
+    Diagnostic,
     DeskMonitor,
     DeskStyle,
     HomeLink,
@@ -262,6 +263,9 @@ export component AppWindow inherits Window {
     // Editor keys (Tab/Shift+Tab/Enter) done in Rust; see ShaderCodeEditor.
     callback shader-code-key(string, int, int, string) -> CodeEdit;
     pure callback shader-code-layer(string, int) -> string;
+    // The compile problems of the code being edited, and where a line starts.
+    in property <[Diagnostic]> shader-diagnostics;
+    callback shader-code-line-offset(string, int) -> int;
     callback shader-step-add(string);
     callback shader-builder-reset();
     callback shader-step-remove(int);
@@ -697,6 +701,8 @@ export component AppWindow inherits Window {
                     preview-direction-toggled => { root.shader-preview-direction-toggled(); }
                     text-changed(t, a, c, k) => { root.shader-editor-text-changed(t, a, c, k); }
                     code-layer(t, i) => { root.shader-code-layer(t, i) }
+                    diagnostics: root.shader-diagnostics;
+                    code-line-offset(t, l) => { root.shader-code-line-offset(t, l) }
                     code-history(k) => { root.shader-code-history(k) }
                     code-key(t, a, c, k) => { root.shader-code-key(t, a, c, k) }
                     close => { root.shader-editor-close(); }

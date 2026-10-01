@@ -947,6 +947,8 @@ pub mod builder;
 
 pub mod code_edit;
 
+pub mod diagnostics;
+
 pub mod tokens;
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
 
 import { ComboBox, LineEdit } from "std-widgets.slint";
 import { ActionButton } from "../widgets.slint";
-import { CodeEdit, ShaderStep } from "../types.slint";
+import { CodeEdit, Diagnostic, ShaderStep } from "../types.slint";
 import { Theme } from "../theme.slint";
 import {
     ShaderBuilderPanel,
@@ -52,6 +52,8 @@ export component ShaderEditorPage inherits Rectangle {
     callback code-history(string) -> CodeEdit;
     callback code-key(string, int, int, string) -> CodeEdit;
     pure callback code-layer(string, int) -> string;
+    in property <[Diagnostic]> diagnostics;
+    callback code-line-offset(string, int) -> int;
     // Back: with unsaved code Rust raises confirm-close instead of leaving.
     callback close();
     callback discard();
@@ -202,6 +204,8 @@ export component ShaderEditorPage inherits Rectangle {
                             root.text-changed(text, anchor, cursor, kind);
                         }
                         layer(text, index) => { root.code-layer(text, index) }
+                        problems: root.diagnostics;
+                        line-offset(text, line) => { root.code-line-offset(text, line) }
                         history(kind) => { root.code-history(kind) }
                         code-key(text, anchor, cursor, kind) => {
                             root.code-key(text, anchor, cursor, kind)

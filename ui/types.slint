@@ -338,6 +338,13 @@ export struct Toast {
     action: string,
 }
 
+// One compile problem for the shader editor to mark: its 1-based line
+// (0 when the driver named none) and the driver's message.
+export struct Diagnostic {
+    line: int,
+    message: string,
+}
+
 // A colored piece of a line in the file viewer. `kind`: 0 plain,
 // 1 comment, 2 table header, 3 key, 4 string, 5 number or bool,
 // 6 punctuation (toml_lines::Token, in order).

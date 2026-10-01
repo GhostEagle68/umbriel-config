@@ -176,6 +176,16 @@ fn line_start(text: &str, pos: usize) -> usize {
     text[..pos].rfind('\n').map_or(0, |i| i + 1)
 }
 
+/// The byte offset where 1-based `line` starts; the last line's start
+/// when `line` is past the end, the first's for 0.
+pub fn line_offset(text: &str, line: usize) -> usize {
+    text.split_inclusive('\n')
+        .take(line.saturating_sub(1))
+        .map(str::len)
+        .sum::<usize>()
+        .min(line_start(text, text.len()))
+}
+
 fn boundary(text: &str, pos: usize) -> usize {
     let mut pos = pos.min(text.len());
     while !text.is_char_boundary(pos) {
@@ -183,8 +193,24 @@ fn boundary(text: &str, pos: usize) -> usize {
     }
     pos
 }
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_line_starts_after_the_newlines_before_it() {
+        use super::line_offset;
+        let text = "ab\ncd\n\nef";
+        assert_eq!(line_offset(text, 1), 0);
+        assert_eq!(line_offset(text, 2), 3);
+        assert_eq!(line_offset(text, 3), 6);
+        assert_eq!(line_offset(text, 4), 7);
+        // Past the end: the last line. Line 0: the first.
+        assert_eq!(line_offset(text, 99), 7);
+        assert_eq!(line_offset(text, 0), 0);
+        assert_eq!(line_offset("ab\n", 5), 3);
+        assert_eq!(line_offset("", 2), 0);
+    }
+
     #[test]
     fn tab_pads_to_the_next_tab_stop() {
         use super::{Key, apply};

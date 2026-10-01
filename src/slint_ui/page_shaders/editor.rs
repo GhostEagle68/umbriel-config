@@ -453,6 +453,9 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             }
         });
     }
+    app.on_shader_code_line_offset(|text, line| {
+        shaders::code_edit::line_offset(&text, usize::try_from(line).unwrap_or(0)) as i32
+    });
     // The code pane's highlight layers and gutter, see shaders::tokens.
     app.on_shader_code_layer(|text, index| {
         shaders::tokens::layer(&text, usize::try_from(index).unwrap_or(usize::MAX)).into()

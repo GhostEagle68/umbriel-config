@@ -201,9 +201,28 @@ pub(in crate::slint_ui) fn poll_shader_preview(app: &AppWindow, shell: &Rc<RefCe
                 app.set_shader_preview_ready(false);
                 app.set_shader_preview_note(format!("Preview unavailable: {err}").into());
             }
-            shader_preview::PreviewEvent::Compiled(problems) => {
-                let note = problems.map_or_else(String::new, |err| format!("GLSL error: {err}"));
-                app.set_shader_preview_note(note.into());
+            shader_preview::PreviewEvent::Compiled(log) => {
+                // The editor marks problems in its code; elsewhere
+                // (the picker) one summary line is all there is room for.
+                if app.get_shader_editor_open() {
+                    let lines = app.get_shader_editor_text().split('\n').count();
+                    let problems: Vec<Diagnostic> = log
+                        .as_deref()
+                        .map(shaders::diagnostics::parse)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|problem| Diagnostic {
+                            line: problem.line.min(lines) as i32,
+                            message: problem.message.into(),
+                        })
+                        .collect();
+                    app.set_shader_diagnostics(Rc::new(VecModel::from(problems)).into());
+                } else {
+                    let note = log.map_or_else(String::new, |log| {
+                        format!("GLSL error: {}", shader_preview::summarize_log(&log))
+                    });
+                    app.set_shader_preview_note(note.into());
+                }
             }
             shader_preview::PreviewEvent::Frame(width, height, pixels) => {
                 app.set_shader_preview_image(frame_image(width, height, &pixels));

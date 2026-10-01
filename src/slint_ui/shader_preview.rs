@@ -225,7 +225,7 @@ pub enum PreviewEvent {
     Ready,
     /// Context creation failed — the preview is off until app restart.
     Unavailable(String),
-    /// Compile result: None is clean, Some is a summarized GLSL error.
+    /// Compile result: None is clean, Some is the driver's GLSL log.
     Compiled(Option<String>),
     /// A rendered frame: RGBA8, rows top-down.
     Frame(u32, u32, Vec<u8>),
@@ -570,7 +570,7 @@ impl PreviewState {
             if !self.gl.get_program_link_status(program) {
                 let log = self.gl.get_program_info_log(program);
                 self.gl.delete_program(program);
-                return Err(summarize_log(&log));
+                return Err(clean_log(&log));
             }
         }
         let linked = unsafe {
@@ -696,7 +696,7 @@ fn compile_shader(gl: &glow::Context, kind: u32, source: &str) -> Result<glow::S
         if !gl.get_shader_compile_status(shader) {
             let log = gl.get_shader_info_log(shader);
             gl.delete_shader(shader);
-            return Err(summarize_log(&log));
+            return Err(clean_log(&log));
         }
     }
     Ok(shader)
@@ -774,21 +774,26 @@ pub fn finalize_readback(pixels: Vec<u8>, width: usize, height: usize) -> Vec<u8
     out
 }
 
-/// Driver logs are verbose; keep the first real lines so the note stays
-/// one glance long.
-fn summarize_log(log: &str) -> String {
-    let mut summary = String::new();
-    for line in log
-        .lines()
+/// A driver log without its notes and blank lines, one problem per line.
+fn clean_log(log: &str) -> String {
+    let lines: Vec<&str> = log_lines(log).collect();
+    if lines.is_empty() {
+        "shader rejected by the driver".to_owned()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn log_lines(log: &str) -> impl Iterator<Item = &str> {
+    log.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with("NOTE:"))
-        .take(2)
-    {
-        if !summary.is_empty() {
-            summary.push_str(" · ");
-        }
-        summary.push_str(line);
-    }
+}
+
+/// Driver logs are verbose; keep the first real lines so the note stays
+/// one glance long.
+pub fn summarize_log(log: &str) -> String {
+    let mut summary = log_lines(log).take(2).collect::<Vec<_>>().join(" · ");
     if summary.len() > 200 {
         summary.truncate(200);
         summary.push('…');
@@ -1429,6 +1434,15 @@ mod tests {
             .compile("vec4 animation(vec2 uv) { return totally_undeclared; }")
             .expect_err("broken shader must fail");
         assert!(!err.is_empty());
+        // The log's lines are the editor's own: the error is on line 3.
+        let err = state
+            .compile("// one\nvec4 animation(vec2 uv) {\n    return totally_undeclared;\n}\n")
+            .expect_err("broken shader must fail");
+        let problems = umbriel_config::config::shaders::diagnostics::parse(&err);
+        assert!(
+            problems.iter().any(|problem| problem.line == 3),
+            "{err:?} -> {problems:?}"
+        );
         // The last good program survives a failed compile.
         assert!(state.render(0.0, 0.0, -1.0).is_ok());
         // Switching the stand-in re-uploads the frames at the target's

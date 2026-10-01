@@ -12,6 +12,7 @@ import {
 } from "../widgets.slint";
 import {
     CodeEdit,
+    Diagnostic,
     ShaderAssignment,
     KindCount,
     ShaderInfo,
@@ -1172,10 +1173,17 @@ export component ShaderCodeEditor inherits Rectangle {
     // comment, keyword, type, builtin, umbriel, number, preprocessor),
     // 8 the line numbers. See src/config/shaders/tokens.rs.
     pure callback layer(string, int) -> string;
+    // The compile problems to mark (gutter bar, line band, list below).
+    in property <[Diagnostic]> problems;
+    // The byte offset where a 1-based line starts, for jumping to it.
+    callback line-offset(string, int) -> int;
 
     property <length> caret-x;
     property <length> caret-y;
     property <bool> caret-on: true;
+    // The distance between lines. Measured over many lines: one line's
+    // own height is rounded up and would drift down the page.
+    property <length> line-height: probe.preferred-height / 50;
 
     function token-color(index: int) -> color {
         return index == 1 ? Theme.text-2
@@ -1203,6 +1211,14 @@ export component ShaderCodeEditor inherits Rectangle {
         root.edited(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, 1);
     }
 
+    // Put the caret at the start of a problem's line (the editor
+    // scrolls to it as it does for any caret move).
+    function jump(line: int) {
+        let at = root.line-offset(input.text, line);
+        input.set-selection-offsets(at, at);
+        input.focus();
+    }
+
     function step-history(kind: string) {
         let result = root.history(kind);
         if (result.cursor < 0) {
@@ -1213,10 +1229,9 @@ export component ShaderCodeEditor inherits Rectangle {
         root.edited(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, 2);
     }
 
-    // One line's height, for the caret.
     probe := Text {
         visible: false;
-        text: "M";
+        text: "M\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM\nM";
         font-family: Theme.font-mono;
         font-size: Theme.font-small;
     }
@@ -1228,134 +1243,211 @@ export component ShaderCodeEditor inherits Rectangle {
         triggered => { root.caret-on = !root.caret-on; }
     }
 
-    HorizontalLayout {
-        gutter := Rectangle {
+    VerticalLayout {
+        HorizontalLayout {
+            vertical-stretch: 1;
+
+            gutter := Rectangle {
             // Whole pixels, so the code never starts between two.
             width: ceil(numbers.preferred-width / 1px) * 1px + 2 * Theme.space-s;
-            clip: true;
+                clip: true;
 
-            numbers := Text {
-                x: Theme.space-s;
-                y: Theme.space-s + scroll.viewport-y;
-                text: root.layer(input.text, 8);
-                color: Theme.text-2;
-                horizontal-alignment: right;
-                font-family: Theme.font-mono;
-                font-size: Theme.font-small;
-            }
-        }
-
-        ContextMenuArea {
-            Menu {
-                MenuItem {
-                    title: "Cut";
-                    activated => { input.cut(); }
-                }
-
-                MenuItem {
-                    title: "Copy";
-                    activated => { input.copy(); }
-                }
-
-                MenuItem {
-                    title: "Paste";
-                    activated => { input.paste(); }
-                }
-
-                MenuItem {
-                    title: "Select All";
-                    activated => { input.select-all(); }
-                }
-            }
-
-            scroll := ScrollView {
-                viewport-width: max(self.visible-width, input.preferred-width + 2 * Theme.space-s);
-                viewport-height: max(self.visible-height, input.preferred-height + 2 * Theme.space-s);
-
-                for index in 8: Text {
+                numbers := Text {
                     x: Theme.space-s;
-                    y: Theme.space-s;
-                    text: root.layer(input.text, index);
-                    color: root.token-color(index);
-                    wrap: no-wrap;
+                    y: Theme.space-s + scroll.viewport-y;
+                    text: root.layer(input.text, 8);
+                    color: Theme.text-2;
+                    horizontal-alignment: right;
                     font-family: Theme.font-mono;
                     font-size: Theme.font-small;
                 }
 
-                input := TextInput {
-                    x: Theme.space-s;
-                    y: Theme.space-s;
-                    width: max(scroll.visible-width, self.preferred-width + 2 * Theme.space-s) - 2 * Theme.space-s;
-                    height: max(scroll.visible-height, self.preferred-height + 2 * Theme.space-s) - 2 * Theme.space-s;
-                    single-line: false;
-                    wrap: no-wrap;
-                    font-family: Theme.font-mono;
-                    font-size: Theme.font-small;
+                for problem in root.problems: Rectangle {
+                    visible: problem.line > 0;
+                    x: 0;
+                    y: Theme.space-s + scroll.viewport-y + (problem.line - 1) * root.line-height;
+                    width: 3px;
+                    height: root.line-height;
+                    background: Theme.danger;
+                }
+            }
+
+            ContextMenuArea {
+                Menu {
+                    MenuItem {
+                        title: "Cut";
+                        activated => { input.cut(); }
+                    }
+
+                    MenuItem {
+                        title: "Copy";
+                        activated => { input.copy(); }
+                    }
+
+                    MenuItem {
+                        title: "Paste";
+                        activated => { input.paste(); }
+                    }
+
+                    MenuItem {
+                        title: "Select All";
+                        activated => { input.select-all(); }
+                    }
+                }
+
+                scroll := ScrollView {
+                    viewport-width: max(self.visible-width, input.preferred-width + 2 * Theme.space-s);
+                    viewport-height: max(self.visible-height, input.preferred-height + 2 * Theme.space-s);
+
+                    // A band behind each problem's line.
+                for problem in root.problems: Rectangle {
+                        visible: problem.line > 0;
+                        x: 0;
+                        y: Theme.space-s + (problem.line - 1) * root.line-height;
+                        width: scroll.viewport-width;
+                        height: root.line-height;
+                        background: Theme.danger.with-alpha(0.14);
+                    }
+
+                    for index in 8: Text {
+                        x: Theme.space-s;
+                        y: Theme.space-s;
+                        text: root.layer(input.text, index);
+                        color: root.token-color(index);
+                        wrap: no-wrap;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-small;
+                    }
+
+                    input := TextInput {
+                        x: Theme.space-s;
+                        y: Theme.space-s;
+                        width: max(scroll.visible-width, self.preferred-width + 2 * Theme.space-s) - 2 * Theme.space-s;
+                        height: max(scroll.visible-height, self.preferred-height + 2 * Theme.space-s) - 2 * Theme.space-s;
+                        single-line: false;
+                        wrap: no-wrap;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-small;
                     // The colored copies underneath show through.
                     color: transparent;
-                    selection-foreground-color: transparent;
-                    selection-background-color: Theme.accent.with-alpha(0.35);
+                        selection-foreground-color: transparent;
+                        selection-background-color: Theme.accent.with-alpha(0.35);
 
-                    edited => {
-                        root.edited(self.text, self.anchor-position-byte-offset, self.cursor-position-byte-offset, 0);
-                    }
+                        edited => {
+                            root.edited(self.text, self.anchor-position-byte-offset, self.cursor-position-byte-offset, 0);
+                        }
 
-                    key-pressed(event) => {
+                        key-pressed(event) => {
                         // Undo/redo before the TextInput's own (stale) history.
                         if (event.modifiers.control && !event.modifiers.alt) {
-                            if ((event.text == "z" || event.text == "Z") && !event.modifiers.shift) {
-                                root.step-history("undo");
+                                if ((event.text == "z" || event.text == "Z") && !event.modifiers.shift) {
+                                    root.step-history("undo");
+                                    return accept;
+                                }
+                                if (event.text == "z" || event.text == "Z" || event.text == "y" || event.text == "Y") {
+                                    root.step-history("redo");
+                                    return accept;
+                                }
+                            }
+                            if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+                                return reject;
+                            }
+                            if (event.text == Key.Backtab || (event.text == Key.Tab && event.modifiers.shift)) {
+                                root.apply("outdent");
                                 return accept;
                             }
-                            if (event.text == "z" || event.text == "Z" || event.text == "y" || event.text == "Y") {
-                                root.step-history("redo");
+                            if (event.text == Key.Tab) {
+                                root.apply("indent");
                                 return accept;
                             }
-                        }
-                        if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+                            if (event.text == Key.Return && !event.modifiers.shift) {
+                                root.apply("newline");
+                                return accept;
+                            }
                             return reject;
                         }
-                        if (event.text == Key.Backtab || (event.text == Key.Tab && event.modifiers.shift)) {
-                            root.apply("outdent");
-                            return accept;
-                        }
-                        if (event.text == Key.Tab) {
-                            root.apply("indent");
-                            return accept;
-                        }
-                        if (event.text == Key.Return && !event.modifiers.shift) {
-                            root.apply("newline");
-                            return accept;
-                        }
-                        return reject;
-                    }
 
                     // Keep the caret in view, as std TextEdit does.
                     cursor-position-changed(cpos) => {
-                        root.caret-x = cpos.x;
-                        root.caret-y = cpos.y;
-                        root.caret-on = true;
-                        if (cpos.x + scroll.viewport-x < 12px) {
-                            scroll.viewport-x = min(0px, max(scroll.visible-width - scroll.viewport-width, -cpos.x + 12px));
-                        } else if (cpos.x + scroll.viewport-x > scroll.visible-width - 12px) {
-                            scroll.viewport-x = min(0px, max(scroll.visible-width - scroll.viewport-width, scroll.visible-width - cpos.x - 12px));
+                            root.caret-x = cpos.x;
+                            root.caret-y = cpos.y;
+                            root.caret-on = true;
+                            if (cpos.x + scroll.viewport-x < 12px) {
+                                scroll.viewport-x = min(0px, max(scroll.visible-width - scroll.viewport-width, -cpos.x + 12px));
+                            } else if (cpos.x + scroll.viewport-x > scroll.visible-width - 12px) {
+                                scroll.viewport-x = min(0px, max(scroll.visible-width - scroll.viewport-width, scroll.visible-width - cpos.x - 12px));
+                            }
+                            if (cpos.y + scroll.viewport-y < 12px) {
+                                scroll.viewport-y = min(0px, max(scroll.visible-height - scroll.viewport-height, -cpos.y + 12px));
+                            } else if (cpos.y + scroll.viewport-y > scroll.visible-height - 32px) {
+                                scroll.viewport-y = min(0px, max(scroll.visible-height - scroll.viewport-height, scroll.visible-height - cpos.y - 32px));
+                            }
                         }
-                        if (cpos.y + scroll.viewport-y < 12px) {
-                            scroll.viewport-y = min(0px, max(scroll.visible-height - scroll.viewport-height, -cpos.y + 12px));
-                        } else if (cpos.y + scroll.viewport-y > scroll.visible-height - 32px) {
-                            scroll.viewport-y = min(0px, max(scroll.visible-height - scroll.viewport-height, scroll.visible-height - cpos.y - 32px));
+                    }
+
+                    // The caret: hidden while a range is selected.
+                Rectangle {
+                        x: input.x + root.caret-x;
+                        y: input.y + root.caret-y;
+                        width: 2px;
+                        height: root.line-height;
+                        background: Theme.text-1;
+                        visible: input.has-focus && root.caret-on && input.anchor-position-byte-offset == input.cursor-position-byte-offset;
+                    }
+                }
+            }
+        }
+
+        // The first few problems; a row jumps to its line.
+    if root.problems.length > 0: Rectangle {
+            height: problem-list.preferred-height;
+
+            problem-list := VerticalLayout {
+                padding: Theme.space-s;
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border;
+                }
+
+                for problem[i] in root.problems: VerticalLayout {
+                    if i < 4: Rectangle {
+                        height: 22px;
+
+                        TouchArea {
+                            enabled: problem.line > 0;
+                            mouse-cursor: problem.line > 0 ? pointer : default;
+                            clicked => { root.jump(problem.line); }
+                        }
+
+                        HorizontalLayout {
+                            spacing: Theme.space-m;
+
+                            Text {
+                                text: problem.line > 0 ? "Line " + problem.line : "";
+                                color: Theme.danger;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                width: 64px;
+                            }
+
+                            Text {
+                                text: problem.message;
+                                color: Theme.text-1;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
                         }
                     }
                 }
 
-                // The caret: hidden while a range is selected.
-                Rectangle {
-                    x: input.x + root.caret-x;
-                    y: input.y + root.caret-y;
-                    width: 2px;
-                    height: probe.preferred-height;
-                    background: Theme.text-1;
-                    visible: input.has-focus && root.caret-on && input.anchor-position-byte-offset == input.cursor-position-byte-offset;
+                if root.problems.length > 4: Text {
+                    text: "and " + (root.problems.length - 4) + " more";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
                 }
             }
         }
