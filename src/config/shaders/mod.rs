@@ -140,6 +140,8 @@ pub struct ShaderEntry {
     pub invalid: Option<String>,
     /// First descriptive line of the effect's README, when present.
     pub description: String,
+    /// Added to the community collection by its latest update.
+    pub is_new: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +189,14 @@ pub fn scan(config_dir: &Path, data_dirs: &[PathBuf]) -> Vec<ShaderEntry> {
             Source::ConfigDir
         };
         push(path, source, &mut entries, &mut seen);
+    }
+    let community = config_shaders.join("community");
+    let added = read_added(&community);
+    for entry in entries.iter_mut().filter(|e| e.source == Source::Community) {
+        entry.is_new = entry
+            .path
+            .strip_prefix(&community)
+            .is_ok_and(|relative| added.iter().any(|path| path == relative));
     }
     for data_dir in data_dirs {
         for kind in KINDS {
@@ -432,6 +442,7 @@ fn entry_for(path: PathBuf, source: Source) -> ShaderEntry {
         source,
         invalid,
         description,
+        is_new: false,
     }
 }
 
@@ -940,6 +951,41 @@ pub fn carry_preset_files(old: &Path, new: &Path) {
             let _ = std::fs::copy(&preset_file, &target);
         }
     }
+}
+
+/// The file in the community folder that lists the shaders its last
+/// update added, one path per line, for the library to badge.
+pub const ADDED_MARKER: &str = ".new";
+
+/// The shaders in `new` that `old` doesn't have, as paths inside the
+/// collection.
+pub fn added_shaders(old: &Path, new: &Path) -> Vec<PathBuf> {
+    let had: Vec<PathBuf> = glsl_files(old)
+        .iter()
+        .filter_map(|path| path.strip_prefix(old).ok().map(Path::to_path_buf))
+        .collect();
+    glsl_files(new)
+        .iter()
+        .filter_map(|path| path.strip_prefix(new).ok().map(Path::to_path_buf))
+        .filter(|path| !had.contains(path))
+        .collect()
+}
+
+/// Record `added` in `dir`'s marker file; none removes the file.
+pub fn write_added(dir: &Path, added: &[PathBuf]) {
+    let marker = dir.join(ADDED_MARKER);
+    if added.is_empty() {
+        let _ = std::fs::remove_file(marker);
+        return;
+    }
+    let lines: Vec<String> = added.iter().map(|p| p.display().to_string()).collect();
+    let _ = std::fs::write(marker, lines.join("\n") + "\n");
+}
+
+fn read_added(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_to_string(dir.join(ADDED_MARKER))
+        .map(|text| text.lines().map(PathBuf::from).collect())
+        .unwrap_or_default()
 }
 
 pub mod api;
@@ -1540,6 +1586,33 @@ mod tests {
         carry_preset_files(&old, &new);
         assert!(new.join("animation/kept/shader.effect.toml").is_file());
         assert!(!new.join("animation/gone").exists());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn a_community_update_badges_only_the_shaders_it_added() {
+        let base = std::env::temp_dir().join(format!("umbriel-added-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let config_dir = base.join("config");
+        let community = config_dir.join("shaders/community");
+        let staging = base.join(".staging");
+        write(&community.join("animation/old/shader.glsl"), GLSL);
+        write(&staging.join("animation/old/shader.glsl"), GLSL);
+        write(&staging.join("animation/fresh/shader.glsl"), GLSL);
+        let added = added_shaders(&community, &staging);
+        assert_eq!(added, [PathBuf::from("animation/fresh/shader.glsl")]);
+        // After the swap the marker sits in the new collection.
+        write(&community.join("animation/fresh/shader.glsl"), GLSL);
+        write_added(&community, &added);
+        let flags: Vec<(String, bool)> = scan(&config_dir, &[])
+            .into_iter()
+            .map(|entry| (entry.name, entry.is_new))
+            .collect();
+        assert!(flags.contains(&("fresh".into(), true)));
+        assert!(flags.contains(&("old".into(), false)));
+        // The next update with nothing added clears the badges.
+        write_added(&community, &[]);
+        assert!(scan(&config_dir, &[]).iter().all(|entry| !entry.is_new));
         std::fs::remove_dir_all(&base).ok();
     }
 

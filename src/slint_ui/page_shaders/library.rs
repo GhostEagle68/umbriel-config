@@ -71,6 +71,7 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
                 invalid: entry.invalid.clone().unwrap_or_default().into(),
                 path: entry.path.display().to_string().into(),
                 is_own,
+                is_new: entry.is_new,
                 used_by: shaders::EVENTS
                     .iter()
                     .zip(&assigned)

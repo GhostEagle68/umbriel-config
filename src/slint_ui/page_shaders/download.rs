@@ -145,6 +145,12 @@ pub(super) fn download_community_shaders(target: &Path) -> Result<String, String
     // Everything landed: swap the old collection for the fresh one,
     // keeping the preset files assignments rely on.
     shaders::carry_preset_files(target, &staging);
+    // The first download has no "new": everything is.
+    let added = if updating {
+        shaders::added_shaders(target, &staging)
+    } else {
+        Vec::new()
+    };
     let old = target.with_file_name(".community-old");
     let _ = std::fs::remove_dir_all(&old);
     let had_old = target.exists();
@@ -166,8 +172,12 @@ pub(super) fn download_community_shaders(target: &Path) -> Result<String, String
     if let Some(sha) = upstream_sha {
         let _ = std::fs::write(target.join(SHADERS_UPSTREAM_MARKER), format!("{sha}\n"));
     }
+    shaders::write_added(target, &added);
     Ok(if updating {
-        "Community shaders updated.".to_owned()
+        match added.len() {
+            0 => "Community shaders updated.".to_owned(),
+            count => format!("Community shaders updated: {count} new."),
+        }
     } else {
         "Community shaders downloaded.".to_owned()
     })
