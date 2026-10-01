@@ -321,6 +321,8 @@ fn open_timing(app: &AppWindow, shell: &Rc<RefCell<Shell>>, index: usize) {
             )
         };
         shell.timing_original = Some((index, curve, duration));
+        // One backup per time the dialog is opened.
+        shell.timing_backed_up = false;
     }
     app.set_shader_timing_title(format!("Timing: {}", slot_label(event)).into());
     app.set_shader_timing_subtitle(subtitle.into());
