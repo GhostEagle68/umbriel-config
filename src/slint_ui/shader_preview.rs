@@ -217,12 +217,17 @@ pub enum PreviewCommand {
     SetTarget(Target),
     /// Render at a scrub position: `linear` is the timeline position,
     /// `eased` the curve's value there (overshoot kept), direction +1
-    /// (in) or -1 (out) — exactly umbriel's uniforms.
+    /// (in) or -1 (out) — exactly umbriel's uniforms. `time` is
+    /// `umbriel_time`, in seconds.
     Render {
         linear: f32,
         eased: f32,
         direction: f32,
+        time: f32,
     },
+    /// The `[colors]` palette for a shader whose preset has `palette`;
+    /// None is no palette, as for a preset without it.
+    SetPalette(Option<[[f32; 4]; 4]>),
     /// Render this source once, mid-animation on the window stand-in,
     /// as a library thumbnail. The live preview is left as it was.
     Thumbnail { path: String, source: String },
@@ -299,7 +304,7 @@ fn run_worker(cmd_rx: mpsc::Receiver<PreviewCommand>, evt_tx: mpsc::Sender<Previ
         // A burst only needs its newest source and newest frame: older
         // sources are already superseded, and their errors would only
         // flash past. The source goes first so the frame uses it.
-        let (mut target, mut source, mut render) = (None, None, None);
+        let (mut target, mut source, mut render, mut palette) = (None, None, None, None);
         let mut thumbnails = Vec::new();
         for cmd in std::iter::once(first).chain(std::iter::from_fn(|| cmd_rx.try_recv().ok())) {
             match cmd {
@@ -309,14 +314,16 @@ fn run_worker(cmd_rx: mpsc::Receiver<PreviewCommand>, evt_tx: mpsc::Sender<Previ
                     linear,
                     eased,
                     direction,
-                } => render = Some((linear, eased, direction)),
+                    time,
+                } => render = Some((linear, eased, direction, time)),
+                PreviewCommand::SetPalette(colors) => palette = Some(colors),
                 PreviewCommand::Thumbnail { path, source } => thumbnails.push((path, source)),
             }
         }
         // Swap frames and compile without drawing, then draw once: the
         // burst's newest position, or the last one if it only changed
         // the target or the source.
-        let changed = target.is_some() || source.is_some();
+        let changed = target.is_some() || source.is_some() || palette.is_some();
         if let Some(target) = target {
             state.set_target(target);
         }
@@ -324,7 +331,15 @@ fn run_worker(cmd_rx: mpsc::Receiver<PreviewCommand>, evt_tx: mpsc::Sender<Previ
             let result = state.compile(&source);
             let _ = evt_tx.send(PreviewEvent::Compiled(result.err()));
         }
-        let position = render.or_else(|| changed.then(|| state.last_position()));
+        if let Some(colors) = palette {
+            state.palette = colors;
+        }
+        if let Some((_, _, _, time)) = render {
+            state.time = time;
+        }
+        let position = render
+            .map(|(linear, eased, direction, _)| (linear, eased, direction))
+            .or_else(|| changed.then(|| state.last_position()));
         if let Some((linear, eased, direction)) = position {
             match state.render(linear, eased, direction) {
                 Ok((w, h, pixels)) => {
@@ -369,6 +384,10 @@ struct PreviewState {
     program: Option<LinkedProgram>,
     /// Last render: (linear, eased, direction).
     last: (f32, f32, f32),
+    /// `umbriel_time` for the next render.
+    time: f32,
+    /// `umbriel_palette` for the next render, when the preset has one.
+    palette: Option<[[f32; 4]; 4]>,
     /// The current target and its size (at most the surface's).
     target: Target,
     target_size: (u32, u32),
@@ -387,6 +406,8 @@ struct LinkedProgram {
     random_seed: Option<glow::UniformLocation>,
     scale: Option<glow::UniformLocation>,
     time: Option<glow::UniformLocation>,
+    palette: Option<glow::UniformLocation>,
+    palette_count: Option<glow::UniformLocation>,
     sample_matrix: Option<glow::UniformLocation>,
     previous_sample_matrix: Option<glow::UniformLocation>,
     border_hole: Option<glow::UniformLocation>,
@@ -500,6 +521,8 @@ impl PreviewState {
             tex_previous,
             program: None,
             last: (0.0, 0.0, 1.0),
+            time: 0.0,
+            palette: None,
             target: Target::Window,
             target_size: (width, height),
             width,
@@ -595,6 +618,8 @@ impl PreviewState {
                 random_seed: loc("umbriel_random_seed"),
                 scale: loc("umbriel_scale"),
                 time: loc("umbriel_time"),
+                palette: loc("umbriel_palette"),
+                palette_count: loc("umbriel_palette_count"),
                 sample_matrix: loc("umbriel_sample_matrix"),
                 previous_sample_matrix: loc("umbriel_previous_sample_matrix"),
                 border_hole: loc("umbriel_border_hole"),
@@ -641,11 +666,13 @@ impl PreviewState {
             gl.uniform_2_f32(linked.size.as_ref(), tw as f32, th as f32);
             // The preview draws at one buffer pixel per logical pixel.
             gl.uniform_1_f32(linked.scale.as_ref(), 1.0);
-            // umbriel's animation clock, in seconds: the preview has no
-            // clock of its own, so its progress stands in for one.
-            gl.uniform_1_f32(linked.time.as_ref(), linear);
-            // expand stays (0, 0) and palette_count 0, as umbriel sets
-            // them for an animation preset without `palette`.
+            gl.uniform_1_f32(linked.time.as_ref(), self.time);
+            // palette_count stays 0 without `palette`, as umbriel sets it;
+            // expand stays (0, 0).
+            if let Some(colors) = &self.palette {
+                gl.uniform_4_f32_slice(linked.palette.as_ref(), colors.as_flattened());
+                gl.uniform_1_i32(linked.palette_count.as_ref(), colors.len() as i32);
+            }
             gl.uniform_4_f32(
                 linked.random_seed.as_ref(),
                 RANDOM_SEED[0],
@@ -1428,6 +1455,35 @@ mod tests {
             .expect("effect uniforms compile");
         let (_, _, pixels) = state.render(0.5, 0.5, 1.0).unwrap();
         assert!(pixels.iter().any(|&byte| byte != 0));
+    }
+
+    /// `umbriel_time` and the palette reach the shader: red follows the
+    /// clock, green the first palette color. Skips where no EGL is
+    /// available.
+    #[test]
+    fn the_clock_and_the_palette_reach_the_shader() {
+        let Ok(mut state) = PreviewState::new(64, 36) else {
+            return;
+        };
+        state
+            .compile(
+                "vec4 animation(vec2 uv) {\n\
+                 \x20   return vec4(umbriel_time * 0.25, 0.0, 0.0, 1.0) + umbriel_palette_at(0.0);\n\
+                 }",
+            )
+            .unwrap();
+        let centre = |state: &mut PreviewState| {
+            let (w, _, pixels) = state.render(0.5, 0.5, 1.0).unwrap();
+            let at = (18 * w as usize + 32) * 4;
+            (pixels[at], pixels[at + 1])
+        };
+        state.time = 2.0;
+        let (red, green) = centre(&mut state);
+        assert!(red.abs_diff(128) <= 2 && green == 0, "{red} {green}");
+        state.time = 0.0;
+        assert_eq!(centre(&mut state), (0, 0));
+        state.palette = Some([[0.0, 1.0, 0.0, 1.0]; 4]);
+        assert_eq!(centre(&mut state), (0, 255));
     }
 
     /// Every kind's starter shader compiles against that kind's contract.

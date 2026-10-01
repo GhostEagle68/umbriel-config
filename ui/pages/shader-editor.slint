@@ -70,6 +70,9 @@ export component ShaderEditorPage inherits Rectangle {
     in property <[ParamRow]> params;
     in property <[string]> param-overlays;
     in property <bool> params-locked;
+    // Whether the preset's settings panel is offered. Off until it earns
+    // its place; the rest of it (rows, save, preview clock) stays wired.
+    in property <bool> show-params: false;
     callback param-set(string, string);
     callback code-find-step(string, int, int, string, string, string) -> CodeEdit;
 
@@ -162,10 +165,9 @@ export component ShaderEditorPage inherits Rectangle {
             vertical-stretch: 1;
             spacing: Theme.space-m;
 
-            // The builder only writes animation shaders.
-                                                // The left column: the builder (animation shaders only) above the
-            // preset's settings.
-            VerticalLayout {
+            // The left column: the builder (animation shaders only) above
+            // the preset's settings, which are switched off for now.
+            if root.kind == 0 || root.show-params: VerticalLayout {
                 min-width: 280px;
                 max-width: 460px;
                 horizontal-stretch: 2;
@@ -185,7 +187,7 @@ export component ShaderEditorPage inherits Rectangle {
                     step-param-live(i, s, v) => { root.step-param-live(i, s, v); }
                 }
 
-                ParamsPanel {
+                if root.show-params: ParamsPanel {
                     rows: root.params;
                     overlays: root.param-overlays;
                     locked: root.params-locked;
@@ -201,7 +203,10 @@ export component ShaderEditorPage inherits Rectangle {
                 horizontal-stretch: 3;
                 spacing: Theme.space-m;
 
+                // Border, window, screen and cursor shaders run on their
+                // own clock, so they play on open.
                 if root.preview-ready: ShaderPreviewRow {
+                    autoplay: root.kind != 0;
                     source: root.preview-image;
                     note: root.preview-note;
                     direction-in: root.preview-direction > 0;

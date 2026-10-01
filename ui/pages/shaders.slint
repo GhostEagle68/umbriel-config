@@ -987,6 +987,12 @@ export component ShaderBuilderPanel inherits Rectangle {
     }
 }
 
+// The preview's free-running clock, in seconds: what `umbriel_time`
+// reads. The playing row advances it; Rust reads it for each frame.
+export global PreviewClock {
+    in-out property <float> seconds;
+}
+
 // The shader editor's live preview: the rendered frame with its scrub
 // slider beside the description and the In/Out toggle. The frame keeps
 // the test texture's 16:9 shape at any width.
@@ -1026,12 +1032,13 @@ export component ShaderPreviewRow inherits Rectangle {
         interval: 16ms;
         running: root.playing;
         triggered => {
+            PreviewClock.seconds += 0.016;
             if (root.hold-ms > 0) {
                 root.hold-ms -= 16;
                 if (root.hold-ms <= 0) {
                     root.progress = 0;
-                    root.scrub(0);
                 }
+                root.scrub(root.progress);
                 return;
             }
             root.progress = min(1, root.progress + 16 / root.length-ms);

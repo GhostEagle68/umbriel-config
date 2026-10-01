@@ -44,9 +44,11 @@ pub(super) fn start_preview(
     const START: f32 = 0.5;
     app.set_shader_preview_progress(START);
     app.set_shader_preview_note(String::new().into());
-    shell
-        .borrow_mut()
-        .preview_command(shader_preview::PreviewCommand::SetSource(text));
+    {
+        let mut shell = shell.borrow_mut();
+        shell.preview_command(shader_preview::PreviewCommand::SetSource(text));
+        super::strip::send_palette(app, &mut shell);
+    }
     set_preview_event(app, shell, event);
 }
 
@@ -181,10 +183,12 @@ pub(super) fn render_preview_at(app: &AppWindow, shell: &Rc<RefCell<Shell>>, lin
         shell.shader_preview_timeline.curve,
         f64::from(linear),
     ) as f32;
+    let time = super::strip::preview_clock(app, &shell, app.global::<PreviewClock>().get_seconds());
     shell.preview_command(shader_preview::PreviewCommand::Render {
         linear,
         eased,
         direction: app.get_shader_preview_direction(),
+        time,
     });
 }
 

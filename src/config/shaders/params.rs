@@ -5,6 +5,7 @@
 //! them in the preset file the app wrote.
 
 use super::api::{Param, ShaderApi};
+use crate::config::document::ConfigDocument;
 use std::collections::BTreeMap;
 
 /// A parameter's value as text: `true`/`false`, `80`, `1.5`, or the name
@@ -278,10 +279,62 @@ pub fn apply(
     Ok(doc.to_string())
 }
 
+/// `umbriel_time` for a border shader `elapsed` seconds into its preview:
+/// the clock times `speed`, held at 0 by `animated = false` (or a speed
+/// of 0), as the compositor does.
+pub fn clock(values: &Values, elapsed: f32) -> f32 {
+    let animated = values.get("animated").is_none_or(|value| value == "true");
+    let speed = values
+        .get("speed")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1.0);
+    if animated && speed > 0.0 {
+        elapsed * speed
+    } else {
+        0.0
+    }
+}
+
+/// The `[colors]` keys a `palette` preset sees, in the order of
+/// `umbriel_palette_at`, with the defaults Umbriel documents.
+const PALETTE: [(&str, &str); 4] = [
+    ("accent_primary", "#7aa3ffff"),
+    ("accent_secondary", "#f5c96bff"),
+    ("warning", "#f5c96bff"),
+    ("error", "#ff6b6bff"),
+];
+
+/// The palette from `[colors]` across the include chain (the last
+/// document that sets a color wins), as RGBA floats.
+pub fn palette(docs: &[&ConfigDocument]) -> [[f32; 4]; 4] {
+    PALETTE.map(|(key, default)| {
+        docs.iter()
+            .rev()
+            .find_map(|doc| hex_color(&doc.get_string(&["colors", key])?))
+            .or_else(|| hex_color(default))
+            .unwrap_or_default()
+    })
+}
+
+/// `#RRGGBB` or `#RRGGBBAA` as RGBA floats.
+fn hex_color(text: &str) -> Option<[f32; 4]> {
+    let hex = text.trim().strip_prefix('#')?;
+    if !matches!(hex.len(), 6 | 8) || !hex.is_ascii() {
+        return None;
+    }
+    let channel = |at: usize| {
+        let byte = hex.get(at..at + 2)?;
+        Some(f32::from(u8::from_str_radix(byte, 16).ok()?) / 255.0)
+    };
+    let alpha = if hex.len() == 8 { channel(6)? } else { 1.0 };
+    Some([channel(0)?, channel(2)?, channel(4)?, alpha])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{umbriel_docs, umbriel_schema};
+    use std::str::FromStr;
 
     fn api() -> ShaderApi {
         ShaderApi::build(umbriel_docs::BUNDLED, None)
@@ -480,5 +533,37 @@ mod tests {
         assert!(apply(&file(""), "nope", "border", &Values::new(), &api).is_err());
         assert!(apply("[x", "a", "border", &Values::new(), &api).is_err());
         assert!(!app_written("[effects.preset.a]\n"));
+    }
+
+    #[test]
+    fn the_clock_runs_times_speed_and_holds_at_zero_when_not_animated() {
+        let set = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect::<Values>()
+        };
+        assert_eq!(clock(&Values::new(), 3.0), 3.0);
+        assert_eq!(clock(&set(&[("speed", "2")]), 3.0), 6.0);
+        assert_eq!(clock(&set(&[("speed", "0")]), 3.0), 0.0);
+        assert_eq!(clock(&set(&[("animated", "false")]), 3.0), 0.0);
+    }
+
+    #[test]
+    fn the_palette_reads_colors_across_the_chain_and_falls_back() {
+        let none = palette(&[]);
+        assert_eq!(none[3], [1.0, 107.0 / 255.0, 107.0 / 255.0, 1.0]);
+        let include =
+            ConfigDocument::from_str("[colors]\nwarning = \"#00ff00\"\nerror = \"#0000ff80\"\n")
+                .unwrap();
+        let main =
+            ConfigDocument::from_str("[colors]\nerror = \"#ff0000\"\naccent_primary = \"nope\"\n")
+                .unwrap();
+        let colors = palette(&[&include, &main]);
+        assert_eq!(colors[0], none[0]);
+        assert_eq!(colors[2], [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(colors[3], [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(hex_color("#0000ff80").map(|c| c[3] > 0.5), Some(true));
+        assert_eq!(hex_color("#12345"), None);
     }
 }

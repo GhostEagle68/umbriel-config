@@ -19,6 +19,30 @@ fn editor_kind(app: &AppWindow) -> &'static str {
         .unwrap_or(shaders::KINDS[0])
 }
 
+/// `umbriel_time` for a frame `elapsed` seconds into the clock: a border
+/// shader in the editor runs at its `speed` (or holds at 0), as the
+/// compositor runs it; everything else follows the clock.
+pub(super) fn preview_clock(app: &AppWindow, shell: &Shell, elapsed: f32) -> f32 {
+    if app.get_shader_editor_open() && editor_kind(app) == "border" {
+        preset_params::clock(&shell.shader_params, elapsed)
+    } else {
+        elapsed
+    }
+}
+
+/// Give the preview the `[colors]` palette when the shader being edited
+/// has `palette` on, and none otherwise (a picker or timing preview,
+/// whose shader the editor knows nothing about).
+pub(super) fn send_palette(app: &AppWindow, shell: &mut Shell) {
+    let on = app.get_shader_editor_open()
+        && shell
+            .shader_params
+            .get("palette")
+            .is_some_and(|v| v == "true");
+    let colors = on.then(|| preset_params::palette(&chain_docs(shell)));
+    shell.preview_command(shader_preview::PreviewCommand::SetPalette(colors));
+}
+
 /// Read the parameters of the shader just opened from its preset file;
 /// a shader with no preset file yet has none set.
 pub(super) fn load_params(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
@@ -51,6 +75,7 @@ pub(super) fn params_unsaved(shell: &Shell) -> bool {
 
 /// Rebuild the strip's rows for the editor's current kind.
 pub(super) fn refresh_params(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
+    send_palette(app, &mut shell.borrow_mut());
     let shell = shell.borrow();
     let fields = preset_params::fields(&shell.shader_api, editor_kind(app));
     let overlays: Vec<String> = std::iter::once("none".to_owned())
@@ -161,5 +186,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             }
         }
         refresh_params(&app, &shell);
+        // A paused preview shows the new speed or palette at once.
+        super::preview::render_preview_at(&app, &shell, app.get_shader_preview_progress());
     });
 }
