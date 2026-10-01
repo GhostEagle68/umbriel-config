@@ -152,6 +152,15 @@ pub fn full_source(user_code: &str) -> String {
     format!("{PREAMBLE}{section}{LINE}{user_code}{suffix}")
 }
 
+/// A plain fade in the window's direction, for previewing an event that
+/// runs no shader of its own (Umbriel's built-in animations aren't shaders).
+pub const FADE: &str = "\
+vec4 animation(vec2 uv) {
+    float p = umbriel_clamped_progress;
+    return umbriel_sample(uv) * (umbriel_direction > 0.0 ? p : 1.0 - p);
+}
+";
+
 /// The preview's own vertex stage: a clip-space quad whose `v_texcoord`
 /// matches umbriel's top-left origin. The y flip (0.5 - pos.y * 0.5)
 /// compensates glReadPixels returning rows bottom-up.
@@ -1229,6 +1238,24 @@ mod tests {
         ] {
             assert_eq!(kind.parts().1, c_string(&c, suffix), "{suffix}");
         }
+    }
+
+    #[test]
+    fn the_fade_stand_in_compiles_and_fades() {
+        let Ok(mut state) = PreviewState::new(64, 48) else {
+            return;
+        };
+        state.compile(FADE).expect("the stand-in compiles");
+        // Opening: nothing at the start, everything at the end.
+        let alpha = |state: &mut PreviewState, progress, direction| {
+            let (_, _, pixels) = state.render(progress, progress, direction).expect("render");
+            pixels.chunks(4).map(|px| u32::from(px[3])).sum::<u32>()
+        };
+        assert_eq!(alpha(&mut state, 0.0, 1.0), 0);
+        assert!(alpha(&mut state, 1.0, 1.0) > 0);
+        // Closing runs the other way.
+        assert!(alpha(&mut state, 0.0, -1.0) > 0);
+        assert_eq!(alpha(&mut state, 1.0, -1.0), 0);
     }
 
     #[test]

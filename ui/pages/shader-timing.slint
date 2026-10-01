@@ -1,0 +1,485 @@
+// The shader editor's timing card: the curve and duration of the
+// animation event the preview plays as. The plot draws the same curve the
+// preview plays; a Bézier's two handles drag on it.
+
+import { ComboBox, ScrollView, Slider } from "std-widgets.slint";
+import { ActionButton, Segmented } from "../widgets.slint";
+import { ShaderPreviewRow } from "shaders.slint";
+import { TimingView } from "../types.slint";
+import { Theme } from "../theme.slint";
+
+component CurvePlot inherits Rectangle {
+    in property <TimingView> view;
+    // The preview's linear progress, 0 to 1.
+    in property <float> progress;
+    // (x1, y1, x2, y2, release): a handle moved, or let go.
+    callback bezier(float, float, float, float, bool);
+    // Which handle follows the pointer: 0 none, 1 or 2.
+    property <int> dragging;
+    property <bool> editable: root.view.mode == 1;
+    property <length> grab: 22px;
+
+    function py(value: float) -> length {
+        return root.height * (root.view.ymax - value) / (root.view.ymax - root.view.ymin);
+    }
+
+    function value-at(y: length) -> float {
+        return root.view.ymax - y / root.height * (root.view.ymax - root.view.ymin);
+    }
+
+    // The size the path is drawn for (curves::plot in Rust), so the curve
+    // and the handles share one coordinate system.
+    width: 220px;
+    height: 150px;
+    background: Theme.bg-0;
+    border-radius: Theme.radius-s;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+
+    // The 0 and 1 levels.
+    Rectangle {
+        y: root.py(0) - 0.5px;
+        width: root.width;
+        height: 1px;
+        background: Theme.divider;
+    }
+
+    Rectangle {
+        y: root.py(1) - 0.5px;
+        width: root.width;
+        height: 1px;
+        background: Theme.divider;
+    }
+
+    // Where the preview is.
+    Rectangle {
+        x: root.progress * root.width;
+        width: 1px;
+        height: root.height;
+        background: Theme.text-2;
+        opacity: 0.6;
+    }
+
+    // A path is fitted to its element by its own bounding box unless it
+    // has a viewbox, which would shift and scale it. This viewbox (inset by
+    // half the stroke, as Slint insets the drawing) makes the fit a no-op,
+    // so path coordinates are pixels of the plot.
+    Path {
+        width: root.width;
+        height: root.height;
+        viewbox-x: 1;
+        viewbox-y: 1;
+        viewbox-width: root.width / 1px - 2;
+        viewbox-height: root.height / 1px - 2;
+        commands: root.view.path;
+        stroke: Theme.accent;
+        stroke-width: 2px;
+    }
+
+    if root.editable: Path {
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0.5;
+        viewbox-y: 0.5;
+        viewbox-width: root.width / 1px - 1;
+        viewbox-height: root.height / 1px - 1;
+        commands: "M 0 " + root.py(0) / 1px + " L " + root.view.x1 * root.width / 1px + " " + root.py(root.view.y1) / 1px + " M " + root.width / 1px + " " + root.py(1) / 1px + " L " + root.view.x2 * root.width / 1px + " " + root.py(root.view.y2) / 1px;
+        stroke: Theme.text-2;
+        stroke-width: 1px;
+    }
+
+    if root.editable: Rectangle {
+        x: root.view.x1 * root.width - self.width / 2;
+        y: root.py(root.view.y1) - self.height / 2;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: root.dragging == 1 ? Theme.accent-hover : Theme.accent;
+    }
+
+    if root.editable: Rectangle {
+        x: root.view.x2 * root.width - self.width / 2;
+        y: root.py(root.view.y2) - self.height / 2;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: root.dragging == 2 ? Theme.accent-hover : Theme.accent;
+    }
+
+    // A press picks the nearer handle (if within reach); it then follows
+    // the pointer, live, and writes when let go.
+    TouchArea {
+        enabled: root.editable;
+        mouse-cursor: root.dragging > 0 ? MouseCursor.grabbing : MouseCursor.default;
+
+        changed pressed => {
+            if (self.pressed) {
+                let d1 = Math.sqrt(Math.pow((self.pressed-x - root.view.x1 * root.width) / 1px, 2) + Math.pow((self.pressed-y - root.py(root.view.y1)) / 1px, 2));
+                let d2 = Math.sqrt(Math.pow((self.pressed-x - root.view.x2 * root.width) / 1px, 2) + Math.pow((self.pressed-y - root.py(root.view.y2)) / 1px, 2));
+                if (Math.min(d1, d2) * 1px <= root.grab) {
+                    root.dragging = d1 <= d2 ? 1 : 2;
+                }
+            } else if (root.dragging > 0) {
+                root.dragging = 0;
+                root.bezier(root.view.x1, root.view.y1, root.view.x2, root.view.y2, true);
+            }
+        }
+
+        moved => {
+            if (root.dragging == 0) {
+                return;
+            }
+            let x = Math.max(0, Math.min(1, self.mouse-x / root.width));
+            let y = root.value-at(self.mouse-y);
+            if (root.dragging == 1) {
+                root.bezier(x, y, root.view.x2, root.view.y2, false);
+            } else {
+                root.bezier(root.view.x1, root.view.y1, x, y, false);
+            }
+        }
+    }
+}
+
+export component TimingCard inherits Rectangle {
+    in property <TimingView> view;
+    in property <[string]> presets;
+    in property <float> progress;
+    callback mode(int);
+    callback preset(int);
+    callback bezier(float, float, float, float, bool);
+    callback spring(float, float, bool);
+    callback duration(int, bool);
+
+    property <int> segment;
+    property <int> preset-index;
+    property <float> damping-value;
+    property <float> stiffness-value;
+    property <float> duration-value;
+
+    // Sliders and the pickers are set by the user too, which ends their
+    // bindings, so a new view (another event, a reset) is pushed in.
+    function show-view() {
+        root.segment = root.view.mode;
+        root.preset-index = root.view.preset;
+        root.damping-value = root.view.damping;
+        root.stiffness-value = root.view.stiffness;
+        root.duration-value = root.view.duration-ms;
+    }
+
+    init => { root.show-view(); }
+    changed view => { root.show-view(); }
+
+    background: Theme.bg-0;
+    border-radius: Theme.radius-m;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: Theme.space-s;
+        spacing: Theme.space-s;
+
+        VerticalLayout {
+            spacing: Theme.space-s;
+
+            Text {
+                text: root.view.event;
+                color: Theme.text-1;
+                font-weight: 700;
+            }
+
+            Text {
+                text: "Set on the event itself, so it applies to whatever runs on it. Saved as you edit.";
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+
+            if root.view.note != "": Text {
+                text: root.view.note;
+                color: Theme.warning;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                alignment: start;
+
+                Segmented {
+                    options: ["Preset", "Bézier", "Spring"];
+                    selected <=> root.segment;
+                    changed => { root.mode(root.segment); }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: center;
+
+                CurvePlot {
+                    view: root.view;
+                    progress: root.progress;
+                    bezier(x1, y1, x2, y2, release) => { root.bezier(x1, y1, x2, y2, release); }
+                }
+            }
+
+            if root.view.mode == 0: ComboBox {
+                model: root.presets;
+                current-index <=> root.preset-index;
+                selected => { root.preset(self.current-index); }
+            }
+
+            // One line that never wraps, so dragging can't change the card's
+            // height.
+            if root.view.mode == 1: Text {
+                text: "Drag the handles: " + root.view.text;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                font-family: Theme.font-mono;
+                overflow: elide;
+            }
+
+            if root.view.mode == 2: VerticalLayout {
+                spacing: Theme.space-xs;
+
+                HorizontalLayout {
+                    spacing: Theme.space-s;
+
+                    Text {
+                        text: "Damping";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        width: 70px;
+                    }
+
+                    Slider {
+                        minimum: 0.1;
+                        maximum: 3;
+                        value <=> root.damping-value;
+                        changed(v) => { root.spring(v, root.stiffness-value, false); }
+                        released(v) => { root.spring(v, root.stiffness-value, true); }
+                    }
+
+                    Text {
+                        text: root.damping-value.to-fixed(2);
+                        color: Theme.text-1;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        width: 40px;
+                        horizontal-alignment: right;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Theme.space-s;
+
+                    Text {
+                        text: "Stiffness";
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        width: 70px;
+                    }
+
+                    Slider {
+                        minimum: 20;
+                        maximum: 3000;
+                        value <=> root.stiffness-value;
+                        changed(v) => { root.spring(root.damping-value, v, false); }
+                        released(v) => { root.spring(root.damping-value, v, true); }
+                    }
+
+                    Text {
+                        text: Math.round(root.stiffness-value);
+                        color: Theme.text-1;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        width: 40px;
+                        horizontal-alignment: right;
+                    }
+                }
+
+                Text {
+                    text: "Settles in " + root.view.settle-ms + " ms";
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-s;
+
+                Text {
+                    text: "Duration";
+                    color: root.view.timed ? Theme.text-1 : Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                    width: 70px;
+                }
+
+                Slider {
+                    minimum: 20;
+                    maximum: 2000;
+                    value <=> root.duration-value;
+                    enabled: root.view.timed;
+                    changed(v) => { root.duration(Math.round(v), false); }
+                    released(v) => { root.duration(Math.round(v), true); }
+                }
+
+                Text {
+                    text: root.view.timed ? Math.round(root.duration-value) + " ms" : "own";
+                    color: Theme.text-1;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                    width: 50px;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+    }
+}
+
+// The timing dialog: what runs on an animation event, playing with the
+// timing as it is edited, beside the curve card.
+export component TimingDialog inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <TimingView> view;
+    in property <[string]> presets;
+    in property <image> preview-image;
+    in property <bool> preview-ready;
+    in property <string> preview-note;
+    in property <bool> direction-in;
+    in-out property <float> progress;
+    in property <int> configured-ms;
+    callback close();
+    callback scrub(float);
+    callback toggle-direction();
+    callback mode(int);
+    callback preset(int);
+    callback bezier(float, float, float, float, bool);
+    callback spring(float, float, bool);
+    callback duration(int, bool);
+    // Back to the timing the event had when the dialog opened.
+    callback revert();
+    // Remove the event's own curve and duration: Umbriel's defaults.
+    callback reset();
+
+    width: 100%;
+    height: 100%;
+    background: #00000099;
+
+    TouchArea {
+        clicked => { root.close(); }
+    }
+
+    Rectangle {
+        width: min(940px, parent.width - 48px);
+        // A fixed size: sized by content, the dialog would change height as
+        // values change while dragging, and jump about as it re-centers.
+        height: min(parent.height - 48px, 640px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.bg-3;
+        border-radius: Theme.radius-xl;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000066;
+
+        // Absorb clicks so the scrim underneath doesn't close the dialog.
+        TouchArea { }
+
+        box := VerticalLayout {
+            padding: Theme.space-xl;
+            spacing: Theme.space-l;
+
+            HorizontalLayout {
+                spacing: Theme.space-l;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Theme.space-xs;
+
+                    Text {
+                        text: root.title;
+                        color: Theme.text-1;
+                        font-size: Theme.font-large;
+                        font-weight: 600;
+                    }
+
+                    Text {
+                        text: root.subtitle;
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // Always in reach, whatever the window height.
+                ActionButton {
+                    text: "Revert";
+                    clicked => { root.revert(); }
+                }
+
+                ActionButton {
+                    text: "Reset to default";
+                    clicked => { root.reset(); }
+                }
+
+                ActionButton {
+                    text: "Done";
+                    primary: true;
+                    clicked => { root.close(); }
+                }
+            }
+
+            // Scrolls when the window is short.
+            ScrollView {
+                vertical-stretch: 1;
+                viewport-height: body.preferred-height;
+
+                body := HorizontalLayout {
+                    spacing: Theme.space-l;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: start;
+
+                        if root.preview-ready: ShaderPreviewRow {
+                            max-height: 230px;
+                            source: root.preview-image;
+                            note: root.preview-note;
+                            hint: "Plays what runs on this event, with the timing you set.";
+                            pick-event: false;
+                            autoplay: true;
+
+                            direction-in: root.direction-in;
+                            progress <=> root.progress;
+                            configured-ms: root.configured-ms;
+                            scrub(v) => { root.scrub(v); }
+                            toggle-direction() => { root.toggle-direction(); }
+                        }
+
+                        if !root.preview-ready: Text {
+                            text: root.preview-note != "" ? root.preview-note : "Starting the preview…";
+                            color: Theme.text-2;
+                        }
+                    }
+
+                    TimingCard {
+                        width: 320px;
+                        view: root.view;
+                        presets: root.presets;
+                        progress: root.progress;
+                        mode(m) => { root.mode(m); }
+                        preset(i) => { root.preset(i); }
+                        bezier(x1, y1, x2, y2, release) => { root.bezier(x1, y1, x2, y2, release); }
+                        spring(d, s, release) => { root.spring(d, s, release); }
+                        duration(ms, release) => { root.duration(ms, release); }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -35,7 +35,12 @@ pub(super) fn kick_shader_preview(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
 /// Park the scrubber mid-animation and play `text` as event `event`
 /// (into `shaders::EVENTS`). Not the opening frame: at progress 0 a
 /// fade-in is fully transparent and the preview looks broken.
-fn start_preview(app: &AppWindow, shell: &Rc<RefCell<Shell>>, text: String, event: usize) {
+pub(super) fn start_preview(
+    app: &AppWindow,
+    shell: &Rc<RefCell<Shell>>,
+    text: String,
+    event: usize,
+) {
     const START: f32 = 0.5;
     app.set_shader_preview_progress(START);
     app.set_shader_preview_note(String::new().into());
@@ -165,6 +170,7 @@ pub(super) fn set_preview_event(app: &AppWindow, shell: &Rc<RefCell<Shell>>, ind
     // Closing is the only event umbriel runs purely outward.
     app.set_shader_preview_direction(if *event == "windows_out" { -1.0 } else { 1.0 });
     render_preview_at(app, shell, app.get_shader_preview_progress());
+    super::timing::refresh_timing(app, shell);
 }
 
 /// Render at timeline position `linear`, eased by the event's curve.

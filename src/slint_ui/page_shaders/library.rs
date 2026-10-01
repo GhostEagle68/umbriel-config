@@ -411,17 +411,48 @@ pub(super) fn write_assignments(
         &discovery::Env::from_process(),
         "shader",
     );
+    let keys: Vec<(Vec<String>, usize, Value)> = edits
+        .iter()
+        .map(|(event, doc, value)| {
+            let key = shaders::slot_key(event).into_iter().map(String::from);
+            (
+                key.collect(),
+                *doc,
+                value.clone().map_or(Value::Remove, Value::Text),
+            )
+        })
+        .collect();
+    write_keys(shell, &keys)
+}
+
+/// What [`write_keys`] puts at a key.
+#[derive(Clone)]
+pub(super) enum Value {
+    Text(String),
+    Int(i64),
+    Remove,
+}
+
+/// Write keys straight to disk through the documents that own them (each
+/// `(key path, chain index, value)`); no backup run, callers take theirs.
+pub(super) fn write_keys(
+    shell: &mut Shell,
+    edits: &[(Vec<String>, usize, Value)],
+) -> Result<(), String> {
     let paths = chain_paths(shell);
-    for (event, doc, value) in edits {
-        let key = shaders::slot_key(event);
+    for (key, doc, value) in edits {
+        let key_refs: Vec<&str> = key.iter().map(String::as_str).collect();
+        let key = key_refs.as_slice();
         doc_at_mut(shell, *doc)
             .write_through(&paths[*doc], |d| match value {
-                Some(value) => d.set_string(&key, value),
-                None => {
-                    d.remove_leaf(&key);
+                Value::Text(text) => d.set_string(key, text),
+                Value::Int(number) => d.set_integer(key, *number),
+                Value::Remove => {
+                    d.remove_leaf(key);
                 }
             })
             .map_err(|err| format!("could not update {}: {err}", paths[*doc].display()))?;
+
         // The written key's new on-disk value is its saved baseline. Only
         // that key: the rest of the baseline may hold values that aren't
         // on disk yet (the guided setup's suggestions) and must stay.

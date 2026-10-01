@@ -20,6 +20,30 @@ pub enum Curve {
     },
 }
 
+impl Curve {
+    /// The `curve` string that gives a Bézier or a spring back through
+    /// [`parse`], rounded to three decimals. `None` for the named
+    /// curves, which are written by their name.
+    pub fn to_config_string(&self) -> Option<String> {
+        match *self {
+            Curve::Bezier(points) => Some(points.map(number_text).join(",")),
+            Curve::Spring { damping, stiffness } => Some(format!(
+                "spring:{},{}",
+                number_text(damping),
+                number_text(stiffness)
+            )),
+            Curve::Linear | Curve::Named(_) => None,
+        }
+    }
+}
+
+/// `0.05`, `1`, `900`: three decimals, trailing zeros trimmed.
+fn number_text(value: f64) -> String {
+    let text = format!("{value:.3}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" { "0" } else { text }.to_owned()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Easing {
     InSine,
@@ -125,7 +149,7 @@ fn registry(name: &str) -> Option<Curve> {
 }
 
 /// Registry lookups ignore case, `_`, `-` and spaces.
-fn normalize(name: &str) -> String {
+pub fn normalize(name: &str) -> String {
     name.chars()
         .filter(|ch| !matches!(ch, '_' | '-' | ' '))
         .map(|ch| ch.to_ascii_lowercase())
@@ -137,6 +161,15 @@ fn normalize(name: &str) -> String {
 pub struct CurveTables {
     beziers: Vec<(String, [f64; 4])>,
     springs: Vec<(String, (f64, f64))>,
+}
+
+impl CurveTables {
+    /// The registered Bézier and spring names, as written in the config.
+    pub fn names(&self) -> Vec<String> {
+        let beziers = self.beziers.iter().map(|(name, _)| name.clone());
+        let springs = self.springs.iter().map(|(name, _)| name.clone());
+        beziers.chain(springs).collect()
+    }
 }
 
 /// Parse a `curve` string the way umbriel does: the user's named
@@ -555,6 +588,70 @@ pub fn event_timeline(docs: &[&ConfigDocument], event: &str) -> Timeline {
     timeline
 }
 
+/// A curve drawn as an SVG path in a `width` x `height` box, with the
+/// value range the box spans: y = 0 at the bottom of `ymin`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Plot {
+    pub path: String,
+    pub ymin: f64,
+    pub ymax: f64,
+}
+
+/// A Bézier is drawn over a fixed range (its curve stays inside its
+/// control points, which the editor keeps within it), so dragging a
+/// handle never rescales the plot. Other curves get the range their
+/// overshoot needs, in half steps, at least 0 to 1.
+const BEZIER_RANGE: (f64, f64) = (-0.5, 1.5);
+
+/// The path of `curve`'s eased value over linear progress 0 to 1.
+pub fn plot(curve: Curve, width: f64, height: f64) -> Plot {
+    const STEPS: usize = 100;
+    let values: Vec<f64> = (0..=STEPS)
+        .map(|step| ease(curve, step as f64 / STEPS as f64))
+        .collect();
+    let (ymin, ymax) = match curve {
+        Curve::Bezier(_) => BEZIER_RANGE,
+        _ => {
+            let low = values.iter().copied().fold(0.0, f64::min);
+            let high = values.iter().copied().fold(1.0, f64::max);
+            ((low * 2.0).floor() / 2.0, (high * 2.0).ceil() / 2.0)
+        }
+    };
+    let path = values
+        .iter()
+        .enumerate()
+        .map(|(step, value)| {
+            let x = width * step as f64 / STEPS as f64;
+            let y = height * (ymax - value) / (ymax - ymin);
+            format!("{} {x:.1} {y:.1}", if step == 0 { "M" } else { "L" })
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Plot { path, ymin, ymax }
+}
+
+/// The `curve` text `event` runs with: its own if umbriel accepts it,
+/// else `[animation]`'s, else the event's built-in default.
+pub fn curve_text(docs: &[&ConfigDocument], event: &str) -> String {
+    let tables = tables(docs);
+    let accepted = |path: &[&str]| {
+        winning(docs, |doc| doc.get_string(path)).filter(|text| parse(text, &tables).is_some())
+    };
+    accepted(&["animation", event, "curve"])
+        .or_else(|| accepted(&["animation", "curve"]))
+        .unwrap_or_else(|| {
+            event_default(event)
+                .to_config_string()
+                .unwrap_or_else(|| "easeout".to_owned())
+        })
+}
+
+/// The index in `docs` of the last document that sets `path`: the one
+/// whose value wins.
+pub fn defining_doc(docs: &[&ConfigDocument], path: &[&str]) -> Option<usize> {
+    docs.iter().rposition(|doc| doc.get_raw(path).is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,5 +791,128 @@ mod tests {
                 stiffness: 150.0
             }
         );
+    }
+
+    #[test]
+    fn beziers_and_springs_write_back_as_curve_strings() {
+        let none = CurveTables::default();
+        for text in [
+            "0.05,0.9,0.1,1.05",
+            "0,0,1,1",
+            "0.25,-0.5,0.75,1.5",
+            "spring:1,900",
+            "spring:0.75,100",
+            "spring:0.5,120.5",
+        ] {
+            let curve = parse(text, &none).unwrap();
+            assert_eq!(curve.to_config_string().as_deref(), Some(text), "{text}");
+        }
+        // Rounding keeps what umbriel accepts: x stays within 0 to 1.
+        let curve = Curve::Bezier([0.123_456, 0.9, 1.0, 1.0]);
+        let text = curve.to_config_string().unwrap();
+        assert_eq!(text, "0.123,0.9,1,1");
+        assert!(parse(&text, &none).is_some());
+        // Named curves are written by name, not by string.
+        assert_eq!(EASE_OUT.to_config_string(), None);
+        assert_eq!(Curve::Linear.to_config_string(), None);
+    }
+
+    #[test]
+    fn a_plot_runs_from_the_start_to_the_end_inside_its_range() {
+        let none = CurveTables::default();
+        let coords = |plot: &Plot| -> Vec<(f64, f64)> {
+            plot.path
+                .split(['M', 'L'])
+                .filter(|piece| !piece.trim().is_empty())
+                .map(|piece| {
+                    let mut numbers = piece.split_whitespace().map(|n| n.parse::<f64>().unwrap());
+                    (numbers.next().unwrap(), numbers.next().unwrap())
+                })
+                .collect()
+        };
+        // Ease-out: 0 at the bottom-left, 1 at the top-right of a 0 to 1 box.
+        let plot = plot(EASE_OUT, 200.0, 100.0);
+        let points = coords(&plot);
+        assert_eq!((plot.ymin, plot.ymax), (0.0, 1.0));
+        assert_eq!(points.first(), Some(&(0.0, 100.0)));
+        assert_eq!(points.last(), Some(&(200.0, 0.0)));
+        assert_eq!(points.len(), 101);
+        // A Bézier always spans the fixed range, so dragging can't rescale it.
+        let bezier = plot_of("0.05,0.9,0.1,1.05", &none);
+        assert_eq!((bezier.ymin, bezier.ymax), (-0.5, 1.5));
+        // Overshoot widens the range of the other curves.
+        let spring = plot_of("spring:0.3,200", &none);
+        assert!(spring.ymax > 1.0 && spring.ymin == 0.0, "{spring:?}");
+        let elastic = plot_of("easeinelastic", &none);
+        assert!(elastic.ymin < 0.0 || elastic.ymax > 1.0);
+        // Every point lies inside the box.
+        for curve in [
+            "linear",
+            "bounce",
+            "spring:0.2,50",
+            "back",
+            "0.4,-0.4,0.6,1.4",
+        ] {
+            let plot = plot_of(curve, &none);
+            for (x, y) in coords(&plot) {
+                assert!(
+                    (0.0..=200.0).contains(&x) && (-0.5..=100.5).contains(&y),
+                    "{curve}: {x},{y}"
+                );
+            }
+        }
+    }
+
+    fn plot_of(text: &str, tables: &CurveTables) -> Plot {
+        plot(parse(text, tables).unwrap(), 200.0, 100.0)
+    }
+
+    fn doc(text: &str) -> ConfigDocument {
+        ConfigDocument::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn the_effective_curve_text_follows_umbriels_precedence() {
+        let include =
+            doc("[animation]\ncurve = \"linear\"\n[animation.windows_in]\ncurve = \"easein\"\n");
+        let main = doc(
+            "[animation.windows_in]\ncurve = \"spring:1,500\"\n[animation.workspaces]\ncurve = \"not a curve\"\n",
+        );
+        let docs = [&include, &main];
+        // The main file wins over an include for the same key.
+        assert_eq!(curve_text(&docs, "windows_in"), "spring:1,500");
+        // An event with no key of its own uses [animation]'s...
+        assert_eq!(curve_text(&docs, "layers"), "linear");
+        // ...and a value umbriel rejects is skipped, as event_timeline does.
+        assert_eq!(curve_text(&docs, "workspaces"), "linear");
+        // Nothing set at all: the event's built-in default.
+        assert_eq!(curve_text(&[&doc("")], "windows_in"), "spring:1,900");
+        assert_eq!(curve_text(&[&doc("")], "windows_out"), "spring:1,1400");
+        assert_eq!(curve_text(&[&doc("")], "layers"), "easeout");
+    }
+
+    #[test]
+    fn the_defining_document_is_the_last_one_that_sets_the_key() {
+        let a = doc("[animation.windows_in]\ncurve = \"linear\"\n");
+        let b = doc("[animation]\nduration_ms = 100\n");
+        let c = doc("[animation.windows_in]\ncurve = \"easein\"\n");
+        let docs = [&a, &b, &c];
+        let path = ["animation", "windows_in", "curve"];
+        assert_eq!(defining_doc(&docs, &path), Some(2));
+        assert_eq!(defining_doc(&docs[..2], &path), Some(0));
+        assert_eq!(
+            defining_doc(&docs, &["animation", "windows_in", "duration_ms"]),
+            None
+        );
+        assert_eq!(defining_doc(&docs, &["animation", "duration_ms"]), Some(1));
+    }
+
+    #[test]
+    fn registered_names_are_listed_for_the_picker() {
+        let main = doc(
+            "[animation.beziers]\nmyBezier = [0.05, 0.9, 0.1, 1.05]\n[animation.springs]\nmyBounce = { damping = 0.5, stiffness = 200 }\n",
+        );
+        assert_eq!(tables(&[&main]).names(), ["myBezier", "myBounce"]);
+        assert!(tables(&[&doc("")]).names().is_empty());
     }
 }

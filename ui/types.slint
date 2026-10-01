@@ -346,6 +346,37 @@ export struct CodeHint {
     doc: string,
 }
 
+// The shader editor's timing card: the event the preview plays as, its
+// curve (`mode`: 0 a named curve, 1 a Bézier, 2 a spring), the plot of it
+// and the values each mode edits.
+export struct TimingView {
+    event: string,
+    // The curve as the config says it.
+    text: string,
+    mode: int,
+    // Index into the preset names, -1 when it isn't one.
+    preset: int,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    damping: float,
+    stiffness: float,
+    duration-ms: int,
+
+    // Whether the duration applies: a spring, named or inline, sets its own.
+    timed: bool,
+
+    // How long a spring takes to settle.
+    settle-ms: int,
+    // The curve as an SVG path in a 220 x 150 box, and the value range
+    // that box spans.
+    path: string,
+    ymin: float,
+    ymax: float,
+    note: string,
+}
+
 // A span of one line for the shader editor to highlight: 0-based line
 // and character column, and how many characters.
 export struct Mark {

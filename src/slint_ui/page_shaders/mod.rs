@@ -9,6 +9,7 @@ mod download;
 mod editor;
 mod library;
 mod preview;
+mod timing;
 
 pub(super) use download::maybe_check_shader_updates;
 pub(super) use library::{data_roots, include_preset, rebuild_shaders, scan_shaders};
@@ -20,4 +21,5 @@ pub(super) fn install_shaders(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     editor::install(app, shell);
     builder::install(app, shell);
     preview::install(app, shell);
+    timing::install(app, shell);
 }

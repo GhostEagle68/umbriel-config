@@ -101,6 +101,7 @@ fn slots_of_kind(kind: &str) -> impl Iterator<Item = (usize, &'static str)> + '_
 pub(super) fn show_editor(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     // A settle left over from the last session would re-check old code.
     shell.borrow().shader_code_settle.stop();
+    shell.borrow_mut().timing_backed_up = false;
     shell.borrow_mut().shader_editor_baseline = app.get_shader_editor_text().to_string();
     // A fresh undo history per opened shader.
     shell

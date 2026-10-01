@@ -559,6 +559,7 @@ export component ShadersPage inherits Rectangle {
     callback download();
     callback fix-include();
     callback convert-legacy();
+    callback timing(int);
     callback editor-new();
     callback editor-edit(string);
     callback editor-fork(string, string);
@@ -653,6 +654,12 @@ export component ShadersPage inherits Rectangle {
                     title: row.label;
                     subtitle: row.warning == "" ? "" : row.current-name + ": " + row.warning;
                     subtitle-color: Theme.warning;
+
+                    // The event's curve and duration, over a preview.
+                    if row.kind == 0: ActionButton {
+                        text: "Timing";
+                        clicked => { root.timing(event); }
+                    }
 
                     // The current shader; click to pick another.
                     Rectangle {
@@ -997,15 +1004,19 @@ export component ShaderPreviewRow inherits Rectangle {
     callback scrub(float);
     callback toggle-direction();
     in property <string> hint: "Scrub or play the animation on a stand-in for the chosen event, with that event's curve and timing from your config. Saving asks which events should use the shader.";
-    // Start playing on open (the picker); the editor starts paused.
+        // Start playing on open (the picker); the editor starts paused.
     in property <bool> autoplay: false;
+    // The "Preview as" picker: off where the event is fixed.
+    in property <bool> pick-event: true;
+    // The playback length to start on: 0 "As set", else a fixed one.
+    in property <int> initial-length: 3;
 
     // Playback: a frame tick advances the scrubber over the chosen
     // length, holds briefly on the last frame, then loops. Dragging the
     // scrubber takes over and pauses.
     property <bool> playing: root.autoplay;
     property <[string]> lengths: ["As set (" + root.configured-ms + " ms)", "0.3 s", "0.6 s", "1.2 s"];
-    property <int> length-index: 3;
+    property <int> length-index: root.initial-length;
     property <float> length-ms: root.length-index == 0 ? max(1, root.configured-ms) : root.length-index == 1 ? 300 : root.length-index == 2 ? 600 : 1200;
     property <float> hold-ms: 0;
 
@@ -1090,7 +1101,7 @@ export component ShaderPreviewRow inherits Rectangle {
                 wrap: word-wrap;
             }
 
-            HorizontalLayout {
+            if root.pick-event: HorizontalLayout {
                 spacing: Theme.space-s;
                 alignment: start;
 
@@ -1135,14 +1146,20 @@ export component ShaderPreviewRow inherits Rectangle {
                     }
                 }
 
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            // How long one play-through takes; the controls above stay
+            // short enough for a narrow column.
+            HorizontalLayout {
+                alignment: start;
+
                 ComboBox {
                     width: 160px;
                     model: root.lengths;
                     current-index <=> root.length-index;
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
                 }
             }
 
