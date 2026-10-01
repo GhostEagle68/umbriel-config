@@ -813,6 +813,10 @@ pub fn write_file_atomic(path: &Path, contents: &str) -> Result<(), String> {
     // Any failure removes the temp file.
     let written = || -> std::io::Result<()> {
         let mut file = std::fs::File::create(&tmp)?;
+        // Keep the replaced file's mode (a private file stays private).
+        if let Ok(old) = std::fs::metadata(path) {
+            file.set_permissions(old.permissions())?;
+        }
         std::io::Write::write_all(&mut file, contents.as_bytes())?;
         file.sync_all()?;
         std::fs::rename(&tmp, path)
@@ -1590,6 +1594,22 @@ mod tests {
         assert!(names("animation").is_empty());
         assert_eq!(pool_kind(&[&doc], "borders").as_deref(), Some("border"));
         assert_eq!(pool_kind(&[&doc], "pulse"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_atomic_write_keeps_the_files_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("umbriel-mode-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let file = base.join("private.glsl");
+        write(&file, GLSL);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_file_atomic(&file, "// new\n").unwrap();
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "// new\n");
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

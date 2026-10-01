@@ -1066,6 +1066,8 @@ export component ShaderPreviewRow inherits Rectangle {
     property <int> length-index: root.initial-length;
     property <float> length-ms: root.length-index == 0 ? max(1, root.configured-ms) : root.length-index == 1 ? 300 : root.length-index == 2 ? 600 : 1200;
     property <float> hold-ms: 0;
+    // When the last tick ran, so the clock follows real time when ticks slip.
+    property <duration> last-tick;
 
     horizontal-stretch: 1;
 
@@ -1073,7 +1075,9 @@ export component ShaderPreviewRow inherits Rectangle {
         interval: 16ms;
         running: root.playing;
         triggered => {
-            PreviewClock.seconds += 0.016;
+            // A tick that follows a pause counts for at most 100 ms.
+            PreviewClock.seconds += min(100ms, animation-tick() - root.last-tick) / 1s;
+            root.last-tick = animation-tick();
             if (root.hold-ms > 0) {
                 root.hold-ms -= 16;
                 if (root.hold-ms <= 0) {

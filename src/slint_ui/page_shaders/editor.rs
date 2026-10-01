@@ -113,6 +113,8 @@ pub(super) fn show_editor(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         .reset(app.get_shader_editor_text().as_str());
     shell.borrow_mut().shader_editor_baseline_name = app.get_shader_editor_name().to_string();
     load_params(app, shell);
+    // `umbriel_time` counts from the editor opening.
+    app.global::<PreviewClock>().set_seconds(0.0);
     app.set_shader_editor_confirm_close(false);
     app.set_shader_editor_open(true);
 }

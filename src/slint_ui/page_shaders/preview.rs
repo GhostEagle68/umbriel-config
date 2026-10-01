@@ -128,13 +128,13 @@ pub(super) fn forget_thumbnail(shell: &mut Shell, path: &Path) {
 /// return them.
 fn frame_image(width: u32, height: u32, pixels: &[u8]) -> slint::Image {
     let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
-    let rgba: Vec<slint::Rgba8Pixel> = pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|chunk| slint::Rgba8Pixel::new(chunk[0], chunk[1], chunk[2], chunk[3]))
-        .collect();
-    buffer.make_mut_slice().copy_from_slice(&rgba);
+    for (pixel, chunk) in buffer
+        .make_mut_slice()
+        .iter_mut()
+        .zip(pixels.as_chunks::<4>().0)
+    {
+        *pixel = slint::Rgba8Pixel::new(chunk[0], chunk[1], chunk[2], chunk[3]);
+    }
     slint::Image::from_rgba8_premultiplied(buffer)
 }
 
@@ -173,6 +173,17 @@ pub(super) fn set_preview_event(app: &AppWindow, shell: &Rc<RefCell<Shell>>, ind
     app.set_shader_preview_direction(if *event == "windows_out" { -1.0 } else { 1.0 });
     render_preview_at(app, shell, app.get_shader_preview_progress());
     super::timing::refresh_timing(app, shell);
+}
+
+/// Whether the editor's shader is a still picture: not an animation, and
+/// reading neither the clock nor the pointer sweep, so playing it can't
+/// change a frame and the player's ticks needn't redraw it.
+fn is_still(app: &AppWindow) -> bool {
+    let text = app.get_shader_editor_text();
+    app.get_shader_editor_open()
+        && app.get_shader_editor_kind() != 0
+        && !text.contains("umbriel_time")
+        && !text.contains("umbriel_pointer")
 }
 
 /// Render at timeline position `linear`, eased by the event's curve.
@@ -297,6 +308,9 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         let shell = Rc::clone(shell);
         app.on_shader_preview_scrub(move |progress| {
             let Some(app) = weak.upgrade() else { return };
+            if is_still(&app) {
+                return;
+            }
             render_preview_at(&app, &shell, progress);
         });
     }

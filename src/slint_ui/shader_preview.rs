@@ -562,11 +562,14 @@ impl PreviewState {
         }
     }
 
-    /// Render `source` once at mid-animation on the window stand-in, then
-    /// put the live program, target and position back.
+    /// Render `source` once at mid-animation on the window stand-in, with
+    /// the clock at 0.5 s and no palette, then put the live program,
+    /// target, position, clock and palette back.
     fn thumbnail(&mut self, source: &str) -> Option<(u32, u32, Vec<u8>)> {
         let live = self.program.take();
         let (last, target) = (self.last, self.target);
+        let (time, palette) = (self.time, self.palette.take());
+        self.time = 0.5;
         if target != Target::Window {
             self.set_target(Target::Window);
         }
@@ -581,6 +584,7 @@ impl PreviewState {
             self.set_target(target);
         }
         self.last = last;
+        (self.time, self.palette) = (time, palette);
         frame
     }
 
@@ -1484,6 +1488,20 @@ mod tests {
         assert_eq!(centre(&mut state), (0, 0));
         state.palette = Some([[0.0, 1.0, 0.0, 1.0]; 4]);
         assert_eq!(centre(&mut state), (0, 255));
+    }
+
+    /// A thumbnail doesn't take the live preview's clock or palette.
+    #[test]
+    fn thumbnails_ignore_the_live_clock_and_palette() {
+        let Ok(mut state) = PreviewState::new(64, 36) else {
+            return;
+        };
+        let code = "vec4 animation(vec2 uv) { return vec4(umbriel_time, 0.0, 0.0, 1.0) + umbriel_palette_at(0.0); }";
+        let plain = state.thumbnail(code).expect("thumbnail");
+        state.time = 0.25;
+        state.palette = Some([[0.0, 1.0, 0.0, 1.0]; 4]);
+        assert_eq!(state.thumbnail(code).expect("thumbnail"), plain);
+        assert_eq!((state.time, state.palette.is_some()), (0.25, true));
     }
 
     /// Every kind's starter shader compiles against that kind's contract.
