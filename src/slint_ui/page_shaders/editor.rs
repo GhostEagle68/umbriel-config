@@ -453,6 +453,40 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             }
         });
     }
+    {
+        let shell = Rc::clone(shell);
+        app.on_shader_code_suggest(move |text, cursor, kind| {
+            let hints = match (shell.try_borrow(), shaders::KINDS.get(kind as usize)) {
+                (Ok(shell), Some(kind)) => shaders::completion::suggest(
+                    &text,
+                    usize::try_from(cursor).unwrap_or(0),
+                    kind,
+                    &shell.shader_api,
+                ),
+                _ => Vec::new(),
+            };
+            hints_model(hints)
+        });
+    }
+    {
+        let shell = Rc::clone(shell);
+        app.on_shader_reference(move |kind| {
+            let hints = match (shell.try_borrow(), shaders::KINDS.get(kind as usize)) {
+                (Ok(shell), Some(kind)) => shaders::completion::reference(kind, &shell.shader_api),
+                _ => Vec::new(),
+            };
+            hints_model(hints)
+        });
+    }
+    app.on_shader_code_complete(|text, cursor, label| {
+        let (text, caret) =
+            shaders::completion::accept(&text, usize::try_from(cursor).unwrap_or(0), &label);
+        CodeEdit {
+            text: text.into(),
+            anchor: caret as i32,
+            cursor: caret as i32,
+        }
+    });
     app.on_shader_code_line_offset(|text, line| {
         shaders::code_edit::line_offset(&text, usize::try_from(line).unwrap_or(0)) as i32
     });
@@ -494,4 +528,16 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             }
         });
     }
+}
+
+fn hints_model(hints: Vec<shaders::completion::Hint>) -> slint::ModelRc<CodeHint> {
+    let hints: Vec<CodeHint> = hints
+        .into_iter()
+        .map(|hint| CodeHint {
+            label: hint.label.into(),
+            detail: hint.detail.into(),
+            doc: hint.doc.into(),
+        })
+        .collect();
+    Rc::new(VecModel::from(hints)).into()
 }

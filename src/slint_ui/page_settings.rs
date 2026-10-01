@@ -374,6 +374,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
                 rule_families,
                 output_fields,
                 schema_source: source,
+                shader_api,
             } = super::load_schema(&env);
             let fresh_set = schema::key_set(&fresh);
             let mut shell = shell.borrow_mut();
@@ -423,6 +424,7 @@ pub(super) fn install_settings(app: &AppWindow, shell: &Rc<RefCell<Shell>>, env:
             shell.rule_families = rule_families;
             shell.output_fields = output_fields;
             shell.schema_source = source;
+            shell.shader_api = shader_api;
             app.set_sync_note(note.clone().into());
             app.set_sync_clean(clean);
             if !drift.added.is_empty() {

@@ -3,9 +3,9 @@
 // stays). Saving writes the .glsl file; umbriel live-reloads it, which is
 // the preview loop. Assign the shader to an event to see it run.
 
-import { ComboBox, LineEdit } from "std-widgets.slint";
+import { ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 import { ActionButton } from "../widgets.slint";
-import { CodeEdit, Diagnostic, ShaderStep } from "../types.slint";
+import { CodeEdit, CodeHint, Diagnostic, ShaderStep } from "../types.slint";
 import { Theme } from "../theme.slint";
 import {
     ShaderBuilderPanel,
@@ -54,6 +54,11 @@ export component ShaderEditorPage inherits Rectangle {
     pure callback code-layer(string, int) -> string;
     in property <[Diagnostic]> diagnostics;
     callback code-line-offset(string, int) -> int;
+    pure callback code-suggest(string, int, int) -> [CodeHint];
+    callback code-complete(string, int, string) -> CodeEdit;
+    // What umbriel gives a shader of kind `int`, for the reference panel.
+    pure callback reference(int) -> [CodeHint];
+    property <bool> reference-open: false;
     // Back: with unsaved code Rust raises confirm-close instead of leaving.
     callback close();
     callback discard();
@@ -184,10 +189,16 @@ export component ShaderEditorPage inherits Rectangle {
                             color: Theme.text-2;
                             font-size: Theme.font-small;
                             font-weight: 700;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            text: root.reference-open ? "Hide reference" : "Reference";
+                            clicked => { root.reference-open = !root.reference-open; }
                         }
 
                         Text {
-                            text: "Tab indents · Shift+Tab outdents · Enter keeps the indent · right-click to cut, copy or paste";
+                            text: "Tab indents or takes a suggestion · Shift+Tab outdents · Enter keeps the indent · right-click to cut, copy or paste";
                             color: Theme.text-2;
                             font-size: Theme.font-small;
                             horizontal-alignment: right;
@@ -196,19 +207,64 @@ export component ShaderEditorPage inherits Rectangle {
                         }
                     }
 
-                    ShaderCodeEditor {
+                    HorizontalLayout {
                         vertical-stretch: 1;
-                        min-height: 200px;
-                        text <=> root.text;
-                        edited(text, anchor, cursor, kind) => {
-                            root.text-changed(text, anchor, cursor, kind);
+                        spacing: Theme.space-m;
+
+                        ShaderCodeEditor {
+                            horizontal-stretch: 1;
+                            min-height: 200px;
+                            text <=> root.text;
+                            kind: root.kind;
+                            edited(text, anchor, cursor, kind) => {
+                                root.text-changed(text, anchor, cursor, kind);
+                            }
+                            layer(text, index) => { root.code-layer(text, index) }
+                            problems: root.diagnostics;
+                            line-offset(text, line) => { root.code-line-offset(text, line) }
+                            suggest(text, cursor, kind) => { root.code-suggest(text, cursor, kind) }
+                            complete(text, cursor, label) => { root.code-complete(text, cursor, label) }
+                            history(kind) => { root.code-history(kind) }
+                            code-key(text, anchor, cursor, kind) => {
+                                root.code-key(text, anchor, cursor, kind)
+                            }
                         }
-                        layer(text, index) => { root.code-layer(text, index) }
-                        problems: root.diagnostics;
-                        line-offset(text, line) => { root.code-line-offset(text, line) }
-                        history(kind) => { root.code-history(kind) }
-                        code-key(text, anchor, cursor, kind) => {
-                            root.code-key(text, anchor, cursor, kind)
+
+                        // What umbriel gives this kind of shader.
+                        if root.reference-open: Rectangle {
+                            width: 300px;
+                            background: Theme.bg-0;
+                            border-radius: Theme.radius-s;
+                            border-width: 1px;
+                            border-color: Theme.border;
+
+                            ScrollView {
+                                viewport-height: names.preferred-height;
+
+                                names := VerticalLayout {
+                                    padding: Theme.space-m;
+                                    spacing: Theme.space-m;
+
+                                    for hint in root.reference(root.kind): VerticalLayout {
+                                        spacing: 2px;
+
+                                        Text {
+                                            text: hint.label + hint.detail;
+                                            color: Theme.syn-umbriel;
+                                            font-family: Theme.font-mono;
+                                            font-size: Theme.font-small;
+                                            wrap: word-wrap;
+                                        }
+
+                                        Text {
+                                            text: hint.doc;
+                                            color: Theme.text-2;
+                                            font-size: Theme.font-small;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

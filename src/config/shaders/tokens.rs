@@ -135,6 +135,15 @@ const BUILTINS: &[&str] = &[
     "texture2DProj",
 ];
 
+/// Every GLSL word the highlighter knows, with what it is, for
+/// completion.
+pub fn glsl_words() -> impl Iterator<Item = (&'static str, &'static str)> {
+    let words = |list: &'static [&'static str], what| list.iter().map(move |word| (*word, what));
+    words(KEYWORDS, "keyword")
+        .chain(words(TYPES, "type"))
+        .chain(words(BUILTINS, "built-in"))
+}
+
 fn word_class(word: &str) -> Token {
     if word.starts_with("umbriel_") {
         Token::Umbriel

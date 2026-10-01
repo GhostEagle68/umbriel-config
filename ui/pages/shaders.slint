@@ -12,6 +12,7 @@ import {
 } from "../widgets.slint";
 import {
     CodeEdit,
+    CodeHint,
     Diagnostic,
     ShaderAssignment,
     KindCount,
@@ -1173,6 +1174,12 @@ export component ShaderCodeEditor inherits Rectangle {
     // comment, keyword, type, builtin, umbriel, number, preprocessor),
     // 8 the line numbers. See src/config/shaders/tokens.rs.
     pure callback layer(string, int) -> string;
+    // The shader's kind (an index into the kinds), for suggestions.
+    in property <int> kind;
+    // Suggestions for the word at the caret (after typing), and the
+    // text with one accepted.
+    pure callback suggest(string, int, int) -> [CodeHint];
+    callback complete(string, int, string) -> CodeEdit;
     // The compile problems to mark (gutter bar, line band, list below).
     in property <[Diagnostic]> problems;
     // The byte offset where a 1-based line starts, for jumping to it.
@@ -1181,6 +1188,12 @@ export component ShaderCodeEditor inherits Rectangle {
     property <length> caret-x;
     property <length> caret-y;
     property <bool> caret-on: true;
+    // Set by typing, cleared by moving the caret or Escape, so clicking
+    // into a word doesn't pop suggestions up.
+    property <bool> suggesting;
+    property <int> hint-index;
+    property <[CodeHint]> hints: root.suggest(input.text, input.cursor-position-byte-offset, root.kind);
+    property <bool> hints-open: root.suggesting && root.hints.length > 0 && input.has-focus;
     // The distance between lines. Measured over many lines: one line's
     // own height is rounded up and would drift down the page.
     property <length> line-height: probe.preferred-height / 50;
@@ -1209,6 +1222,17 @@ export component ShaderCodeEditor inherits Rectangle {
         // Read back from the input: reusing result.text after the
         // assignment trips a move bug in Slint 1.16's Rust codegen.
         root.edited(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, 1);
+    }
+
+    changed hints => { root.hint-index = 0; }
+
+    function accept-hint(index: int) {
+        let result = root.complete(input.text, input.cursor-position-byte-offset, root.hints[index].label);
+        input.text = result.text;
+        input.set-selection-offsets(result.anchor, result.cursor);
+        root.suggesting = false;
+        root.edited(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, 1);
+        input.focus();
     }
 
     // Put the caret at the start of a problem's line (the editor
@@ -1334,10 +1358,32 @@ export component ShaderCodeEditor inherits Rectangle {
                         selection-background-color: Theme.accent.with-alpha(0.35);
 
                         edited => {
+                            root.suggesting = true;
                             root.edited(self.text, self.anchor-position-byte-offset, self.cursor-position-byte-offset, 0);
                         }
 
                         key-pressed(event) => {
+                            if (root.hints-open) {
+                                if (event.text == Key.DownArrow) {
+                                    root.hint-index = min(root.hint-index + 1, root.hints.length - 1);
+                                    return accept;
+                                }
+                                if (event.text == Key.UpArrow) {
+                                    root.hint-index = max(root.hint-index - 1, 0);
+                                    return accept;
+                                }
+                                if (event.text == Key.Tab && !event.modifiers.shift) {
+                                    root.accept-hint(root.hint-index);
+                                    return accept;
+                                }
+                                if (event.text == Key.Escape) {
+                                    root.suggesting = false;
+                                    return accept;
+                                }
+                            }
+                            if (event.text == Key.LeftArrow || event.text == Key.RightArrow || event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.Home || event.text == Key.End || event.text == Key.PageUp || event.text == Key.PageDown) {
+                                root.suggesting = false;
+                            }
                         // Undo/redo before the TextInput's own (stale) history.
                         if (event.modifiers.control && !event.modifiers.alt) {
                                 if ((event.text == "z" || event.text == "Z") && !event.modifiers.shift) {
@@ -1448,6 +1494,71 @@ export component ShaderCodeEditor inherits Rectangle {
                     text: "and " + (root.problems.length - 4) + " more";
                     color: Theme.text-2;
                     font-size: Theme.font-small;
+                }
+            }
+        }
+    }
+    // The suggestions, under the caret (above it near the bottom).
+    if root.hints-open: Rectangle {
+        property <length> caret-left: scroll.absolute-position.x - root.absolute-position.x + input.x + root.caret-x + scroll.viewport-x;
+        property <length> caret-top: scroll.absolute-position.y - root.absolute-position.y + input.y + root.caret-y + scroll.viewport-y;
+
+        width: 380px;
+        height: hint-list.preferred-height;
+        x: max(0px, min(self.caret-left, root.width - self.width - 4px));
+        y: self.caret-top + root.line-height + 2px + self.height <= root.height ? self.caret-top + root.line-height + 2px : max(0px, self.caret-top - self.height - 2px);
+        background: Theme.bg-3;
+        border-radius: Theme.radius-s;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #00000055;
+
+        hint-list := VerticalLayout {
+            padding: 4px;
+
+            for hint[i] in root.hints: Rectangle {
+                height: 24px;
+                border-radius: Theme.radius-s;
+                background: i == root.hint-index ? Theme.accent-soft : transparent;
+
+                TouchArea {
+                    clicked => { root.accept-hint(i); }
+                }
+
+                HorizontalLayout {
+                    padding-left: Theme.space-s;
+                    padding-right: Theme.space-s;
+                    spacing: Theme.space-m;
+
+                    Text {
+                        text: hint.label;
+                        color: Theme.text-1;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: hint.detail;
+                        color: Theme.text-2;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            if root.hints[min(root.hint-index, root.hints.length - 1)].doc != "": HorizontalLayout {
+                padding: 4px;
+
+                Text {
+                    text: root.hints[min(root.hint-index, root.hints.length - 1)].doc;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
                 }
             }
         }

@@ -338,6 +338,14 @@ export struct Toast {
     action: string,
 }
 
+// A shader-editor suggestion or reference entry: what to insert, a
+// function's parameter list (or the kind of GLSL word), what it is.
+export struct CodeHint {
+    label: string,
+    detail: string,
+    doc: string,
+}
+
 // One compile problem for the shader editor to mark: its 1-based line
 // (0 when the driver named none) and the driver's message.
 export struct Diagnostic {

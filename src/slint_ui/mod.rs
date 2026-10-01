@@ -68,6 +68,8 @@ struct Shell {
     // umbriel's own schema, described, when it is the source of the three
     // above; `None` when the docs are.
     schema_source: Option<String>,
+    // What a shader may use, from the same docs and schema.
+    shader_api: shaders::api::ShaderApi,
     includes: includes::IncludeChain,
     // Per chain index: each doc's leaf values as last saved on disk. A row
     // whose current value differs from this snapshot is "changed".
@@ -143,6 +145,7 @@ struct Loaded {
     rule_families: Vec<rules::Family>,
     output_fields: Vec<outputs::Field>,
     schema_source: Option<String>,
+    shader_api: shaders::api::ShaderApi,
 }
 
 /// The settings pages' entries and the rule and output pages' fields, plus
@@ -154,8 +157,10 @@ struct Loaded {
 fn load_schema(env: &discovery::Env) -> Loaded {
     let packaged =
         discovery::packaged_default(env).and_then(|path| std::fs::read_to_string(path).ok());
-    let docs = schema::combined(&umbriel_docs::load(env), packaged.as_deref());
+    let docs_text = umbriel_docs::load(env);
+    let docs = schema::combined(&docs_text, packaged.as_deref());
     let umbriel = umbriel_schema::load();
+    let shader_api = shaders::api::ShaderApi::build(&docs_text, umbriel.as_ref());
     let keys = umbriel.as_ref().map(|schema| schema.options.as_slice());
     let schema_source = umbriel.as_ref().map(|schema| {
         format!(
@@ -173,6 +178,7 @@ fn load_schema(env: &discovery::Env) -> Loaded {
         rule_families: rules::families(keys),
         output_fields: outputs::fields(keys),
         schema_source,
+        shader_api,
     }
 }
 
@@ -198,6 +204,7 @@ impl Shell {
             rule_families,
             output_fields,
             schema_source,
+            shader_api,
         } = load_schema(env);
         // New keys: the ones still unseen from earlier runs (if umbriel
         // still has them), plus the ones added since the last snapshot.
@@ -221,6 +228,7 @@ impl Shell {
             rule_families,
             output_fields,
             schema_source,
+            shader_api,
             includes,
             saved: Vec::new(),
             new_keys,
