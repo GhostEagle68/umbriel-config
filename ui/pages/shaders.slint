@@ -527,8 +527,20 @@ component ShaderGallery inherits VerticalLayout {
 component GalleryOptions inherits HorizontalLayout {
     in-out property <bool> grid;
     in-out property <bool> hover-preview;
+    // How the library is ordered: an index into `shaders::sorted`.
+    in-out property <int> sort;
     callback changed();
     spacing: Theme.space-l;
+
+    ComboBox {
+        width: 140px;
+        model: ["As found", "Name A–Z", "Name Z–A", "Newest first", "Oldest first"];
+        current-index: root.sort;
+        selected => {
+            root.sort = self.current-index;
+            root.changed();
+        }
+    }
 
     Segmented {
         options: ["List", "Grid"];
@@ -581,6 +593,7 @@ export component ShadersPage inherits Rectangle {
     // 0 Assignments, 1 Library; kept by the window across rebuilds.
     in-out property <int> tab: 0;
     in-out property <bool> grid;
+    in-out property <int> sort;
     in-out property <bool> hover-preview;
     in property <image> live-image;
     callback download();
@@ -650,6 +663,7 @@ export component ShadersPage inherits Rectangle {
             if root.tab == 1: GalleryOptions {
                 grid <=> root.grid;
                 hover-preview <=> root.hover-preview;
+                sort <=> root.sort;
                 changed => { root.view-changed(); }
             }
         }
@@ -1869,6 +1883,7 @@ export component ShaderPicker inherits Rectangle {
     in property <int> other-count;
     in property <[KindCount]> kind-counts;
     in-out property <bool> grid;
+    in-out property <int> sort;
     in-out property <bool> hover-preview;
     in-out property <int> selected;
     // The live preview, as the editor has it.
@@ -1935,6 +1950,7 @@ export component ShaderPicker inherits Rectangle {
                 if root.key != "": GalleryOptions {
                     grid <=> root.grid;
                     hover-preview <=> root.hover-preview;
+                    sort <=> root.sort;
                     changed => { root.view-changed(); }
                 }
             }

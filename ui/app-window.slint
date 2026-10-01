@@ -211,6 +211,7 @@ export component AppWindow inherits Window {
     // Library and picker view, remembered in the app's settings.
     in-out property <bool> shader-grid: true;
     in-out property <bool> shader-hover-preview: true;
+    in-out property <int> shader-sort: 0;
     callback shader-view-changed();
     // Draw thumbnails for library shaders that don't have one yet.
     callback shader-thumbs-wanted();
@@ -785,6 +786,7 @@ export component AppWindow inherits Window {
                         other-count: root.shader-other-count;
                         grid <=> root.shader-grid;
                         hover-preview <=> root.shader-hover-preview;
+                        sort <=> root.shader-sort;
                         live-image: root.shader-preview-image;
                         download => { root.shaders-download(); }
 
@@ -1561,6 +1563,7 @@ export component AppWindow inherits Window {
         other-count: root.shader-other-count;
         grid <=> root.shader-grid;
         hover-preview <=> root.shader-hover-preview;
+        sort <=> root.shader-sort;
         selected <=> root.shader-picker-selected;
         preview-image: root.shader-preview-image;
         preview-ready: root.shader-preview-ready;

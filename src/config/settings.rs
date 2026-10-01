@@ -54,6 +54,8 @@ pub struct Settings {
     pub shader_grid: bool,
     /// Hovering a shader plays it.
     pub shader_hover_preview: bool,
+    /// How the shader library is ordered (`shaders::sorted`).
+    pub shader_sort: i32,
 }
 
 pub const DEFAULT: Settings = Settings {
@@ -68,6 +70,7 @@ pub const DEFAULT: Settings = Settings {
     canary_auto_install: false,
     shader_grid: true,
     shader_hover_preview: true,
+    shader_sort: 0,
 };
 
 pub fn path(env: &discovery::Env) -> PathBuf {
@@ -122,6 +125,7 @@ fn parse(text: &str) -> Settings {
                 settings.shader_hover_preview =
                     value.parse().unwrap_or(DEFAULT.shader_hover_preview)
             }
+            "shader_sort" => settings.shader_sort = value.parse().unwrap_or(DEFAULT.shader_sort),
             "backup_count" => settings.backup_count = value.parse().unwrap_or(DEFAULT.backup_count),
             "backup_dir" => settings.backup_dir = (!value.is_empty()).then(|| value.to_owned()),
             _ => {}
@@ -139,7 +143,7 @@ pub fn store(env: &discovery::Env, settings: &Settings) -> std::io::Result<()> {
     std::fs::write(
         path,
         format!(
-            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\ndark = {}\nbackup_count = {}\nbackup_dir = {}\nchannel = {}\ncanary_auto_install = {}\nshader_grid = {}\nshader_hover_preview = {}\n",
+            "check_updates_on_start = {}\nwindow_width = {}\nwindow_height = {}\ndark = {}\nbackup_count = {}\nbackup_dir = {}\nchannel = {}\ncanary_auto_install = {}\nshader_grid = {}\nshader_hover_preview = {}\nshader_sort = {}\n",
             settings.check_updates_on_start,
             settings.window_width,
             settings.window_height,
@@ -150,6 +154,7 @@ pub fn store(env: &discovery::Env, settings: &Settings) -> std::io::Result<()> {
             settings.canary_auto_install,
             settings.shader_grid,
             settings.shader_hover_preview,
+            settings.shader_sort,
         ),
     )
 }
@@ -185,6 +190,7 @@ mod tests {
                 backup_dir: Some("/tmp/b".to_owned()),
                 shader_grid: false,
                 shader_hover_preview: false,
+                shader_sort: 3,
             },
         )
         .unwrap();
@@ -201,6 +207,7 @@ mod tests {
                 backup_dir: Some("/tmp/b".to_owned()),
                 shader_grid: false,
                 shader_hover_preview: false,
+                shader_sort: 3,
             }
         );
         store(&e, &DEFAULT).unwrap();

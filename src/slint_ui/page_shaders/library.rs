@@ -15,6 +15,7 @@ pub(in crate::slint_ui) fn scan_shaders(shell: &mut Shell) {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     shell.shaders = shaders::scan(&config_dir, &data_roots());
+    shaders::sort(&mut shell.shaders, shell.shader_sort);
     shell.shaders_installed = config_dir.join("shaders/community").is_dir();
 }
 

@@ -98,6 +98,8 @@ struct Shell {
     shader_note: String,
     // The community collection exists on disk (button flips to Update).
     shaders_installed: bool,
+    /// How the library is ordered (`shaders::sort`).
+    shader_sort: i32,
     // The upstream commit check ran this session (once per launch).
     shaders_update_checked: bool,
     // The shader being edited in the overlay editor; None = creating new.
@@ -251,6 +253,7 @@ impl Shell {
             card_expanded: BTreeMap::new(),
             wallpapers: BTreeMap::new(),
             shaders: Vec::new(),
+            shader_sort: 0,
             shader_note: String::new(),
             shaders_installed: false,
             shaders_update_checked: false,
@@ -362,6 +365,8 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     app.set_canary_auto_install(settings.canary_auto_install);
     app.set_shader_grid(settings.shader_grid);
     app.set_shader_hover_preview(settings.shader_hover_preview);
+    app.set_shader_sort(settings.shader_sort);
+    shell.borrow_mut().shader_sort = settings.shader_sort;
     app.set_dark_mode(settings.dark);
     app.global::<Theme>().set_dark(settings.dark);
     app.set_backup_note(page_backups::backup_note(&settings, &env));

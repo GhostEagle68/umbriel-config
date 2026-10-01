@@ -142,6 +142,8 @@ pub struct ShaderEntry {
     pub description: String,
     /// Added to the community collection by its latest update.
     pub is_new: bool,
+    /// When the file was last written (the epoch when unknown).
+    pub modified: std::time::SystemTime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -433,6 +435,9 @@ fn entry_for(path: PathBuf, source: Source) -> ShaderEntry {
     let preset = read_preset(&preset_file, kind).map_or_else(|| name.clone(), |(preset, _)| preset);
     let invalid = validate(&path);
     let description = readme_description(&path);
+    let modified = std::fs::metadata(&path)
+        .and_then(|meta| meta.modified())
+        .unwrap_or(std::time::UNIX_EPOCH);
     ShaderEntry {
         name,
         kind,
@@ -443,6 +448,23 @@ fn entry_for(path: PathBuf, source: Source) -> ShaderEntry {
         invalid,
         description,
         is_new: false,
+        modified,
+    }
+}
+
+/// Order the library: 0 as found, 1 name A to Z, 2 name Z to A, 3 newest
+/// first, 4 oldest first. Newest is by file time, with a shader the
+/// latest community update added counting as newer than any (an update
+/// gives every file the same time, so it can't say). Ties keep the
+/// order found.
+pub fn sort(entries: &mut [ShaderEntry], mode: i32) {
+    let age = |entry: &ShaderEntry| (entry.is_new, entry.modified);
+    match mode {
+        1 => entries.sort_by_key(|entry| entry.name.to_lowercase()),
+        2 => entries.sort_by_key(|entry| std::cmp::Reverse(entry.name.to_lowercase())),
+        3 => entries.sort_by_key(|entry| std::cmp::Reverse(age(entry))),
+        4 => entries.sort_by_key(age),
+        _ => {}
     }
 }
 
@@ -1586,6 +1608,34 @@ mod tests {
         carry_preset_files(&old, &new);
         assert!(new.join("animation/kept/shader.effect.toml").is_file());
         assert!(!new.join("animation/gone").exists());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn the_library_sorts_by_name_and_by_age() {
+        let base = std::env::temp_dir().join(format!("umbriel-sorted-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let mut found = Vec::new();
+        for (index, name) in ["beta", "Alpha", "gamma"].into_iter().enumerate() {
+            let path = base.join(format!("{name}.glsl"));
+            write(&path, GLSL);
+            let mut entry = entry_for(path, Source::ConfigDir);
+            // beta oldest, then Alpha, then gamma.
+            entry.modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(index as u64);
+            found.push(entry);
+        }
+        let names = |found: &mut Vec<ShaderEntry>, mode| -> Vec<String> {
+            sort(found, mode);
+            found.iter().map(|entry| entry.name.clone()).collect()
+        };
+        assert_eq!(names(&mut found, 1), ["Alpha", "beta", "gamma"]);
+        assert_eq!(names(&mut found, 2), ["gamma", "beta", "Alpha"]);
+        assert_eq!(names(&mut found, 3), ["gamma", "Alpha", "beta"]);
+        assert_eq!(names(&mut found, 4), ["beta", "Alpha", "gamma"]);
+        // A shader an update just added leads "newest" whatever its time.
+        found[0].is_new = true;
+        assert_eq!(names(&mut found, 3)[0], "beta");
+        assert_eq!(names(&mut found, 4)[2], "beta");
         std::fs::remove_dir_all(&base).ok();
     }
 

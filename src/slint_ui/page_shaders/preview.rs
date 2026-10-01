@@ -267,13 +267,24 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
     }
     {
         let weak = app.as_weak();
+        let shell = Rc::clone(shell);
         app.on_shader_view_changed(move || {
             let Some(app) = weak.upgrade() else { return };
             let env = discovery::Env::from_process();
             let mut settings = app_settings::load(&env);
             settings.shader_grid = app.get_shader_grid();
             settings.shader_hover_preview = app.get_shader_hover_preview();
+            settings.shader_sort = app.get_shader_sort();
             store_settings(&app, &env, &settings);
+            let mut shell = shell.borrow_mut();
+            if shell.shader_sort != settings.shader_sort {
+                // The order is the model's, so rescan (back to the order
+                // found) and sort again. Indices move: forget the picker's.
+                shell.shader_sort = settings.shader_sort;
+                scan_shaders(&mut shell);
+                app.set_shader_picker_selected(-2);
+                rebuild_shaders(&app, &shell);
+            }
         });
     }
     {
