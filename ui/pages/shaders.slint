@@ -1389,9 +1389,12 @@ export component ShaderCodeEditor inherits Rectangle {
                         wrap: no-wrap;
                         font-family: Theme.font-mono;
                         font-size: Theme.font-small;
-                    // The colored copies underneath show through.
-                    color: transparent;
-                        selection-foreground-color: transparent;
+                    // The colored copies underneath show through. Not fully
+                    // transparent (alpha 1 of 255): the renderers skip a
+                    // text input drawn in a transparent color altogether,
+                    // selection highlight included.
+                    color: #ffffff01;
+                        selection-foreground-color: #ffffff01;
                         selection-background-color: Theme.accent.with-alpha(0.35);
 
                         edited => {
