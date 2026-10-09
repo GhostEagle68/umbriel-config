@@ -1600,7 +1600,7 @@ mod tests {
     #[test]
     fn an_atomic_write_keeps_the_files_mode() {
         use std::os::unix::fs::PermissionsExt;
-        let base = std::env::temp_dir().join(format!("umbriel-mode-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("umbriel-shader-mode-{}", std::process::id()));
         std::fs::remove_dir_all(&base).ok();
         let file = base.join("private.glsl");
         write(&file, GLSL);

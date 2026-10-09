@@ -392,7 +392,10 @@ pub fn run(path: PathBuf) -> anyhow::Result<()> {
     // First-run state: a machine without a config gets the onboarding
     // panel — with the guided walk when umbriel is present. Umbriel
     // missing additionally arms a toast + empty state.
-    let umbriel_present = discovery::packaged_default(&env).is_some();
+    let umbriel_present = std::process::Command::new("umbriel")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
     let mode = guide::setup_mode(umbriel_present, path.exists());
     app.set_show_onboarding(matches!(
         mode,
