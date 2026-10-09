@@ -5,7 +5,8 @@
 //! file is a fresh start instead. The packaged default is found through the
 //! `$XDG_DATA_DIRS` entries: the compositor checks only its compile-time data
 //! dir; we scan the XDG data dirs (default `/usr/local/share:/usr/share`) so
-//! both install styles are covered.
+//! both install styles are covered. As a fallback, look beside the resolved
+//! executable for Nix store and other prefix-based installations.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -21,6 +22,7 @@ pub struct Env {
     pub xdg_data_dirs: Option<OsString>,
     pub xdg_state_home: Option<OsString>,
     pub home: Option<OsString>,
+    pub path: Option<OsString>,
 }
 
 impl Env {
@@ -34,6 +36,7 @@ impl Env {
             xdg_data_dirs: get("XDG_DATA_DIRS"),
             xdg_state_home: get("XDG_STATE_HOME"),
             home: get("HOME"),
+            path: get("PATH"),
         }
     }
 }
@@ -76,6 +79,25 @@ pub fn packaged_default(env: &Env) -> Option<PathBuf> {
     data_dir_candidates(env)
         .into_iter()
         .find(|path| path.is_file())
+        .or_else(|| {
+            use std::os::unix::fs::PermissionsExt;
+
+            let executable = std::env::split_paths(env.path.as_deref()?)
+                .map(|dir| dir.join("umbriel"))
+                .find(|path| {
+                    path.metadata().is_ok_and(|metadata| {
+                        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                    })
+                })?
+                .canonicalize()
+                .ok()?;
+            let config = executable
+                .parent()?
+                .parent()?
+                .join("share")
+                .join(CONFIG_RELATIVE_PATH);
+            config.is_file().then_some(config)
+        })
 }
 
 /// The config to edit: the user's own file, whether or not it exists yet.
@@ -109,7 +131,33 @@ mod tests {
             xdg_data_dirs: None,
             xdg_state_home: None,
             home: home.map(OsString::from),
+            path: None,
         }
+    }
+
+    #[test]
+    fn packaged_default_follows_the_executable_into_its_install_prefix() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let root = std::env::temp_dir().join(format!("umbriel-prefix-{}", std::process::id()));
+        let prefix = root.join("store/umbriel");
+        let profile = root.join("profile/bin");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::create_dir_all(prefix.join("share/umbriel")).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        let binary = prefix.join("bin/umbriel");
+        std::fs::write(&binary, "").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        symlink(&binary, profile.join("umbriel")).unwrap();
+        let config = prefix.join("share/umbriel/config.toml");
+        std::fs::write(&config, "").unwrap();
+        let env = Env {
+            xdg_data_dirs: Some(root.join("unrelated-share").into()),
+            path: Some(profile.into()),
+            ..Default::default()
+        };
+        assert_eq!(packaged_default(&env), Some(config));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

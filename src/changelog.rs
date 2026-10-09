@@ -382,6 +382,7 @@ mod tests {
                     .into_os_string(),
             ),
             home: None,
+            path: None,
         };
         assert!(should_show(&env, "0.1.0"));
         mark_shown(&env, "0.1.0");
