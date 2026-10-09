@@ -87,7 +87,10 @@ pub(super) fn request_thumbnails(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
         wanted
     };
     for path in wanted {
-        if let Ok(image) = slint::Image::load_from_path(&path.with_file_name("preview.png")) {
+        let preview = path.with_file_name("preview.png");
+        if preview.is_file()
+            && let Ok(image) = slint::Image::load_from_path(&preview)
+        {
             set_thumbnail(app, shell, &path, image);
         } else if let Ok(source) = std::fs::read_to_string(&path) {
             shell

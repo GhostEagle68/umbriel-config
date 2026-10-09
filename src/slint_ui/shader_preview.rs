@@ -17,7 +17,8 @@ pub const PREVIEW_HEIGHT: u32 = 216;
 /// kind's own section (umbrielfx `effect_shader.c`: `kPreamble`, the
 /// kind's section, then `#line 1`), verbatim. The `#line 1` makes driver errors carry
 /// user-relative line numbers; keep the placement identical or errors
-/// point at the wrong lines.
+/// point at the wrong lines. Audio uniforms stay at their GL zero defaults:
+/// previews have no audio feed, so audio-reactive effects use their idle look.
 const PREAMBLE: &str = "\
 precision highp float;
 #define sin(x) sin(mod((x), 6.283185307179586))
@@ -33,6 +34,36 @@ uniform float umbriel_time;
 uniform vec2 umbriel_expand;
 uniform vec4 umbriel_palette[4];
 uniform int umbriel_palette_count;
+uniform vec4 umbriel_audio_levels;
+uniform vec4 umbriel_audio_bands[4];
+float umbriel_audio_available() { return umbriel_audio_levels.x; }
+float umbriel_audio_rms() { return umbriel_audio_levels.y; }
+float umbriel_audio_peak() { return umbriel_audio_levels.z; }
+float umbriel_audio_envelope() { return umbriel_audio_levels.w; }
+float umbriel_audio_level() { return umbriel_audio_levels.w; }
+float umbriel_audio_band_at(int i) {
+  if (i <= 0) return umbriel_audio_bands[0].x;
+  if (i == 1) return umbriel_audio_bands[0].y;
+  if (i == 2) return umbriel_audio_bands[0].z;
+  if (i == 3) return umbriel_audio_bands[0].w;
+  if (i == 4) return umbriel_audio_bands[1].x;
+  if (i == 5) return umbriel_audio_bands[1].y;
+  if (i == 6) return umbriel_audio_bands[1].z;
+  if (i == 7) return umbriel_audio_bands[1].w;
+  if (i == 8) return umbriel_audio_bands[2].x;
+  if (i == 9) return umbriel_audio_bands[2].y;
+  if (i == 10) return umbriel_audio_bands[2].z;
+  if (i == 11) return umbriel_audio_bands[2].w;
+  if (i == 12) return umbriel_audio_bands[3].x;
+  if (i == 13) return umbriel_audio_bands[3].y;
+  if (i == 14) return umbriel_audio_bands[3].z;
+  return umbriel_audio_bands[3].w;
+}
+float umbriel_audio_band(float t) {
+  float p = clamp(t, 0.0, 1.0) * 15.0;
+  int i = int(floor(p));
+  return mix(umbriel_audio_band_at(i), umbriel_audio_band_at(i + 1), fract(p));
+}
 vec4 umbriel_sample(vec2 uv) {
   if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec4(0.0);
   vec2 p = (vec3(uv, 1.0) * umbriel_sample_matrix).xy;
@@ -95,7 +126,12 @@ float umbriel_mask(vec2 uv) {
   return 1.0 - smoothstep(-0.5, 0.5, d * umbriel_scale);
 }
 ";
-const POINTER: &str = "uniform vec2 umbriel_pointer;\n";
+const POINTER: &str = "\
+uniform vec2 umbriel_pointer;
+uniform int umbriel_pointer_count;
+uniform vec4 umbriel_pointer_history[8];
+uniform vec4 umbriel_pointer_path[64];
+";
 const LINE: &str = "#line 1\n";
 
 /// The five effect kinds; the entry point a shader defines says which.
@@ -128,7 +164,7 @@ impl Kind {
             ),
             Kind::Border => (
                 BORDER.to_owned(),
-                "\nvoid main() {\n  vec4 c = border(v_texcoord);\n  gl_FragColor = c * smoothstep(-0.5, 0.5, umbriel_border_distance(v_texcoord) * umbriel_scale);\n}\n",
+                "\nvoid main() {\n  vec4 c = border(v_texcoord);\n  gl_FragColor = c * smoothstep(-0.5, 0.5, umbriel_border_distance(v_texcoord));\n}\n",
             ),
             Kind::Window => (
                 MASK.to_owned(),
@@ -414,6 +450,11 @@ struct LinkedProgram {
     border_radius: Option<glow::UniformLocation>,
     corner_radius: Option<glow::UniformLocation>,
     pointer: Option<glow::UniformLocation>,
+    pointer_count: Option<glow::UniformLocation>,
+    pointer_history: Option<glow::UniformLocation>,
+    pointer_path: Option<glow::UniformLocation>,
+    pointer_history_len: usize,
+    pointer_path_len: usize,
 }
 
 impl PreviewState {
@@ -611,6 +652,12 @@ impl PreviewState {
         }
         let linked = unsafe {
             let loc = |name: &str| self.gl.get_uniform_location(program, name);
+            let array_len = |name: &str| {
+                (0..self.gl.get_active_uniforms(program))
+                    .filter_map(|index| self.gl.get_active_uniform(program, index))
+                    .find(|uniform| uniform.name.trim_end_matches("[0]") == name)
+                    .map_or(0, |uniform| uniform.size as usize)
+            };
             LinkedProgram {
                 program,
                 texture: loc("umbriel_texture"),
@@ -630,6 +677,11 @@ impl PreviewState {
                 border_radius: loc("umbriel_border_radius"),
                 corner_radius: loc("umbriel_corner_radius"),
                 pointer: loc("umbriel_pointer"),
+                pointer_count: loc("umbriel_pointer_count"),
+                pointer_history: loc("umbriel_pointer_history"),
+                pointer_path: loc("umbriel_pointer_path"),
+                pointer_history_len: array_len("umbriel_pointer_history").min(8),
+                pointer_path_len: array_len("umbriel_pointer_path").min(64),
             }
         };
         if let Some(old) = self.program.replace(linked) {
@@ -706,7 +758,22 @@ impl PreviewState {
             );
             gl.uniform_4_f32(linked.border_radius.as_ref(), 12.0, 12.0, 12.0, 12.0);
             gl.uniform_4_f32(linked.corner_radius.as_ref(), 12.0, 12.0, 12.0, 12.0);
-            gl.uniform_2_f32(linked.pointer.as_ref(), 0.2 + 0.6 * linear, 0.5);
+            let pointer = preview_pointer(self.time);
+            gl.uniform_2_f32(linked.pointer.as_ref(), pointer[0], pointer[1]);
+            let history = preview_pointer_history::<8>(self.time);
+            let path = preview_pointer_history::<64>(self.time);
+            gl.uniform_1_i32(
+                linked.pointer_count.as_ref(),
+                if linked.pointer_path.is_some() { 64 } else { 8 },
+            );
+            gl.uniform_4_f32_slice(
+                linked.pointer_history.as_ref(),
+                history[..linked.pointer_history_len].as_flattened(),
+            );
+            gl.uniform_4_f32_slice(
+                linked.pointer_path.as_ref(),
+                path[..linked.pointer_path_len].as_flattened(),
+            );
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.quad));
             gl.enable_vertex_attrib_array(0);
             gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 8, 0);
@@ -726,6 +793,22 @@ impl PreviewState {
         }
         Ok((tw, th, finalize_readback(pixels, tw as usize, th as usize)))
     }
+}
+
+/// Synthetic figure-eight motion, sampled oldest first like Umbriel's
+/// pointer inputs. A continuous clock keeps trails moving between loops.
+fn preview_pointer(time: f32) -> [f32; 2] {
+    [0.5 + 0.3 * time.sin(), 0.5 + 0.2 * (2.0 * time).sin()]
+}
+
+fn preview_pointer_history<const N: usize>(time: f32) -> [[f32; 4]; N] {
+    std::array::from_fn(|index| {
+        let spacing = 0.032_f32.min(2.0 / (N - 1) as f32);
+        let age = (N - 1 - index) as f32 * spacing;
+        let birth = time - age;
+        let [x, y] = preview_pointer(birth);
+        [x, y, age, birth.rem_euclid(60.0)]
+    })
 }
 
 fn compile_shader(gl: &glow::Context, kind: u32, source: &str) -> Result<glow::Shader, String> {
@@ -1224,6 +1307,63 @@ fn fill_rect(buf: &mut [u8], w: i32, h: i32, rect: Rect, rgba: [u8; 4]) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn cursor_histories_are_ordered_and_end_at_the_current_pointer() {
+        for samples in [
+            preview_pointer_history::<8>(0.5).to_vec(),
+            preview_pointer_history::<64>(0.5).to_vec(),
+        ] {
+            assert!(samples.windows(2).all(|pair| pair[0][2] > pair[1][2]));
+            assert!(samples[0][2] <= 2.0);
+            let newest = samples.last().unwrap();
+            assert_eq!(&newest[..2], &preview_pointer(0.5));
+            assert_eq!(newest[2], 0.0);
+            assert!(
+                samples
+                    .iter()
+                    .all(|sample| (0.0..60.0).contains(&sample[3]))
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_shaders_receive_motion_history_and_path() {
+        let Ok(mut state) = PreviewState::new(64, 48) else {
+            return;
+        };
+        for (name, count) in [("umbriel_pointer_history", 8), ("umbriel_pointer_path", 64)] {
+            state
+                .compile(&format!(
+                    "vec4 cursor(vec2 uv) {{\n\
+                 vec4 first = {name}[0];\n\
+                 vec4 last = {name}[{}];\n\
+                 if (first.z <= 0.0 || last.z != 0.0) return vec4(0.0);\n\
+                 return vec4(last.xy, float(umbriel_pointer_count) / {count}.0, 1.0);\n}}",
+                    count - 1,
+                ))
+                .unwrap();
+            for time in [0.5, 1.5] {
+                state.time = time;
+                let (width, height, pixels) = state.render(0.5, 0.5, 1.0).unwrap();
+                let offset = ((height / 2 * width + width / 2) * 4) as usize;
+                let pixel = &pixels[offset..offset + 4];
+                let pointer = preview_pointer(time);
+                assert!((pixel[0] as f32 - pointer[0] * 255.0).abs() <= 1.0);
+                assert!((pixel[1] as f32 - pointer[1] * 255.0).abs() <= 1.0);
+                assert_eq!(&pixel[2..], &[255, 255]);
+                assert_eq!(unsafe { state.gl.get_error() }, glow::NO_ERROR);
+            }
+            // Drivers can optimize an array to only the statically used prefix.
+            state
+                .compile(&format!(
+                    "vec4 cursor(vec2 uv) {{ return vec4({name}[0].xy, 0.0, 1.0); }}"
+                ))
+                .unwrap();
+            state.render(0.5, 0.5, 1.0).unwrap();
+            assert_eq!(unsafe { state.gl.get_error() }, glow::NO_ERROR);
+        }
+    }
+
     /// The value of `static const char <name>[] = "..." "...";` in umbriel's
     /// `effect_shader.c`, with comments dropped and escapes resolved.
     fn c_string(source: &str, name: &str) -> String {
@@ -1247,14 +1387,27 @@ mod tests {
     /// follow. Skipped where the sibling checkout is absent (CI).
     #[test]
     fn preview_matches_umbriels_effect_shader() {
-        let Some(home) = std::env::var_os("HOME") else {
-            return;
-        };
-        let path = std::path::Path::new(&home)
-            .join("Projects/umbriel/umbrielfx/render/fx_renderer/effect_shader.c");
+        let source = std::env::var_os("UMBRIEL_SOURCE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../umbriel"));
+        let path = source.join("umbrielfx/render/fx_renderer/effect_shader.c");
         let Ok(c) = std::fs::read_to_string(path) else {
             return;
         };
+        // The audio helpers are injected through a shared C macro. Expand it
+        // before extracting strings so this check cannot silently omit them.
+        let audio = std::fs::read_to_string(
+            source.join("umbrielfx/internal/render/fx_renderer/audio_inputs.h"),
+        )
+        .expect("read Umbriel's shared audio contract");
+        let audio = audio
+            .split_once("#define FX_AUDIO_INPUT_SOURCE")
+            .expect("shared audio macro")
+            .1
+            .split_once("\n\n")
+            .expect("end of shared audio macro")
+            .0;
+        let c = c.replace("FX_AUDIO_INPUT_SOURCE", audio);
         assert_eq!(PREAMBLE, c_string(&c, "kPreamble"));
         assert_eq!(ANIMATION, c_string(&c, "kAnimationSection"));
         assert_eq!(BORDER, c_string(&c, "kBorderSection"));
@@ -1287,6 +1440,53 @@ mod tests {
         // Closing runs the other way.
         assert!(alpha(&mut state, 0.0, -1.0) > 0);
         assert_eq!(alpha(&mut state, 1.0, -1.0), 0);
+    }
+
+    #[test]
+    fn audio_helpers_render_without_a_feed() {
+        let Ok(mut state) = PreviewState::new(32, 24) else {
+            return;
+        };
+        state.compile("vec4 screen(vec2 uv) {\n\
+            float level = umbriel_audio_available() + umbriel_audio_level()\n\
+                + umbriel_audio_rms() + umbriel_audio_peak() + umbriel_audio_envelope();\n\
+            for (int i = -1; i <= 16; i++) level += umbriel_audio_band_at(i);\n\
+            level += umbriel_audio_band(-0.5) + umbriel_audio_band(0.5) + umbriel_audio_band(1.5);\n\
+            return vec4(level, level, level, 1.0);\n}").unwrap();
+        let (_, _, pixels) = state.render(0.5, 0.5, 1.0).unwrap();
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [0, 0, 0, 255])
+        );
+        assert_eq!(unsafe { state.gl.get_error() }, glow::NO_ERROR);
+    }
+
+    #[test]
+    fn kzzzt_presets_compile_in_preview() {
+        let collection = std::env::var_os("UMBRIEL_SHADERS_SOURCE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../community-umbriel-shaders")
+            });
+        if !collection.is_dir() {
+            return;
+        }
+        let Ok(mut state) = PreviewState::new(64, 48) else {
+            return;
+        };
+        for preset in ["window/kzzzt", "border/kzzzt-ring"] {
+            let code = std::fs::read_to_string(collection.join(preset).join("shader.glsl"))
+                .expect("read kzzzt shader");
+            state
+                .compile(&code)
+                .unwrap_or_else(|error| panic!("{preset}: {error}"));
+            state.render(0.5, 0.5, 1.0).unwrap();
+            assert_eq!(unsafe { state.gl.get_error() }, glow::NO_ERROR);
+        }
     }
 
     #[test]
