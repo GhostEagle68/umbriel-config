@@ -4,6 +4,7 @@
 //! all of them. Missing or broken files are
 //! non-fatal warnings, exactly like the compositor's own loader.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -20,21 +21,38 @@ pub struct IncludedDoc {
 /// The config's include chain plus anything that went wrong loading it.
 #[derive(Debug, Default)]
 pub struct IncludeChain {
-    /// Loaded include documents, in list order (earlier first).
+    /// Loaded documents in merge order: children before their including file.
     pub docs: Vec<IncludedDoc>,
-    /// Non-fatal problems: missing files, parse errors, skipped nesting.
+    /// Non-fatal problems: missing files, parse errors, cycles or duplicates.
     pub notes: Vec<String>,
 }
 
 /// Load the include chain declared by the main document. Files resolve
 /// like umbriel's loader: `~` and `$VAR`/`${VAR}` expand, then relative
-/// paths join the config's directory.
+/// paths join the including file's directory. Nested files load before
+/// their parent, so the including file wins at every level.
 pub fn load_chain(main: &ConfigDocument, main_path: &Path) -> IncludeChain {
     let mut chain = IncludeChain::default();
-    let Some(base_dir) = main_path.parent() else {
-        return chain;
-    };
     let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let mut visited = BTreeSet::from([file_identity(main_path)]);
+    load_children(main, main_path, home.as_deref(), &mut visited, &mut chain);
+    chain
+}
+
+fn file_identity(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn load_children(
+    main: &ConfigDocument,
+    main_path: &Path,
+    home: Option<&Path>,
+    visited: &mut BTreeSet<PathBuf>,
+    chain: &mut IncludeChain,
+) {
+    let Some(base_dir) = main_path.parent() else {
+        return;
+    };
     // Umbriel merges `[include] files`, then `[include.optional] files`.
     let required = main.get_strings(&["include", "files"]).unwrap_or_default();
     let optional = main
@@ -45,15 +63,16 @@ pub fn load_chain(main: &ConfigDocument, main_path: &Path) -> IncludeChain {
         .map(|raw| (raw, false))
         .chain(optional.into_iter().map(|raw| (raw, true)));
     for (raw, optional) in files {
-        let path = expand_path(&raw, base_dir, home.as_deref());
+        let path = expand_path(&raw, base_dir, home);
         let label = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| raw.clone());
-        if chain.docs.iter().any(|doc| doc.path == path) {
-            chain
-                .notes
-                .push(format!("include skipped (duplicate): {}", path.display()));
+        if visited.contains(&file_identity(&path)) {
+            chain.notes.push(format!(
+                "include cycle or duplicate skipped: {}",
+                path.display()
+            ));
             continue;
         }
         let text = match std::fs::read_to_string(&path) {
@@ -76,17 +95,10 @@ pub fn load_chain(main: &ConfigDocument, main_path: &Path) -> IncludeChain {
                 continue;
             }
         };
-        if doc.get_strings(&["include", "files"]).is_some()
-            || doc.get_strings(&["include", "optional", "files"]).is_some()
-        {
-            chain.notes.push(format!(
-                "nested includes are not loaded: {}",
-                path.display()
-            ));
-        }
+        visited.insert(file_identity(&path));
+        load_children(&doc, &path, home, visited, chain);
         chain.docs.push(IncludedDoc { path, label, doc });
     }
-    chain
 }
 
 /// Every path named by the main document's include directives —
@@ -160,6 +172,117 @@ fn expand_path(raw: &str, base_dir: &Path, home: Option<&Path>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("umbriel-includes-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn nested_includes_load_in_merge_order_and_remain_editable() {
+        let dir = fixture("nested");
+        let parent = "# Keep this comment\n[include]\nfiles = [\"child.toml\"]\n\
+                      [include.optional]\nfiles = [\"theme.toml\", \"absent.toml\"]\n\
+                      [general]\nxwayland = true\n";
+        std::fs::write(dir.join("nested/parent.toml"), parent).unwrap();
+        std::fs::write(
+            dir.join("nested/child.toml"),
+            "[general]\nxwayland = false\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("nested/theme.toml"),
+            "[general]\nxwayland = false\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("last.toml"), "[general]\nxwayland = false\n").unwrap();
+        let main: ConfigDocument = "[include]\nfiles = [\"nested/parent.toml\"]\n\
+                                    [include.optional]\nfiles = [\"last.toml\"]\n"
+            .parse()
+            .unwrap();
+        let mut chain = load_chain(&main, &dir.join("config.toml"));
+        assert!(chain.notes.is_empty(), "{:?}", chain.notes);
+        let names: Vec<_> = chain.docs.iter().map(|doc| doc.label.as_str()).collect();
+        assert_eq!(
+            names,
+            ["child.toml", "theme.toml", "parent.toml", "last.toml"]
+        );
+        let values: Vec<_> = chain
+            .docs
+            .iter()
+            .map(|doc| doc.doc.get_bool(&["general", "xwayland"]))
+            .collect();
+        assert_eq!(values, [Some(false), Some(false), Some(true), Some(false)]);
+        let child = &mut chain.docs[0];
+        child.doc.set_bool(&["general", "xwayland"], true);
+        child.doc.save(&child.path).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("nested/parent.toml")).unwrap(),
+            parent
+        );
+        assert_eq!(
+            ConfigDocument::load(&dir.join("nested/child.toml"))
+                .unwrap()
+                .get_bool(&["general", "xwayland"]),
+            Some(true)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn nested_cycles_and_duplicate_aliases_are_skipped() {
+        let dir = fixture("cycles");
+        let main_path = dir.join("config.toml");
+        let text = "[include]\nfiles = [\"nested/child.toml\", \"nested/../nested/child.toml\"]\n";
+        std::fs::write(&main_path, text).unwrap();
+        std::fs::write(
+            dir.join("nested/child.toml"),
+            "[include]\nfiles = [\"../config.toml\"]\n",
+        )
+        .unwrap();
+        let main = text.parse().unwrap();
+        let chain = load_chain(&main, &main_path);
+        assert_eq!(chain.docs.len(), 1);
+        assert_eq!(chain.notes.len(), 2);
+        assert!(
+            chain
+                .notes
+                .iter()
+                .all(|note| note.contains("cycle or duplicate"))
+        );
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&main_path, dir.join("nested/root-link.toml")).unwrap();
+            std::fs::write(
+                dir.join("nested/child.toml"),
+                "[include]\nfiles = [\"root-link.toml\"]\n",
+            )
+            .unwrap();
+            let chain = load_chain(&main, &main_path);
+            assert_eq!(chain.docs.len(), 1);
+            assert_eq!(chain.notes.len(), 2);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn broken_nested_children_do_not_hide_their_parent() {
+        let dir = fixture("broken");
+        std::fs::write(dir.join("nested/parent.toml"), "[include]\nfiles = [\"missing.toml\", \"broken.toml\"]\n[include.optional]\nfiles = [\"optional.toml\"]\n").unwrap();
+        std::fs::write(dir.join("nested/broken.toml"), "not valid toml").unwrap();
+        let main = "[include]\nfiles = [\"nested/parent.toml\"]\n"
+            .parse()
+            .unwrap();
+        let chain = load_chain(&main, &dir.join("config.toml"));
+        assert_eq!(chain.docs.len(), 1);
+        assert_eq!(chain.docs[0].label, "parent.toml");
+        assert_eq!(chain.notes.len(), 2);
+        assert!(chain.notes[0].contains("include not found"));
+        assert!(chain.notes[1].contains("include has errors"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn load_chain_loads_optional_includes_after_regular_ones() {

@@ -155,7 +155,7 @@ pub(in crate::slint_ui) fn rebuild_shaders(app: &AppWindow, shell: &Shell) {
         .collect();
     app.set_shader_assignments(Rc::new(VecModel::from(rows)).into());
     app.set_shader_download_note(shell.shader_note.clone().into());
-    app.set_shader_include_missing(shaders::missing_include(&shell.doc, &shell.path).is_some());
+    app.set_shader_include_missing(missing_shader_include(shell).is_some());
     let legacy = shaders::legacy_assignments(&chain_docs(shell));
     app.set_shader_legacy_note(
         match legacy.len() {
@@ -281,10 +281,40 @@ pub(super) fn assign_event(
             slot_label(event)
         ));
     }
+    // A user may keep presets together in effects.toml instead of beside
+    // each GLSL file. Reuse that definition and all its parameters.
+    let assigned = shaders::current_assignment(&chain_docs(shell), event).map(|(name, _)| name);
+    let existing = chain_docs(shell)
+        .into_iter()
+        .zip(chain_paths(shell))
+        .flat_map(|(doc, path)| {
+            doc.table_names(&["effects", "preset"])
+                .into_iter()
+                .filter_map(move |name| {
+                    let key = ["effects", "preset", &name, "shader"];
+                    let shader = doc.get_string(&key)?;
+                    let kind = doc.get_string(&["effects", "preset", &name, "kind"])?;
+                    (kind == entry.kind
+                        && shaders::same_file(&shaders::resolve(&shader, &path), &entry.path))
+                    .then_some(name)
+                })
+        })
+        .min_by_key(|name| {
+            (
+                assigned.as_deref() != Some(name.as_str()),
+                name != &entry.preset,
+                name.clone(),
+            )
+        });
+    if let Some(preset) = existing {
+        let target = home.unwrap_or_else(|| new_home(shell));
+        doc_at_mut(shell, target).set_string(&key, &preset);
+        return Ok(());
+    }
     // Umbriel refuses a preset name defined in two files: the whole
     // config would fall back to its defaults.
     let paths = chain_paths(shell);
-    let listed = includes::listed_paths(&shell.doc, &shell.path);
+    let listed = listed_chain_paths(shell);
     let clash = shaders::preset_clash(
         &chain_docs(shell),
         &paths,
@@ -322,10 +352,29 @@ pub(super) fn assign_event(
     Ok(())
 }
 
+/// Directives from the editable documents, including unsaved changes and
+/// nested files. Keep `listed_paths` direct for callers rewriting one file.
+fn listed_chain_paths(shell: &Shell) -> Vec<PathBuf> {
+    chain_docs(shell)
+        .into_iter()
+        .zip(chain_paths(shell))
+        .flat_map(|(doc, path)| includes::listed_paths(doc, &path))
+        .collect()
+}
+
+fn missing_shader_include(shell: &Shell) -> Option<String> {
+    let missing = shaders::missing_include(&shell.doc, &shell.path)?;
+    let target = shell.path.parent()?.join(&missing);
+    (!listed_chain_paths(shell)
+        .iter()
+        .any(|path| shaders::same_file(path, &target)))
+    .then_some(missing)
+}
+
 /// List `preset_file` under the main config's `[include] files`, as an
 /// unsaved change, unless an include already names it.
 pub(in crate::slint_ui) fn include_preset(shell: &mut Shell, preset_file: &Path) {
-    let listed = includes::listed_paths(&shell.doc, &shell.path);
+    let listed = listed_chain_paths(shell);
     if listed
         .iter()
         .any(|path| shaders::same_file(path, preset_file))
@@ -340,46 +389,57 @@ pub(in crate::slint_ui) fn include_preset(shell: &mut Shell, preset_file: &Path)
     shell.doc.set_strings(&["include", "files"], &files);
 }
 
-/// Rewrite the main config's include of `old` (a preset file that was
-/// just renamed or deleted on disk) to `new`, or drop it with `None`.
-/// Written straight to disk like the assignments that follow a rename:
-/// an include of a missing file stops umbriel's config from loading.
+/// Rewrite includes of a preset renamed or deleted on disk in every loaded
+/// document. Write through both saved and edited text, preserving unrelated
+/// unsaved changes, just like the assignments following a rename.
 pub(super) fn repoint_include(
     shell: &mut Shell,
     old: &Path,
     new: Option<&Path>,
 ) -> Result<(), String> {
-    let main_path = shell.path.clone();
-    let replacement = new.map(|new| shaders::value_for(new, &main_path));
-    // Run on the saved text and on the edited document alike, so other
-    // unsaved includes stay unsaved.
-    let repoint = |doc: &mut ConfigDocument| {
-        let files = doc.get_strings(&["include", "files"]).unwrap_or_default();
-        // listed_paths expands `files` first, in order.
-        let listed = includes::listed_paths(doc, &main_path);
-        let updated: Vec<String> = files
-            .iter()
-            .zip(&listed)
-            .filter_map(|(raw, path)| {
-                if shaders::same_file(path, old) {
-                    replacement.clone()
-                } else {
-                    Some(raw.clone())
-                }
-            })
-            .collect();
-        if updated != files {
-            doc.set_strings(&["include", "files"], &updated);
+    for (index, path) in chain_paths(shell).into_iter().enumerate() {
+        let doc = doc_at(shell, index);
+        let saved: ConfigDocument = doc
+            .original_text()
+            .parse()
+            .map_err(|err| format!("{err}"))?;
+        if !includes::listed_paths(doc, &path)
+            .into_iter()
+            .chain(includes::listed_paths(&saved, &path))
+            .any(|target| shaders::same_file(&target, old))
+        {
+            continue;
         }
-    };
-    let listed = includes::listed_paths(&shell.doc, &main_path);
-    if !listed.iter().any(|path| shaders::same_file(path, old)) {
-        return Ok(());
+        let replacement = new.map(|new| shaders::value_for(new, &path));
+        let repoint = |doc: &mut ConfigDocument| {
+            let listed = includes::listed_paths(doc, &path);
+            let mut listed = listed.iter();
+            for key in [
+                &["include", "files"][..],
+                &["include", "optional", "files"][..],
+            ] {
+                let files = doc.get_strings(key).unwrap_or_default();
+                let updated: Vec<String> = files
+                    .iter()
+                    .zip(listed.by_ref())
+                    .filter_map(|(raw, target)| {
+                        if shaders::same_file(target, old) {
+                            replacement.clone()
+                        } else {
+                            Some(raw.clone())
+                        }
+                    })
+                    .collect();
+                if updated != files {
+                    doc.set_strings(key, &updated);
+                }
+            }
+        };
+        doc_at_mut(shell, index)
+            .write_through(&path, repoint)
+            .map_err(|err| format!("could not update {}: {err}", path.display()))?;
     }
-    shell
-        .doc
-        .write_through(&main_path, repoint)
-        .map_err(|err| format!("could not update {}: {err}", main_path.display()))
+    Ok(())
 }
 
 /// Chain index for a brand-new assignment; see
@@ -619,7 +679,7 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
             let Some(app) = weak.upgrade() else { return };
             let Some(entry) = ({
                 let shell = shell.borrow();
-                shaders::missing_include(&shell.doc, &shell.path)
+                missing_shader_include(&shell)
             }) else {
                 return;
             };
@@ -679,6 +739,117 @@ pub(super) fn install(app: &AppWindow, shell: &Rc<RefCell<Shell>>) {
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn assignments_reuse_presets_from_a_shared_effects_file() {
+        let dir =
+            std::env::temp_dir().join(format!("umbriel-shared-presets-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("shaders/window")).unwrap();
+        let main = dir.join("config.toml");
+        let shader = dir.join("shaders/window/cartoon-chase-overlay.glsl");
+        let effects = dir.join("effects.toml");
+        let definitions = "[effects.preset.\"cartoon-chase-overlay\"]\nkind = \"window\"\nshader = \"shaders/window/cartoon-chase-overlay.glsl\"\npalette = true\n";
+        std::fs::write(&main, "[include]\nfiles = [\"effects.toml\"]\n").unwrap();
+        std::fs::write(&effects, definitions).unwrap();
+        std::fs::write(
+            &shader,
+            "vec4 window(vec2 uv) { return umbriel_sample(uv); }\n",
+        )
+        .unwrap();
+        let mut shell = Shell::load(&main, &discovery::Env::from_process());
+        scan_shaders(&mut shell);
+        assign_event(&mut shell, "effects.window", Some(&shader)).unwrap();
+        assert_eq!(
+            shaders::current_assignment(&chain_docs(&shell), "effects.window")
+                .unwrap()
+                .0,
+            "cartoon-chase-overlay"
+        );
+        assert_eq!(
+            shell.doc.get_strings(&["include", "files"]).unwrap(),
+            ["effects.toml"]
+        );
+        assert!(!shader.with_extension("effect.toml").exists());
+        assert_eq!(std::fs::read_to_string(&effects).unwrap(), definitions);
+        // The existing preset name need not match the GLSL file stem.
+        shell.includes.docs[0].doc = definitions
+            .replace("cartoon-chase-overlay\"", "window.custom\"")
+            .parse()
+            .unwrap();
+        assign_event(&mut shell, "effects.window", Some(&shader)).unwrap();
+        assert_eq!(
+            shaders::current_assignment(&chain_docs(&shell), "effects.window")
+                .unwrap()
+                .0,
+            "window.custom"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn nested_shader_includes_are_reused_and_repointed_in_their_own_file() {
+        let dir =
+            std::env::temp_dir().join(format!("umbriel-nested-shaders-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        let main = dir.join("config.toml");
+        let parent = dir.join("nested/parent.toml");
+        let preset = dir.join("nested/old.toml");
+        let renamed = dir.join("nested/new.toml");
+        let main_text = "# Main stays intact\n[include]\nfiles = [\"nested/parent.toml\"]\n";
+        std::fs::write(&main, main_text).unwrap();
+        std::fs::write(&parent, "# Parent stays intact\n[include]\nfiles = [\"../shaders.toml\"]\n[include.optional]\nfiles = [\"old.toml\"]\n").unwrap();
+        std::fs::write(dir.join("shaders.toml"), "").unwrap();
+        std::fs::write(
+            &preset,
+            "[effects.preset.test]\nkind = \"animation\"\nshader = \"test.glsl\"\n",
+        )
+        .unwrap();
+        let mut shell = Shell::load(&main, &discovery::Env::from_process());
+        assert!(shell.includes.notes.is_empty());
+        assert!(missing_shader_include(&shell).is_none());
+        include_preset(&mut shell, &preset);
+        assert_eq!(shell.doc.text(), main_text);
+        let parent_index = chain_paths(&shell)
+            .iter()
+            .position(|path| path == &parent)
+            .unwrap();
+        doc_at_mut(&mut shell, parent_index).set_bool(&["general", "xwayland"], false);
+        // The file operation has already happened when includes are repointed.
+        std::fs::rename(&preset, &renamed).unwrap();
+        repoint_include(&mut shell, &preset, Some(&renamed)).unwrap();
+        let saved = ConfigDocument::load(&parent).unwrap();
+        assert_eq!(
+            saved.get_strings(&["include", "files"]).unwrap(),
+            ["../shaders.toml"]
+        );
+        assert_eq!(
+            saved
+                .get_strings(&["include", "optional", "files"])
+                .unwrap(),
+            ["new.toml"]
+        );
+        assert!(saved.text().starts_with("# Parent stays intact"));
+        assert_eq!(saved.get_bool(&["general", "xwayland"]), None);
+        assert_eq!(
+            doc_at(&shell, parent_index).get_bool(&["general", "xwayland"]),
+            Some(false)
+        );
+        assert_eq!(std::fs::read_to_string(&main).unwrap(), main_text);
+        assert!(!preset.exists(), "must not recreate the renamed include");
+        assert!(
+            !dir.join("config.toml.bak").exists(),
+            "must not write unrelated files"
+        );
+        repoint_include(&mut shell, &renamed, None).unwrap();
+        assert!(
+            ConfigDocument::load(&parent)
+                .unwrap()
+                .get_strings(&["include", "optional", "files"])
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn rebasing_one_key_leaves_the_rest_of_the_baseline() {
